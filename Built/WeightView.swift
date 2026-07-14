@@ -29,11 +29,26 @@ struct WeightView: View {
     }
 
     private var yDomain: ClosedRange<Double> {
-        let vals = chartWeights.map(\.kg) + [profile.goalWeight, profile.startWeight]
+        var vals = chartWeights.map(\.kg) + [profile.goalWeight, profile.startWeight]
+        if let projection { vals += projection.points.map(\.kg) }
         return (vals.min()! - 1)...(vals.max()! + 1)
     }
 
     private var current: Double? { weights.average(daysBack: 0..<7) ?? weights.last?.kg }
+
+    /// Doel-projectie: trek de huidige trend door. Alleen als je richting je doel beweegt.
+    private var projection: (points: [(date: Date, kg: Double)], text: String)? {
+        guard let trend = weights.trendPerWeek, abs(trend) > 0.03, let cur = current else { return nil }
+        let remaining = profile.goalWeight - cur
+        guard remaining * trend > 0 else { return nil }
+        let weeks = remaining / trend
+        guard weeks < 156 else { return nil }
+        let goalDate = Date.now.addingTimeInterval(weeks * 604_800)
+        let capDate = min(goalDate, Date.now.addingTimeInterval(180 * 86_400))
+        let capValue = cur + trend * (capDate.timeIntervalSince(.now) / 604_800)
+        return ([(Date.now, cur), (capDate, capValue)],
+                "Op dit tempo bereik je \(profile.goalWeight.kgText) kg rond \(goalDate.formatted(.dateTime.month(.wide).year())).")
+    }
 
     private var insight: String {
         guard let trend = weights.trendPerWeek else {
@@ -55,6 +70,7 @@ struct WeightView: View {
             if daysAhead >= 1 { lines.append("Je ligt \(daysAhead) dagen voor op schema.") }
             if daysAhead <= -1 { lines.append("Je ligt \(-daysAhead) dagen achter op schema.") }
         }
+        if let projection { lines.append(projection.text) }
         return lines.joined(separator: "\n")
     }
 
@@ -80,9 +96,18 @@ struct WeightView: View {
                             .foregroundStyle(by: .value("Weegschaal", multiScale ? (w.scale.isEmpty ? "Onbekend" : w.scale) : "Gewicht"))
                     }
                     ForEach(movingAvg, id: \.date) { p in
-                        LineMark(x: .value("Datum", p.date), y: .value("Trend", p.kg))
+                        LineMark(x: .value("Datum", p.date), y: .value("Trend", p.kg),
+                                 series: .value("Serie", "Trend"))
                             .interpolationMethod(.catmullRom)
                             .foregroundStyle(.primary)
+                    }
+                    if let projection {
+                        ForEach(projection.points, id: \.date) { p in
+                            LineMark(x: .value("Datum", p.date), y: .value("Gewicht", p.kg),
+                                     series: .value("Serie", "Projectie"))
+                                .foregroundStyle(.secondary)
+                                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                        }
                     }
                     RuleMark(y: .value("Doel", profile.goalWeight))
                         .foregroundStyle(.green)
@@ -101,6 +126,13 @@ struct WeightView: View {
             }
             Section("Inzicht") {
                 Text(insight)
+            }
+            Section {
+                NavigationLink {
+                    PhotosView()
+                } label: {
+                    Label("Progress foto's", systemImage: "camera")
+                }
             }
             Section("Metingen") {
                 ForEach(weights.suffix(10).reversed()) { w in

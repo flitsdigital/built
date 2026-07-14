@@ -54,6 +54,8 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         var perfectToday = false
         var trainingsThisWeek = 0
         var trainingsTarget = 3
+        var trainingDays: [Int] = []
+        var plannedToday = false
     }
 
     private func computeState() -> DayState? {
@@ -72,16 +74,20 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         s.weighedToday = weights.contains { cal.isDateInToday($0.date) }
         s.sleepOpen = profile.tracksSleep && todayHabits?.sleptEnough != true
         s.trainedToday = sets.contains { cal.isDateInToday($0.date) }
-        s.streak = DayCheck.streak(proteins: proteins, weights: weights, habits: habits,
-                                   target: profile.proteinTarget,
-                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
-        s.perfectToday = DayCheck.perfect(.now, proteins: proteins, weights: weights, habits: habits,
-                                          target: profile.proteinTarget,
-                                          requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
         if let weekStart = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: .now)) {
             s.trainingsThisWeek = Set(sets.filter { $0.date >= weekStart }.map { cal.startOfDay(for: $0.date) }).count
         }
         s.trainingsTarget = profile.trainingsPerWeek
+        s.trainingDays = profile.trainingDays
+        s.plannedToday = profile.trainingDays.contains(cal.component(.weekday, from: .now))
+        s.streak = DayCheck.streak(proteins: proteins, weights: weights, habits: habits,
+                                   target: profile.proteinTarget,
+                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                                   sets: sets, trainingDays: profile.trainingDays)
+        s.perfectToday = DayCheck.perfect(.now, proteins: proteins, weights: weights, habits: habits,
+                                          target: profile.proteinTarget,
+                                          requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                                          sets: sets, trainingDays: profile.trainingDays)
         return s
     }
 
@@ -91,6 +97,7 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if s.creatineOpen { items.append("creatine") }
         if !s.weighedToday { items.append("wegen") }
         if s.sleepOpen { items.append("slaap afvinken") }
+        if s.plannedToday, !s.trainedToday { items.append("trainen") }
         return items
     }
 
@@ -151,7 +158,8 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
 
         if flag("notifWeekOn", default: true), s.trainingsThisWeek < s.trainingsTarget {
             let remaining = s.trainingsTarget - s.trainingsThisWeek
-            for weekday in [5, 6] { // donderdag, vrijdag
+            let reminderDays = s.trainingDays.isEmpty ? [5, 6] : s.trainingDays // vaste dagen als die er zijn
+            for weekday in reminderDays {
                 var comps = DateComponents()
                 comps.weekday = weekday
                 comps.hour = 17

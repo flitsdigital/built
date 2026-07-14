@@ -13,6 +13,7 @@ struct WidgetSnapshot: Codable {
     var streak: Int
     var showCreatine: Bool? = true
     var showSleep: Bool? = true
+    var restDay: Bool? = false
 
     static let appGroup = "group.com.jordiklavers.Built"
 

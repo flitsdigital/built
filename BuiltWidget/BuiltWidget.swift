@@ -73,7 +73,8 @@ struct BuiltWidgetView: View {
         VStack(alignment: .leading, spacing: 5) {
             row(done: entry.snap.protein >= entry.snap.proteinTarget,
                 text: "\(entry.snap.protein)/\(entry.snap.proteinTarget) g eiwit")
-            row(done: entry.snap.trained, text: "Training")
+            row(done: entry.snap.trained || (entry.snap.restDay ?? false),
+                text: (entry.snap.restDay ?? false) && !entry.snap.trained ? "Rustdag" : "Training")
             if entry.snap.showCreatine ?? true {
                 row(done: entry.snap.creatine, text: "Creatine")
             }

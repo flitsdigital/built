@@ -14,6 +14,7 @@ create table if not exists public.profiles (
 );
 alter table public.profiles add column if not exists tracks_creatine boolean not null default true;
 alter table public.profiles add column if not exists tracks_sleep boolean not null default true;
+alter table public.profiles add column if not exists training_days jsonb not null default '[]';
 
 create table if not exists public.weight_entries (
   id uuid primary key default gen_random_uuid(),
@@ -121,7 +122,7 @@ begin
   end if;
 
   if jsonb_typeof(payload->'profile') = 'object' then
-    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep)
+    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days)
     values (
       uid,
       payload#>>'{profile,name}',
@@ -133,7 +134,8 @@ begin
       (payload#>>'{profile,goal_date}')::timestamptz,
       (payload#>>'{profile,trainings_per_week}')::int,
       coalesce((payload#>>'{profile,tracks_creatine}')::boolean, true),
-      coalesce((payload#>>'{profile,tracks_sleep}')::boolean, true)
+      coalesce((payload#>>'{profile,tracks_sleep}')::boolean, true),
+      coalesce(payload#>'{profile,training_days}', '[]'::jsonb)
     )
     on conflict (user_id) do update set
       name = excluded.name,
@@ -145,7 +147,8 @@ begin
       goal_date = excluded.goal_date,
       trainings_per_week = excluded.trainings_per_week,
       tracks_creatine = excluded.tracks_creatine,
-      tracks_sleep = excluded.tracks_sleep;
+      tracks_sleep = excluded.tracks_sleep,
+      training_days = excluded.training_days;
   end if;
 
   delete from public.weight_entries where user_id = uid;

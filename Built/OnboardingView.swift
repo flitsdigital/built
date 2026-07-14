@@ -13,6 +13,7 @@ struct OnboardingView: View {
     @State private var trainings = 3
     @State private var showNameHint = false
     @State private var started = false
+    @State private var showLogin = false
     @FocusState private var nameFocused: Bool
 
     private var weeks: Double { max(goalDate.timeIntervalSinceNow / 604_800, 1) }
@@ -83,6 +84,14 @@ struct OnboardingView: View {
                     step = 1
                 }
             }
+            if Sync.isConfigured {
+                Button("Al een account? Log in") {
+                    showLogin = true
+                }
+                .font(.footnote)
+                .padding(.bottom, 12)
+                .sheet(isPresented: $showLogin) { AccountLoginSheet() }
+            }
         }
     }
 
@@ -121,6 +130,15 @@ struct OnboardingView: View {
             .scrollContentBackground(.hidden)
             nextButton("Start") {
                 guard !started else { return } // dubbel-tik = geen tweede profiel
+                // Doorgeswiped zonder naam? Terug naar stap 1 met hint.
+                guard !name.trimmingCharacters(in: .whitespaces).isEmpty else {
+                    withAnimation(.snappy(duration: 0.3)) {
+                        step = 0
+                        showNameHint = true
+                    }
+                    nameFocused = true
+                    return
+                }
                 started = true
                 context.insert(Profile(name: name.trimmingCharacters(in: .whitespaces), age: age, heightCm: height,
                                        startWeight: weight, goalWeight: goalWeight, goalDate: goalDate,

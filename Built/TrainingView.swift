@@ -106,14 +106,22 @@ struct TrainingView: View {
         })
     }
 
+    // PR op geschat 1RM (Epley): 8×60 telt dan ook als record t.o.v. 5×62,5
     private func prInfo(_ ex: DraftExercise) -> (new: Double, old: Double)? {
-        guard let doneMax = ex.sets.filter(\.done).map(\.kg).max() else { return nil }
-        guard let prev = sets.filter({ $0.exercise == ex.name && $0.date < startedAt }).map(\.weightKg).max(),
-              doneMax > prev else { return nil }
+        guard let doneMax = ex.sets.filter(\.done).map({ epley($0.kg, $0.reps) }).max() else { return nil }
+        guard let prev = sets.filter({ $0.exercise == ex.name && $0.date < startedAt })
+                .map({ epley($0.weightKg, $0.reps) }).max(),
+              doneMax > prev + 0.1 else { return nil }
         return (doneMax, prev)
     }
 
     // MARK: - Acties
+
+    private func addTemplate(_ routines: [(String, [String])]) {
+        for (name, exercises) in routines {
+            context.insert(Routine(name: name, exercises: exercises))
+        }
+    }
 
     private func startWorkout(with names: [String]) {
         startedAt = .now
@@ -270,9 +278,26 @@ struct TrainingView: View {
 
         Section {
             if routines.isEmpty {
-                Text("Nog geen routines. Maak er een — bijv. Push, Pull, Legs of Upper A.")
+                Text("Nog geen routines. Begin met een template of maak er zelf een.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Button {
+                    addTemplate([
+                        ("Push", ["Bench Press", "Incline Dumbbell Press", "Shoulder Press", "Triceps Pushdown", "Lateral Raises"]),
+                        ("Pull", ["Deadlift", "Lat Pulldown", "Barbell Row", "Face Pulls", "Biceps Curl"]),
+                        ("Legs", ["Squat", "Leg Press", "Romanian Deadlift", "Leg Curl", "Calf Raises"]),
+                    ])
+                } label: {
+                    Label("Push / Pull / Legs", systemImage: "square.stack.3d.up")
+                }
+                Button {
+                    addTemplate([
+                        ("Upper", ["Bench Press", "Barbell Row", "Shoulder Press", "Lat Pulldown", "Biceps Curl"]),
+                        ("Lower", ["Squat", "Romanian Deadlift", "Leg Press", "Leg Curl", "Calf Raises"]),
+                    ])
+                } label: {
+                    Label("Upper / Lower", systemImage: "square.stack.3d.up")
+                }
             }
             ForEach(routines) { routine in
                 VStack(alignment: .leading, spacing: 12) {
@@ -431,7 +456,7 @@ struct TrainingView: View {
                             .font(.headline)
                             .foregroundStyle(.green)
                         if let pr = prInfo(ex) {
-                            Text("🏆 Nieuw record: \(pr.new.kgText) kg (was \(pr.old.kgText))")
+                            Text("🏆 Nieuw record — geschat 1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
                                 .font(.caption.bold())
                                 .foregroundStyle(.orange)
                                 .transition(.scale(scale: 0.9).combined(with: .opacity))
@@ -558,7 +583,7 @@ struct WorkoutSummarySheet: View {
             if !summary.prs.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(summary.prs, id: \.exercise) { pr in
-                        Text("🏆 \(pr.exercise): \(pr.new.kgText) kg (was \(pr.old.kgText))")
+                        Text("🏆 \(pr.exercise): e1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
                             .font(.subheadline.bold())
                     }
                 }

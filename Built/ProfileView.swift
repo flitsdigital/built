@@ -17,7 +17,12 @@ struct ProfileView: View {
     @State private var busy = false
     @State private var backupMessage: String?
     @State private var confirmRestore = false
+    @State private var showLogin = false
     private let syncStatus = SyncStatus.shared
+
+    private let weekdayOptions: [(day: Int, label: String)] = [
+        (2, "Ma"), (3, "Di"), (4, "Wo"), (5, "Do"), (6, "Vr"), (7, "Za"), (1, "Zo"),
+    ]
 
     var body: some View {
         List {
@@ -34,6 +39,33 @@ struct ProfileView: View {
                 Stepper("Training: \(profile.trainingsPerWeek)×/week", value: $profile.trainingsPerWeek, in: 1...7)
                 LabeledContent("Eiwitdoel", value: "\(profile.proteinTarget) g/dag")
                 LabeledContent("Tempo", value: "\(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2)))) kg/week")
+            }
+
+            Section {
+                HStack(spacing: 8) {
+                    ForEach(weekdayOptions, id: \.day) { option in
+                        let on = profile.trainingDays.contains(option.day)
+                        Button {
+                            if on {
+                                profile.trainingDays.removeAll { $0 == option.day }
+                            } else {
+                                profile.trainingDays.append(option.day)
+                            }
+                        } label: {
+                            Text(option.label)
+                                .font(.caption.bold())
+                                .frame(width: 38, height: 38)
+                                .background(on ? Color.green : Color(.tertiarySystemFill), in: Circle())
+                                .foregroundStyle(on ? .white : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            } header: {
+                Text("Trainingsdagen")
+            } footer: {
+                Text("Optioneel. Met vaste dagen telt \"rustdag volgens plan\" mee als perfect, en herinneren meldingen je alleen op trainingsdagen.")
             }
 
             Section {
@@ -93,6 +125,12 @@ struct ProfileView: View {
 
             Section {
                 if Sync.isConfigured {
+                    LabeledContent("Account", value: Sync.currentEmail ?? "Anoniem (alleen dit toestel)")
+                    Button {
+                        showLogin = true
+                    } label: {
+                        Label(Sync.isAnonymous ? "E-mail koppelen" : "Ander account", systemImage: "person.badge.key")
+                    }
                     LabeledContent("Automatische sync", value: lastBackup > 0
                         ? "Laatst: \(Date(timeIntervalSinceReferenceDate: lastBackup).formatted(date: .abbreviated, time: .shortened))"
                         : "Nog niet gesynct")
@@ -153,6 +191,7 @@ struct ProfileView: View {
             Button("Data ophalen", role: .destructive) { runPull() }
             Button("Annuleer", role: .cancel) {}
         }
+        .sheet(isPresented: $showLogin) { AccountLoginSheet() }
     }
 
     private func runPush() {
@@ -179,6 +218,94 @@ struct ProfileView: View {
                 backupMessage = "Opgehaald ✓"
             } catch {
                 backupMessage = "Mislukt: \(error.localizedDescription)"
+            }
+            busy = false
+        }
+    }
+}
+
+/// E-mail koppelen (anoniem → vast account) of inloggen op een bestaand account.
+/// Codeflow zonder deep links: Supabase mailt een 6-cijferige code.
+struct AccountLoginSheet: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @State private var email = ""
+    @State private var code = ""
+    @State private var codeSent = false
+    @State private var busy = false
+    @State private var message: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("jij@voorbeeld.nl", text: $email)
+                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button {
+                        send()
+                    } label: {
+                        if busy && !codeSent { ProgressView() } else { Text(codeSent ? "Stuur opnieuw" : "Stuur code") }
+                    }
+                    .disabled(busy || !email.contains("@"))
+                } footer: {
+                    Text("Op dit toestel: koppelt je e-mail aan je huidige data. Op een nieuw toestel: log in met hetzelfde adres en je data komt terug.")
+                }
+                if codeSent {
+                    Section {
+                        TextField("Code uit de e-mail", text: $code)
+                            .keyboardType(.numberPad)
+                        Button {
+                            verify()
+                        } label: {
+                            if busy { ProgressView() } else { Text("Bevestig") }
+                        }
+                        .disabled(busy || code.count < 6)
+                    }
+                }
+                if let message {
+                    Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
+                }
+            }
+            .navigationTitle("Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Sluit") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func send() {
+        busy = true
+        message = nil
+        Task {
+            do {
+                try await Sync.sendLoginCode(to: email.trimmingCharacters(in: .whitespaces))
+                codeSent = true
+                message = "Code verstuurd — check je mail (ook spam)."
+            } catch {
+                message = "Mislukt: \(error.localizedDescription)"
+            }
+            busy = false
+        }
+    }
+
+    private func verify() {
+        busy = true
+        message = nil
+        Task {
+            do {
+                try await Sync.verifyLoginCode(email: email.trimmingCharacters(in: .whitespaces),
+                                               code: code.trimmingCharacters(in: .whitespaces),
+                                               context: context)
+                message = "Gelukt ✓"
+                dismiss()
+            } catch {
+                message = "Mislukt: \(error.localizedDescription)"
             }
             busy = false
         }

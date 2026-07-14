@@ -17,7 +17,9 @@ struct DashboardView: View {
     @State private var showWeightSheet = false
     @State private var showProteinSheet = false
     @State private var showNoteAlert = false
+    @State private var showWeeklyReview = false
     @State private var noteInput = ""
+    @AppStorage("lastReviewWeek") private var lastReviewWeek = 0
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let syncStatus = SyncStatus.shared
@@ -26,6 +28,9 @@ struct DashboardView: View {
     private var todayProtein: Int { proteins.filter { cal.isDateInToday($0.date) }.map(\.grams).reduce(0, +) }
     private var todayKcal: Int { proteins.filter { cal.isDateInToday($0.date) }.map(\.kcal).reduce(0, +) }
     private var trainedToday: Bool { sets.contains { cal.isDateInToday($0.date) } }
+    private var isRestDay: Bool {
+        !profile.trainingDays.isEmpty && !profile.trainingDays.contains(cal.component(.weekday, from: .now))
+    }
     private var weightLoggedToday: Bool { weights.contains { cal.isDateInToday($0.date) } }
     private var todayHabits: DayHabits? { habits.first { cal.isDateInToday($0.date) } }
 
@@ -33,7 +38,7 @@ struct DashboardView: View {
         // Genormaliseerd naar 100, ook als creatine/slaap uitgeschakeld zijn
         var raw = min(30, Int(30.0 * Double(todayProtein) / Double(max(profile.proteinTarget, 1))))
         var maxPoints = 70
-        if trainedToday { raw += 25 }
+        if trainedToday || isRestDay { raw += 25 }
         if weightLoggedToday { raw += 15 }
         if profile.tracksCreatine {
             maxPoints += 15
@@ -64,7 +69,8 @@ struct DashboardView: View {
 
     private var streak: Int {
         DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
-                        requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
+                        requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                        sets: sets, trainingDays: profile.trainingDays)
     }
 
     private var proteinRemaining: Int { max(profile.proteinTarget - todayProtein, 0) }
@@ -100,6 +106,12 @@ struct DashboardView: View {
         .onAppear {
             appeared = true
             writeSnapshot()
+            // Zondag-review: één keer per week, op zondag
+            let week = cal.component(.weekOfYear, from: .now) + cal.component(.yearForWeekOfYear, from: .now) * 100
+            if cal.component(.weekday, from: .now) == 1, lastReviewWeek != week {
+                lastReviewWeek = week
+                showWeeklyReview = true
+            }
         }
         .onChange(of: score) { writeSnapshot() }
         .onChange(of: streak) { writeSnapshot() }
@@ -115,13 +127,14 @@ struct DashboardView: View {
             case "training":
                 selectedTab = 1
             case "review":
-                selectedTab = 3
+                showWeeklyReview = true
             default:
                 break
             }
             Notifier.shared.pendingAction = nil
         }
         .sensoryFeedback(.success, trigger: score)
+        .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet() }
         .sheet(isPresented: $showProteinSheet) { ProteinLogSheet(profile: profile) }
         .alert("Notitie voor vandaag", isPresented: $showNoteAlert) {
@@ -189,7 +202,8 @@ struct DashboardView: View {
         WidgetSnapshot(score: score, protein: todayProtein, proteinTarget: profile.proteinTarget,
                        trained: trainedToday, creatine: todayHabits?.creatine == true,
                        weighed: weightLoggedToday, slept: todayHabits?.sleptEnough == true,
-                       streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep).save()
+                       streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
+                       restDay: isRestDay).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -199,7 +213,8 @@ struct DashboardView: View {
                 ForEach(weekDays, id: \.self) { day in
                     let perfect = DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits,
                                                    target: profile.proteinTarget,
-                                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
+                                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                                                   sets: sets, trainingDays: profile.trainingDays)
                     VStack(spacing: 5) {
                         Text(day.formatted(.dateTime.weekday(.narrow)))
                             .font(.caption2)
@@ -306,8 +321,9 @@ struct DashboardView: View {
 
     private var checklistCard: some View {
         card {
-            checkRow(icon: "dumbbell.fill", color: .orange, title: "Training",
-                     done: trainedToday) { selectedTab = 1 }
+            checkRow(icon: "dumbbell.fill", color: .orange,
+                     title: isRestDay && !trainedToday ? "Rustdag (volgens plan)" : "Training",
+                     done: trainedToday || isRestDay) { selectedTab = 1 }
             if profile.tracksCreatine {
                 Divider()
                 checkRow(icon: "pills.fill", color: .teal, title: "Creatine",

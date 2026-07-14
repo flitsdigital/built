@@ -24,6 +24,7 @@ enum Sync {
         var start_date: Date; var goal_date: Date; var trainings_per_week: Int
         var tracks_creatine: Bool
         var tracks_sleep: Bool
+        var training_days: [Int]
     }
     private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
     private struct ProteinRow: Codable { var user_id: UUID; var date: Date; var grams: Int; var label: String; var kcal: Int }
@@ -86,7 +87,8 @@ enum Sync {
                                    start_weight: profile.startWeight, goal_weight: profile.goalWeight,
                                    start_date: profile.startDate, goal_date: profile.goalDate,
                                    trainings_per_week: profile.trainingsPerWeek,
-                                   tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep)
+                                   tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep,
+                                   training_days: profile.trainingDays)
         }
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
@@ -170,6 +172,7 @@ enum Sync {
         profile.startDate = profileRow.start_date
         profile.tracksCreatine = profileRow.tracks_creatine
         profile.tracksSleep = profileRow.tracks_sleep
+        profile.trainingDays = profileRow.training_days
         context.insert(profile)
 
         for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
@@ -237,6 +240,43 @@ enum Sync {
         } catch {
             SyncStatus.shared.lastError = "Sync-check mislukt: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Account (e-mail koppelen / inloggen op ander toestel)
+
+    static var currentEmail: String? {
+        client?.auth.currentSession?.user.email
+    }
+
+    static var isAnonymous: Bool {
+        client?.auth.currentSession?.user.isAnonymous ?? true
+    }
+
+    /// Anoniem account → e-mail koppelen (behoudt al je data);
+    /// al een e-mail-account → login-code voor dit toestel.
+    static func sendLoginCode(to email: String) async throws {
+        guard let client else {
+            throw NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd."])
+        }
+        let session = try? await client.auth.session
+        if session?.user.isAnonymous == true {
+            try await client.auth.update(user: UserAttributes(email: email))
+        } else {
+            try await client.auth.signInWithOTP(email: email, shouldCreateUser: true)
+        }
+    }
+
+    static func verifyLoginCode(email: String, code: String, context: ModelContext) async throws {
+        guard let client else { return }
+        let session = try? await client.auth.session
+        if session?.user.isAnonymous == true {
+            try await client.auth.verifyOTP(email: email, token: code, type: .emailChange)
+            pushAllowed = true
+        } else {
+            try await client.auth.verifyOTP(email: email, token: code, type: .email)
+            try await pull(context) // ingelogd op bestaand account → data van server halen
+        }
+        SyncStatus.shared.lastError = nil
     }
 
     // MARK: - Automatische sync-lus

@@ -24,7 +24,8 @@ struct InsightsView: View {
 
     private func perfectDay(_ day: Date) -> Bool {
         DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
-                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
+                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                         sets: sets, trainingDays: profile.trainingDays)
     }
 
     private func daysBack(_ n: Int) -> [Date] {
@@ -35,7 +36,8 @@ struct InsightsView: View {
 
     private var streak: Int {
         DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
-                        requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
+                        requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                        sets: sets, trainingDays: profile.trainingDays)
     }
 
     private var factors: [(name: String, done: (Date) -> Bool)] {
@@ -85,6 +87,12 @@ struct InsightsView: View {
         }
         if let d = weekDelta, profile.weeklyRate > 0, d < 0.05 {
             out.append("Gewicht staat stil. Voeg ±250 kcal per dag toe.")
+        }
+        for name in topExercises {
+            let tops = sessionTops(name)
+            if tops.count >= 4, Set(tops.suffix(4).map(\.kg)).count == 1 {
+                out.append("\(name) staat al \(tops.suffix(4).count) sessies op \(tops.last!.kg.kgText) kg — probeer een deload (-10%) of een variatie.")
+            }
         }
         if out.isEmpty {
             out.append("Alles staat goed. Gewoon doorgaan. 💪")
@@ -262,6 +270,110 @@ struct InsightsView: View {
     }
 }
 
+// Zondag-ritueel (PRD Feature 6): de week als moment, niet als lijst.
+struct WeeklyReviewSheet: View {
+    let profile: Profile
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
+    @Query private var proteins: [ProteinEntry]
+    @Query private var sets: [SetEntry]
+    @Query private var habits: [DayHabits]
+    @State private var bounced = false
+
+    private var cal: Calendar { .current }
+
+    private func inLastWeek(_ date: Date) -> Bool {
+        date > cal.startOfDay(for: .now).addingTimeInterval(-6 * 86_400)
+    }
+
+    private var weekSets: [SetEntry] { sets.filter { inLastWeek($0.date) } }
+    private var trainingDays: Int { Set(weekSets.map { cal.startOfDay(for: $0.date) }).count }
+    private var weekVolume: Int { Int(weekSets.map { $0.weightKg * Double($0.reps) }.reduce(0, +)) }
+
+    private var proteinDays: Int {
+        (0..<7).compactMap { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: .now)) }
+            .filter { day in
+                proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= profile.proteinTarget
+            }.count
+    }
+
+    private var perfectDays: Int {
+        (0..<7).compactMap { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: .now)) }
+            .filter {
+                DayCheck.perfect($0, proteins: proteins, weights: weights, habits: habits,
+                                 target: profile.proteinTarget,
+                                 requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                                 sets: sets, trainingDays: profile.trainingDays)
+            }.count
+    }
+
+    private var bestLift: (name: String, e1rm: Double)? {
+        weekSets.map { ($0.exercise, epley($0.weightKg, $0.reps)) }
+            .max { $0.1 < $1.1 }
+            .map { (name: $0.0, e1rm: $0.1) }
+    }
+
+    private var weekDelta: Double? { weights.trendPerWeek }
+
+    private var verdict: String {
+        let trainingOK = trainingDays >= profile.trainingsPerWeek
+        let proteinOK = proteinDays >= 5
+        if trainingOK && proteinOK { return "Op schema — sterke week! 🚀" }
+        if !trainingOK { return "Volgende week: plan je \(profile.trainingsPerWeek) trainingen vooraf in." }
+        return "Volgende week: eiwit is de bottleneck — zet je shake klaar."
+    }
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("📊")
+                .font(.system(size: 52))
+                .symbolEffect(.bounce, value: bounced)
+            Text("Week \(profile.daysIn / 7 + 1) Review")
+                .font(.title2.bold())
+            HStack {
+                tile("\(trainingDays)/\(profile.trainingsPerWeek)", "trainingen")
+                tile("\(proteinDays)/7", "eiwit-dagen")
+            }
+            HStack {
+                tile(weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—", "kg deze week")
+                tile("\(perfectDays)/7", "perfecte dagen")
+            }
+            if let bestLift {
+                Text("🏆 Beste lift: \(bestLift.name) — e1RM \(bestLift.e1rm.kgText) kg")
+                    .font(.subheadline.bold())
+                    .padding(12)
+                    .frame(maxWidth: .infinity)
+                    .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            }
+            Text(verdict)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                dismiss()
+            } label: {
+                Text("Op naar volgende week 💪")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(24)
+        .presentationDetents([.medium, .large])
+        .onAppear { bounced = true }
+    }
+
+    private func tile(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title2.bold().monospacedDigit())
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
 struct ExerciseDetailView: View {
     let exercise: String
     @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
@@ -283,6 +395,7 @@ struct ExerciseDetailView: View {
         List {
             Section {
                 LabeledContent("Beste gewicht", value: "\(sets.map(\.weightKg).max()?.kgText ?? "—") kg 🏆")
+                LabeledContent("Geschat 1RM", value: "\(sets.map { epley($0.weightKg, $0.reps) }.max()?.kgText ?? "—") kg")
                 LabeledContent("Sessies", value: "\(days.count)")
                 LabeledContent("Totaal sets", value: "\(sets.count)")
             }

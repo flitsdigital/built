@@ -52,6 +52,8 @@ final class Profile {
     var trainingsPerWeek: Int
     var tracksCreatine: Bool = true
     var tracksSleep: Bool = true
+    /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
+    var trainingDays: [Int] = []
 
     init(name: String, age: Int, heightCm: Int, startWeight: Double, goalWeight: Double, goalDate: Date, trainingsPerWeek: Int) {
         self.name = name
@@ -112,6 +114,31 @@ final class HabitLog {
         self.name = name
         self.date = date
     }
+}
+
+@Model
+final class PhotoEntry {
+    var date: Date
+    var angle: String // "front" | "side" | "back"
+    var fileName: String
+    init(date: Date = .now, angle: String, fileName: String) {
+        self.date = date
+        self.angle = angle
+        self.fileName = fileName
+    }
+
+    static var directory: URL {
+        let dir = URL.applicationSupportDirectory.appendingPathComponent("ProgressPhotos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    var fileURL: URL { Self.directory.appendingPathComponent(fileName) }
+}
+
+/// Geschat 1RM via de Epley-formule.
+func epley(_ weight: Double, _ reps: Int) -> Double {
+    reps <= 1 ? weight : weight * (1 + Double(reps) / 30)
 }
 
 @Model
@@ -227,26 +254,34 @@ extension Array where Element == WeightEntry {
 }
 
 enum DayCheck {
-    /// Perfecte dag = de dagelijkse factoren die de gebruiker bijhoudt (training telt per week).
+    /// Perfecte dag = de dagelijkse factoren die de gebruiker bijhoudt.
+    /// Met geplande trainingsdagen telt training/rustdag-volgens-plan mee (North Star).
     static func perfect(_ day: Date, proteins: [ProteinEntry], weights: [WeightEntry], habits: [DayHabits],
-                        target: Int, requireCreatine: Bool = true, requireSleep: Bool = true) -> Bool {
+                        target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
+                        sets: [SetEntry] = [], trainingDays: [Int] = []) -> Bool {
         let cal = Calendar.current
         let proteinDone = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= target
         let weighed = weights.contains { cal.isDate($0.date, inSameDayAs: day) }
         let h = habits.first { cal.isDate($0.date, inSameDayAs: day) }
         let creatineOK = !requireCreatine || h?.creatine == true
         let sleepOK = !requireSleep || h?.sleptEnough == true
-        return proteinDone && weighed && creatineOK && sleepOK
+        var trainingOK = true
+        if trainingDays.contains(cal.component(.weekday, from: day)) {
+            trainingOK = sets.contains { cal.isDate($0.date, inSameDayAs: day) }
+        }
+        return proteinDone && weighed && creatineOK && sleepOK && trainingOK
     }
 
     static func streak(proteins: [ProteinEntry], weights: [WeightEntry], habits: [DayHabits],
-                       target: Int, requireCreatine: Bool = true, requireSleep: Bool = true) -> Int {
+                       target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
+                       sets: [SetEntry] = [], trainingDays: [Int] = []) -> Int {
         let cal = Calendar.current
         var count = 0
         for n in 0..<365 {
             guard let day = cal.date(byAdding: .day, value: -n, to: cal.startOfDay(for: .now)) else { break }
             if perfect(day, proteins: proteins, weights: weights, habits: habits, target: target,
-                       requireCreatine: requireCreatine, requireSleep: requireSleep) { count += 1 }
+                       requireCreatine: requireCreatine, requireSleep: requireSleep,
+                       sets: sets, trainingDays: trainingDays) { count += 1 }
             else if n == 0 { continue } // vandaag mag nog open staan
             else { break }
         }

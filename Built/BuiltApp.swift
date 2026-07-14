@@ -13,7 +13,7 @@ struct BuiltApp: App {
                 .tint(.green) // ponytail: één accentkleur voor de hele app
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
-        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, CustomHabit.self, HabitLog.self])
+        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, CustomHabit.self, HabitLog.self, PhotoEntry.self])
     }
 }
 
