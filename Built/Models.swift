@@ -1,3 +1,4 @@
+import ActivityKit
 import Foundation
 import SwiftData
 import Observation
@@ -13,6 +14,38 @@ final class WorkoutStatus {
     var restEndsAt: Date?
     var restFired = false
     @ObservationIgnored private var restTask: Task<Void, Never>?
+    @ObservationIgnored private var activity: Activity<WorkoutActivity>?
+
+    func startWorkout(at date: Date = .now) {
+        startedAt = date
+        // Live Activity: training + rust zichtbaar in Dynamic Island en op het lockscreen
+        activity = try? Activity.request(attributes: WorkoutActivity(startedAt: date),
+                                         content: .init(state: .init(), staleDate: nil))
+    }
+
+    func endWorkout() {
+        startedAt = nil
+        stopRest()
+        let activity = self.activity
+        self.activity = nil
+        Task { await activity?.end(nil, dismissalPolicy: .immediate) }
+    }
+
+    /// Ruimt een activity op die is blijven hangen na een herstart (status leeft in geheugen).
+    func cleanupStaleActivities() {
+        guard startedAt == nil else { return }
+        Task {
+            for stale in Activity<WorkoutActivity>.activities {
+                await stale.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+    }
+
+    private func pushActivity() {
+        guard let activity else { return }
+        let state = WorkoutActivity.ContentState(restStartedAt: restStartedAt, restEndsAt: restEndsAt)
+        Task { await activity.update(.init(state: state, staleDate: nil)) }
+    }
 
     func startRest(seconds: Int) {
         guard seconds > 0 else { return }
@@ -41,14 +74,17 @@ final class WorkoutStatus {
             if !Task.isCancelled {
                 self.restFired.toggle()
                 self.restEndsAt = nil
+                self.pushActivity()
             }
         }
+        pushActivity()
     }
 
     func stopRest() {
         restTask?.cancel()
         restEndsAt = nil
         Notifier.shared.cancelRest()
+        pushActivity()
     }
 }
 

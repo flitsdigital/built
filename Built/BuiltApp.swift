@@ -35,12 +35,13 @@ struct RootView: View {
             .task {
                 #if DEBUG
                 // ponytail: screenshot-states forceren via `simctl launch ... -demoRest`
-                if ProcessInfo.processInfo.arguments.contains("-demoWorkout") { workoutStatus.startedAt = .now }
+                if ProcessInfo.processInfo.arguments.contains("-demoWorkout") { workoutStatus.startWorkout() }
                 if ProcessInfo.processInfo.arguments.contains("-demoRest") {
-                    workoutStatus.startedAt = .now
+                    workoutStatus.startWorkout()
                     workoutStatus.startRest(seconds: 90)
                 }
                 #endif
+                workoutStatus.cleanupStaleActivities() // na herstart hangt er anders een oude activity
                 Notifier.shared.context = context
                 guard Sync.isConfigured else { return }
                 // Bepaal veilig of auto-push mag; haalt bij een lege install eerst alles op

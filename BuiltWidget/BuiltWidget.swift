@@ -99,6 +99,13 @@ struct BuiltWidgetView: View {
 }
 
 @main
+struct BuiltWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        BuiltWidget()
+        WorkoutLiveActivity()
+    }
+}
+
 struct BuiltWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "BuiltWidget", provider: SnapshotProvider()) { entry in
@@ -108,5 +115,103 @@ struct BuiltWidget: Widget {
         .configurationDisplayName("Groei Score")
         .description("Je score en checklist van vandaag.")
         .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+
+/// Dynamic Island + lockscreen tijdens een training: verstreken tijd, en bij rust een aflopende timer.
+struct WorkoutLiveActivity: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: WorkoutActivity.self) { context in
+            // Lockscreen-kaart
+            HStack(spacing: 14) {
+                Image(systemName: "dumbbell.fill")
+                    .font(.body.bold())
+                    .foregroundStyle(.green)
+                    .frame(width: 40, height: 40)
+                    .background(.green.opacity(0.15), in: Circle())
+                if let end = context.state.restEndsAt {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text("Rust")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(timerInterval: Date.now...end, countsDown: true)
+                                .font(.headline.monospacedDigit())
+                        }
+                        ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
+                                     countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
+                            .tint(.green)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Training bezig")
+                            .font(.footnote.bold())
+                        Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
+                            .font(.headline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+            .padding(16)
+            .activityBackgroundTint(nil)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Image(systemName: "dumbbell.fill")
+                        .font(.title3.bold())
+                        .foregroundStyle(.green)
+                        .frame(maxHeight: .infinity)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Group {
+                        if let end = context.state.restEndsAt {
+                            Text(timerInterval: Date.now...end, countsDown: true)
+                        } else {
+                            Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
+                        }
+                    }
+                    .font(.title2.bold().monospacedDigit())
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxHeight: .infinity)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    if let end = context.state.restEndsAt {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Rust")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
+                                         countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
+                                .tint(.green)
+                        }
+                    } else {
+                        Text("Training bezig")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } compactLeading: {
+                Image(systemName: context.state.resting ? "timer" : "dumbbell.fill")
+                    .foregroundStyle(.green)
+            } compactTrailing: {
+                Group {
+                    if let end = context.state.restEndsAt {
+                        Text(timerInterval: Date.now...end, countsDown: true)
+                            .foregroundStyle(.green)
+                    } else {
+                        Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption2.monospacedDigit())
+                .frame(maxWidth: 44)
+                .multilineTextAlignment(.trailing)
+            } minimal: {
+                Image(systemName: context.state.resting ? "timer" : "dumbbell.fill")
+                    .foregroundStyle(.green)
+            }
+            .keylineTint(.green)
+        }
     }
 }

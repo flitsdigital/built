@@ -182,7 +182,7 @@ struct TrainingView: View {
     private func startWorkout(with names: [String]) {
         startedAt = .now
         workout = names.map(draft(for:))
-        WorkoutStatus.shared.startedAt = startedAt
+        WorkoutStatus.shared.startWorkout(at: startedAt)
         withAnimation(.snappy(duration: 0.3)) { active = true }
     }
 
@@ -212,9 +212,8 @@ struct TrainingView: View {
     }
 
     private func finishWorkout() {
-        WorkoutStatus.shared.stopRest()
         saveExerciseNotes()
-        WorkoutStatus.shared.startedAt = nil
+        WorkoutStatus.shared.endWorkout()
         let previousDay = pastDays.first { !cal.isDateInToday($0) }
         let previousVolume = previousDay.map { day in
             Int(sets(on: day).map { $0.weightKg * Double($0.reps) }.reduce(0, +))
@@ -233,8 +232,7 @@ struct TrainingView: View {
     }
 
     private func discardWorkout() {
-        WorkoutStatus.shared.stopRest()
-        WorkoutStatus.shared.startedAt = nil
+        WorkoutStatus.shared.endWorkout()
         for s in workout.flatMap(\.sets) {
             if let e = s.savedEntry, !e.isDeleted { context.delete(e) }
         }
