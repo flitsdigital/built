@@ -15,6 +15,7 @@ final class WorkoutStatus {
     var restFired = false
     @ObservationIgnored private var restTask: Task<Void, Never>?
     @ObservationIgnored private var activity: Activity<WorkoutActivity>?
+    @ObservationIgnored private var context = WorkoutActivity.ContentState()
 
     func startWorkout(at date: Date = .now) {
         startedAt = date
@@ -25,6 +26,7 @@ final class WorkoutStatus {
 
     func endWorkout() {
         startedAt = nil
+        context = .init()
         stopRest()
         let activity = self.activity
         self.activity = nil
@@ -41,9 +43,20 @@ final class WorkoutStatus {
         }
     }
 
+    /// Waar je mee bezig bent, voor het eiland en lockscreen — gezet bij elke afgevinkte set.
+    func updateContext(exercise: String?, setsDone: Int, setsTotal: Int, tip: String?) {
+        context.exercise = exercise
+        context.setsDone = setsDone
+        context.setsTotal = setsTotal
+        context.tip = tip
+        pushActivity()
+    }
+
     private func pushActivity() {
         guard let activity else { return }
-        let state = WorkoutActivity.ContentState(restStartedAt: restStartedAt, restEndsAt: restEndsAt)
+        var state = context
+        state.restStartedAt = restStartedAt
+        state.restEndsAt = restEndsAt
         Task { await activity.update(.init(state: state, staleDate: nil)) }
     }
 

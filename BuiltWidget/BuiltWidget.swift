@@ -123,34 +123,49 @@ struct WorkoutLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: WorkoutActivity.self) { context in
             // Lockscreen-kaart
-            HStack(spacing: 14) {
-                Image(systemName: "dumbbell.fill")
-                    .font(.body.bold())
-                    .foregroundStyle(.green)
-                    .frame(width: 40, height: 40)
-                    .background(.green.opacity(0.15), in: Circle())
-                if let end = context.state.restEndsAt {
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            Text("Rust")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 14) {
+                    Image(systemName: "dumbbell.fill")
+                        .font(.body.bold())
+                        .foregroundStyle(.green)
+                        .frame(width: 40, height: 40)
+                        .background(.green.opacity(0.15), in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(context.state.exercise ?? "Training bezig")
+                            .font(.footnote.bold())
+                        if context.state.setsTotal > 0 {
+                            Text(context.state.setsLeft > 0
+                                 ? "Nog \(context.state.setsLeft) set\(context.state.setsLeft == 1 ? "" : "s")"
+                                 : "Alle sets gedaan 💪")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(timerInterval: Date.now...end, countsDown: true)
-                                .font(.headline.monospacedDigit())
                         }
-                        ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
-                                     countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
-                            .tint(.green)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Training bezig")
-                            .font(.footnote.bold())
-                        Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
-                            .font(.headline.monospacedDigit())
-                            .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    if let end = context.state.restEndsAt {
+                        Text(timerInterval: Date.now...end, countsDown: true)
+                            .font(.title3.bold().monospacedDigit())
+                            .foregroundStyle(.green)
+                            .frame(maxWidth: 64)
+                            .multilineTextAlignment(.trailing)
+                    } else {
+                        Text(timerInterval: context.attributes.startedAt...Date.distantFuture, countsDown: false)
+                            .font(.title3.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: 80)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                if let end = context.state.restEndsAt {
+                    ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
+                                 countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
+                        .tint(.green)
+                }
+                if let tip = context.state.tip {
+                    Label(tip, systemImage: "lightbulb.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
             }
             .padding(16)
@@ -158,10 +173,24 @@ struct WorkoutLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: "dumbbell.fill")
-                        .font(.title3.bold())
-                        .foregroundStyle(.green)
-                        .frame(maxHeight: .infinity)
+                    HStack(spacing: 8) {
+                        Image(systemName: "dumbbell.fill")
+                            .font(.title3.bold())
+                            .foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(context.state.exercise ?? "Training")
+                                .font(.footnote.bold())
+                                .lineLimit(1)
+                            if context.state.setsTotal > 0 {
+                                Text(context.state.setsLeft > 0
+                                     ? "Nog \(context.state.setsLeft) set\(context.state.setsLeft == 1 ? "" : "s")"
+                                     : "Alle sets gedaan")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: .infinity)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Group {
@@ -176,19 +205,18 @@ struct WorkoutLiveActivity: Widget {
                     .frame(maxHeight: .infinity)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if let end = context.state.restEndsAt {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("Rust")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let end = context.state.restEndsAt {
                             ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
                                          countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
                                 .tint(.green)
                         }
-                    } else {
-                        Text("Training bezig")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if let tip = context.state.tip {
+                            Label(tip, systemImage: "lightbulb.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
                     }
                 }
             } compactLeading: {

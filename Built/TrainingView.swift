@@ -614,6 +614,28 @@ struct TrainingView: View {
         }
     }
 
+    /// Voedt de Live Activity: oefening, set-voortgang en een PR-tip op basis van je vorige sessie.
+    private func updateActivity(exercise name: String, currentKg: Double) {
+        guard let ex = workout.first(where: { $0.name == name }) else { return }
+        WorkoutStatus.shared.updateContext(exercise: name,
+                                           setsDone: ex.sets.filter(\.done).count,
+                                           setsTotal: ex.sets.count,
+                                           tip: activityTip(for: name, currentKg: currentKg))
+    }
+
+    private func activityTip(for name: String, currentKg: Double) -> String? {
+        let last = lastSession(for: name)
+        guard let best = last.max(by: { epley($0.weightKg, $0.reps) < epley($1.weightKg, $1.reps) }) else { return nil }
+        let prevText = "Vorige keer: \(best.weightKg.kgText) kg × \(best.reps)"
+        let prevE1RM = epley(best.weightKg, best.reps)
+        if currentKg > best.weightKg {
+            // Epley omgekeerd: hoeveel reps op dit gewicht nodig zijn om je oude 1RM te kloppen
+            let reps = max(Int(30 * (prevE1RM / currentKg - 1)) + 1, 1)
+            return "\(prevText) — met \(currentKg.kgText) kg is \(reps)+ reps een PR"
+        }
+        return prevText
+    }
+
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String) -> some View {
         HStack(spacing: 12) {
             Text("\(number)")
@@ -662,6 +684,7 @@ struct TrainingView: View {
                         if !e.isDeleted { context.delete(e) }
                         set.wrappedValue.savedEntry = nil
                     }
+                    updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg)
                 }
             } label: {
                 Image(systemName: set.wrappedValue.done ? "checkmark.circle.fill" : "circle")

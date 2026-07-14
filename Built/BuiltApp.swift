@@ -38,7 +38,9 @@ struct RootView: View {
                 if ProcessInfo.processInfo.arguments.contains("-demoWorkout") { workoutStatus.startWorkout() }
                 if ProcessInfo.processInfo.arguments.contains("-demoRest") {
                     workoutStatus.startWorkout()
-                    workoutStatus.startRest(seconds: 90)
+                    workoutStatus.updateContext(exercise: "Bankdrukken", setsDone: 2, setsTotal: 4,
+                                                tip: "Vorige keer: 40 kg × 8 — met 45 kg is 6+ reps een PR")
+                    workoutStatus.startRest(seconds: 180)
                 }
                 #endif
                 workoutStatus.cleanupStaleActivities() // na herstart hangt er anders een oude activity
