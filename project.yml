@@ -1,0 +1,50 @@
+name: Built
+options:
+  bundleIdPrefix: com.jordiklavers
+  developmentLanguage: nl
+packages:
+  Supabase:
+    url: https://github.com/supabase/supabase-swift
+    from: 2.0.0
+targets:
+  Built:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Built
+    dependencies:
+      - package: Supabase
+        product: Supabase
+      - target: BuiltWidget
+        embed: true
+    entitlements:
+      path: Built/Built.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.jordiklavers.Built]
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
+      INFOPLIST_KEY_CFBundleDisplayName: Built
+      TARGETED_DEVICE_FAMILY: 1
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  BuiltWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - BuiltWidget
+      - Built/WidgetSnapshot.swift
+    entitlements:
+      path: BuiltWidget/BuiltWidget.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.jordiklavers.Built]
+    info:
+      path: BuiltWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Built Widget
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.jordiklavers.Built.widget
+      TARGETED_DEVICE_FAMILY: 1

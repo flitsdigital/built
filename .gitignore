@@ -1,0 +1,9 @@
+# Secrets — nooit committen
+Built/Secrets.plist
+
+# Xcode
+Built.xcodeproj
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.DS_Store
