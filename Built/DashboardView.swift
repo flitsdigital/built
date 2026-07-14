@@ -337,7 +337,10 @@ struct DashboardView: View {
             if profile.tracksSleep {
                 Divider()
                 checkRow(icon: "moon.fill", color: .indigo, title: sleepText,
-                         done: todayHabits?.sleptEnough == true) { showSleepSheet = true }
+                         done: todayHabits?.sleptEnough == true,
+                         missed: todayHabits?.sleepHours != nil && todayHabits?.sleptEnough != true) {
+                    showSleepSheet = true
+                }
             }
             Divider()
             checkRow(icon: "pencil", color: .gray, title: "Notitie",
@@ -368,7 +371,8 @@ struct DashboardView: View {
         }
     }
 
-    private func checkRow(icon: String, color: Color, title: String, done: Bool, action: @escaping () -> Void) -> some View {
+    /// done = gehaald (groen ✓), missed = wel gelogd maar niet gehaald (oranje ⃠), anders open (leeg bolletje).
+    private func checkRow(icon: String, color: Color, title: String, done: Bool, missed: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 8)
@@ -383,11 +387,12 @@ struct DashboardView: View {
                     .foregroundStyle(done ? .secondary : .primary)
                     .strikethrough(done, color: .secondary)
                 Spacer()
-                Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
                     .font(.title3)
-                    .foregroundStyle(done ? .green : .secondary)
+                    .foregroundStyle(done ? .green : (missed ? .orange : .secondary))
                     .contentTransition(.symbolEffect(.replace))
                     .animation(.snappy(duration: 0.2), value: done)
+                    .animation(.snappy(duration: 0.2), value: missed)
             }
         }
         .buttonStyle(PressableStyle())
