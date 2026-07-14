@@ -170,16 +170,7 @@ enum Sync {
         let customRows: [CustomHabitRow] = try await db.from("custom_habits").select().eq("user_id", value: uid).execute().value
         let logRows: [HabitLogRow] = try await db.from("habit_logs").select().eq("user_id", value: uid).execute().value
 
-        try context.delete(model: Profile.self)
-        try context.delete(model: WeightEntry.self)
-        try context.delete(model: ProteinEntry.self)
-        try context.delete(model: SetEntry.self)
-        try context.delete(model: DayHabits.self)
-        try context.delete(model: Routine.self)
-        try context.delete(model: Meal.self)
-        try context.delete(model: Scale.self)
-        try context.delete(model: CustomHabit.self)
-        try context.delete(model: HabitLog.self)
+        try wipeLocal(context)
 
         let profile = Profile(name: profileRow.name, age: profileRow.age, heightCm: profileRow.height_cm,
                               startWeight: profileRow.start_weight, goalWeight: profileRow.goal_weight,
@@ -230,6 +221,35 @@ enum Sync {
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = .now
         UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
+    }
+
+    private static func wipeLocal(_ context: ModelContext) throws {
+        try context.delete(model: Profile.self)
+        try context.delete(model: WeightEntry.self)
+        try context.delete(model: ProteinEntry.self)
+        try context.delete(model: SetEntry.self)
+        try context.delete(model: DayHabits.self)
+        try context.delete(model: Routine.self)
+        try context.delete(model: Meal.self)
+        try context.delete(model: Scale.self)
+        try context.delete(model: CustomHabit.self)
+        try context.delete(model: HabitLog.self)
+    }
+
+    /// Uitloggen. Met keepLocalData blijft alles op het toestel staan (en gaat verder
+    /// onder een nieuw anoniem account); anders wordt het toestel leeggemaakt en
+    /// blijft je data alleen op je account staan.
+    static func signOut(context: ModelContext, keepLocalData: Bool) async {
+        try? await client?.auth.signOut()
+        pushAllowed = false
+        lastPushedHash = nil
+        SyncStatus.shared.lastError = nil
+        SyncStatus.shared.lastSyncAt = nil
+        UserDefaults.standard.removeObject(forKey: "lastSync")
+        if !keepLocalData {
+            try? wipeLocal(context)
+        }
+        await bootstrap(context)
     }
 
     // MARK: - Bootstrap: bepaal veilig of auto-push mag

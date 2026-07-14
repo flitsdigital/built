@@ -18,6 +18,7 @@ struct ProfileView: View {
     @State private var backupMessage: String?
     @State private var confirmRestore = false
     @State private var showLogin = false
+    @State private var confirmLogout = false
     private let syncStatus = SyncStatus.shared
 
     private let weekdayOptions: [(day: Int, label: String)] = [
@@ -129,7 +130,15 @@ struct ProfileView: View {
                     Button {
                         showLogin = true
                     } label: {
-                        Label(Sync.isAnonymous ? "E-mail koppelen" : "Ander account", systemImage: "person.badge.key")
+                        Label(Sync.isAnonymous ? "Account koppelen" : "Ander account", systemImage: "person.badge.key")
+                    }
+                    if !Sync.isAnonymous {
+                        Button(role: .destructive) {
+                            confirmLogout = true
+                        } label: {
+                            Label("Uitloggen", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        .disabled(busy)
                     }
                     LabeledContent("Automatische sync", value: lastBackup > 0
                         ? "Laatst: \(Date(timeIntervalSinceReferenceDate: lastBackup).formatted(date: .abbreviated, time: .shortened))"
@@ -192,6 +201,25 @@ struct ProfileView: View {
             Button("Annuleer", role: .cancel) {}
         }
         .sheet(isPresented: $showLogin) { AccountLoginSheet() }
+        .confirmationDialog("Uitloggen?", isPresented: $confirmLogout, titleVisibility: .visible) {
+            Button("Uitloggen, data op dit toestel houden") {
+                logout(keepData: true)
+            }
+            Button("Uitloggen en toestel leegmaken", role: .destructive) {
+                logout(keepData: false)
+            }
+            Button("Annuleer", role: .cancel) {}
+        } message: {
+            Text("Je data blijft altijd op je account staan. \"Toestel leegmaken\" verwijdert alleen de lokale kopie.")
+        }
+    }
+
+    private func logout(keepData: Bool) {
+        busy = true
+        Task {
+            await Sync.signOut(context: context, keepLocalData: keepData)
+            busy = false
+        }
     }
 
     private func runPush() {
