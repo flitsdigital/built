@@ -170,27 +170,15 @@ struct WorkoutLiveActivity: Widget {
             }
             .padding(16)
             .activityBackgroundTint(nil)
+            .widgetURL(URL(string: "built://training"))
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "dumbbell.fill")
-                            .font(.title3.bold())
-                            .foregroundStyle(.green)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(context.state.exercise ?? "Training")
-                                .font(.footnote.bold())
-                                .lineLimit(1)
-                            if context.state.setsTotal > 0 {
-                                Text(context.state.setsLeft > 0
-                                     ? "Nog \(context.state.setsLeft) set\(context.state.setsLeft == 1 ? "" : "s")"
-                                     : "Alle sets gedaan")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
+                    Image(systemName: "dumbbell.fill")
+                        .font(.title3.bold())
+                        .foregroundStyle(.green)
+                        .frame(maxHeight: .infinity)
+                        .widgetURL(URL(string: "built://training"))
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Group {
@@ -206,6 +194,21 @@ struct WorkoutLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 6) {
+                        if context.state.exercise != nil || context.state.setsTotal > 0 {
+                            HStack {
+                                Text(context.state.exercise ?? "Training")
+                                    .font(.footnote.bold())
+                                    .lineLimit(1)
+                                Spacer()
+                                if context.state.setsTotal > 0 {
+                                    Text(context.state.setsLeft > 0
+                                         ? "Nog \(context.state.setsLeft) set\(context.state.setsLeft == 1 ? "" : "s")"
+                                         : "Alle sets gedaan")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                         if let end = context.state.restEndsAt {
                             ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
                                          countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
@@ -222,6 +225,7 @@ struct WorkoutLiveActivity: Widget {
             } compactLeading: {
                 Image(systemName: context.state.resting ? "timer" : "dumbbell.fill")
                     .foregroundStyle(.green)
+                    .widgetURL(URL(string: "built://training"))
             } compactTrailing: {
                 Group {
                     if let end = context.state.restEndsAt {

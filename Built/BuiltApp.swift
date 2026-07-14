@@ -58,6 +58,12 @@ struct RootView: View {
                 restoring = false
                 Sync.start(context)
             }
+            .onOpenURL { url in
+                // Tik op Live Activity of Dynamic Island → direct naar de training
+                if url.host() == "training" {
+                    withAnimation(.snappy(duration: 0.3)) { tab = 1 }
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 Sync.appActive = phase == .active
                 if phase == .background {
@@ -123,6 +129,10 @@ struct RootView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .onTapGesture { // knoppen en menu winnen van deze tap
+            withAnimation(.snappy(duration: 0.3)) { tab = 1 }
+        }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
