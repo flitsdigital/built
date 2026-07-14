@@ -107,6 +107,20 @@ struct TrainingView: View {
     }
 
     // PR op geschat 1RM (Epley): 8×60 telt dan ook als record t.o.v. 5×62,5
+    /// Laatste notitie voor deze oefening, teruggevist uit de dagnotities
+    /// (afronden schrijft ze als "Oefening: tekst").
+    private func lastNote(for exercise: String) -> String? {
+        let prefix = exercise + ": "
+        let past = habits.filter { !cal.isDateInToday($0.date) }.sorted { $0.date > $1.date }
+        for record in past {
+            for line in record.note.components(separatedBy: "\n") where line.hasPrefix(prefix) {
+                let note = String(line.dropFirst(prefix.count))
+                if !note.isEmpty { return note }
+            }
+        }
+        return nil
+    }
+
     private func prInfo(_ ex: DraftExercise) -> (new: Double, old: Double)? {
         guard let doneMax = ex.sets.filter(\.done).map({ epley($0.kg, $0.reps) }).max() else { return nil }
         guard let prev = sets.filter({ $0.exercise == ex.name && $0.date < startedAt })
@@ -414,6 +428,12 @@ struct TrainingView: View {
 
         ForEach($workout) { $ex in
             Section {
+                if let previousNote = lastNote(for: ex.name) {
+                    Label("Vorige keer: \u{201C}\(previousNote)\u{201D}", systemImage: "text.quote")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .listRowSeparator(.hidden)
+                }
                 TextField("Notitie (bijv. voelde zwaar)", text: $ex.note, axis: .vertical)
                     .font(.footnote)
                     .listRowSeparator(.hidden)
