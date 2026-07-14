@@ -14,6 +14,7 @@ enum OFF {
         var kcal100: Double
         var carbs100: Double
         var fat100: Double
+        var imageURL: String
     }
 
     private struct LookupResponse: Decodable { var product: RawProduct? }
@@ -22,6 +23,7 @@ enum OFF {
         var code: String?
         var product_name: String?
         var brands: String?
+        var image_front_small_url: String?
         var nutriments: Nutriments?
     }
     private struct Nutriments: Decodable {
@@ -57,11 +59,12 @@ enum OFF {
               n.proteins != nil || n.kcal != nil else { return nil }
         return Product(name: name, brand: raw.brands ?? "", barcode: raw.code ?? "",
                        protein100: n.proteins ?? 0, kcal100: n.kcal ?? 0,
-                       carbs100: n.carbs ?? 0, fat100: n.fat ?? 0)
+                       carbs100: n.carbs ?? 0, fat100: n.fat ?? 0,
+                       imageURL: raw.image_front_small_url ?? "")
     }
 
     static func lookup(barcode: String) async -> Product? {
-        guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json?fields=code,product_name,brands,nutriments"),
+        guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json?fields=code,product_name,brands,nutriments,image_front_small_url"),
               let (data, _) = try? await URLSession.shared.data(from: url),
               let response = try? JSONDecoder().decode(LookupResponse.self, from: data),
               let raw = response.product else { return nil }
@@ -76,12 +79,31 @@ enum OFF {
             .init(name: "action", value: "process"),
             .init(name: "json", value: "1"),
             .init(name: "page_size", value: "20"),
-            .init(name: "fields", value: "code,product_name,brands,nutriments"),
+            .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url"),
         ]
         guard let url = comps.url,
               let (data, _) = try? await URLSession.shared.data(from: url),
               let response = try? JSONDecoder().decode(SearchResponse.self, from: data) else { return [] }
         return response.products.compactMap(product(from:))
+    }
+}
+
+/// Productfoto met vork-fallback; AsyncImage cachet via URLCache.
+struct FoodThumb: View {
+    var url: String
+    var size: CGFloat = 40
+
+    var body: some View {
+        AsyncImage(url: URL(string: url)) { image in
+            image.resizable().scaledToFill()
+        } placeholder: {
+            Image(systemName: "fork.knife")
+                .font(.system(size: size * 0.4))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(width: size, height: size)
+        .background(Color(.tertiarySystemFill))
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
     }
 }
 
@@ -91,6 +113,7 @@ struct FoodView: View {
     let profile: Profile
     @Environment(\.modelContext) private var context
     @Query private var proteins: [ProteinEntry]
+    @Query private var products: [FoodProduct]
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
     @Query(sort: \Meal.createdAt) private var meals: [Meal]
 
@@ -244,7 +267,10 @@ struct FoodView: View {
                 Button {
                     editingEntry = entry
                 } label: {
-                    HStack {
+                    HStack(spacing: 10) {
+                        if let image = products.first(where: { $0.name == entry.label && !$0.imageURL.isEmpty }) {
+                            FoodThumb(url: image.imageURL, size: 36)
+                        }
                         VStack(alignment: .leading, spacing: 1) {
                             Text(entry.label)
                                 .foregroundStyle(.primary)
@@ -324,6 +350,7 @@ struct FoodLogSheet: View {
         var kcal100: Double
         var carbs100: Double = 0
         var fat100: Double = 0
+        var imageURL = ""
         var editable = false
     }
 
@@ -382,9 +409,11 @@ struct FoodLogSheet: View {
                         Button {
                             pending = PendingFood(name: product.name, brand: product.brand, barcode: product.barcode,
                                                   protein100: product.protein100, kcal100: product.kcal100,
-                                                  carbs100: product.carbs100, fat100: product.fat100)
+                                                  carbs100: product.carbs100, fat100: product.fat100,
+                                                  imageURL: product.imageURL)
                         } label: {
-                            productRow(product.name, product.brand, product.protein100, product.kcal100, favorite: product.favorite)
+                            productRow(product.name, product.brand, product.protein100, product.kcal100,
+                                       favorite: product.favorite, imageURL: product.imageURL)
                         }
                         .buttonStyle(.plain)
                     }
@@ -403,9 +432,11 @@ struct FoodLogSheet: View {
                         Button {
                             pending = PendingFood(name: product.name, brand: product.brand, barcode: product.barcode,
                                                   protein100: product.protein100, kcal100: product.kcal100,
-                                                  carbs100: product.carbs100, fat100: product.fat100)
+                                                  carbs100: product.carbs100, fat100: product.fat100,
+                                                  imageURL: product.imageURL)
                         } label: {
-                            productRow(product.name, product.brand, product.protein100, product.kcal100, favorite: false)
+                            productRow(product.name, product.brand, product.protein100, product.kcal100,
+                                       favorite: false, imageURL: product.imageURL)
                         }
                         .buttonStyle(.plain)
                     }
@@ -429,8 +460,10 @@ struct FoodLogSheet: View {
         return Array(base.sorted { ($0.favorite ? 0 : 1, $1.lastUsed) < (($1.favorite ? 0 : 1), $0.lastUsed) }.prefix(10))
     }
 
-    private func productRow(_ name: String, _ brand: String, _ p100: Double, _ k100: Double, favorite: Bool) -> some View {
-        HStack {
+    private func productRow(_ name: String, _ brand: String, _ p100: Double, _ k100: Double,
+                            favorite: Bool, imageURL: String) -> some View {
+        HStack(spacing: 10) {
+            FoodThumb(url: imageURL)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name).foregroundStyle(.primary).lineLimit(1)
@@ -494,7 +527,8 @@ struct FoodLogSheet: View {
         if let known = products.first(where: { $0.barcode == code }) {
             pending = PendingFood(name: known.name, brand: known.brand, barcode: known.barcode,
                                   protein100: known.protein100, kcal100: known.kcal100,
-                                  carbs100: known.carbs100, fat100: known.fat100)
+                                  carbs100: known.carbs100, fat100: known.fat100,
+                                  imageURL: known.imageURL)
             return
         }
         lookingUp = true
@@ -504,7 +538,8 @@ struct FoodLogSheet: View {
             if let found {
                 pending = PendingFood(name: found.name, brand: found.brand, barcode: found.barcode,
                                       protein100: found.protein100, kcal100: found.kcal100,
-                                      carbs100: found.carbs100, fat100: found.fat100)
+                                      carbs100: found.carbs100, fat100: found.fat100,
+                                      imageURL: found.imageURL)
             } else {
                 // Niet in de database → één keer zelf invullen, blijft aan de barcode hangen
                 pending = PendingFood(name: "", barcode: code, protein100: 0, kcal100: 0, editable: true)
@@ -638,14 +673,17 @@ struct FoodPortionSheet: View {
                     }
                 } else {
                     Section {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(food.name).font(.headline)
-                            if !food.brand.isEmpty {
-                                Text(food.brand).font(.footnote).foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            FoodThumb(url: food.imageURL, size: 56)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(food.name).font(.headline)
+                                if !food.brand.isEmpty {
+                                    Text(food.brand).font(.footnote).foregroundStyle(.secondary)
+                                }
+                                Text("Per 100 g: \(Int(food.protein100.rounded())) g eiwit · \(Int(food.kcal100.rounded())) kcal")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            Text("Per 100 g: \(Int(food.protein100.rounded())) g eiwit · \(Int(food.kcal100.rounded())) kcal")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 2)
                     }
@@ -719,6 +757,7 @@ struct FoodPortionSheet: View {
             product = FoodProduct(name: food.name, brand: food.brand, barcode: food.barcode,
                                   protein100: food.protein100, kcal100: food.kcal100,
                                   carbs100: food.carbs100, fat100: food.fat100)
+            product.imageURL = food.imageURL
             context.insert(product)
         }
         if food.editable {

@@ -271,6 +271,7 @@ final class FoodProduct {
     var carbs100: Double = 0
     var fat100: Double = 0
     var favorite: Bool = false
+    var imageURL: String = ""
     var createdAt: Date = Date.now
     var lastUsed: Date = Date.now
 

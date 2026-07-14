@@ -50,7 +50,7 @@ enum Sync {
     private struct FoodRow: Codable {
         var user_id: UUID; var name: String; var brand: String; var barcode: String
         var protein100: Double; var kcal100: Double; var carbs100: Double; var fat100: Double
-        var favorite: Bool; var created_at: Date
+        var favorite: Bool; var image_url: String; var created_at: Date
     }
     private struct SetRow: Codable { var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int }
     private struct HabitsRow: Codable {
@@ -136,7 +136,7 @@ enum Sync {
             .map { FoodRow(user_id: uid, name: $0.name, brand: $0.brand, barcode: $0.barcode,
                            protein100: $0.protein100, kcal100: $0.kcal100,
                            carbs100: $0.carbs100, fat100: $0.fat100,
-                           favorite: $0.favorite, created_at: $0.createdAt) }
+                           favorite: $0.favorite, image_url: $0.imageURL, created_at: $0.createdAt) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
             .map { ScaleRow(user_id: uid, name: $0.name, correction: $0.offset) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
@@ -233,6 +233,7 @@ enum Sync {
                                 protein100: r.protein100, kcal100: r.kcal100,
                                 carbs100: r.carbs100, fat100: r.fat100)
             f.favorite = r.favorite
+            f.imageURL = r.image_url
             f.createdAt = r.created_at
             context.insert(f)
         }

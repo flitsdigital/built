@@ -34,6 +34,7 @@ create table if not exists public.food_products (
   favorite boolean not null default false,
   created_at timestamptz not null
 );
+alter table public.food_products add column if not exists image_url text not null default '';
 
 create table if not exists public.weight_entries (
   id uuid primary key default gen_random_uuid(),
@@ -209,11 +210,11 @@ begin
     from jsonb_array_elements(coalesce(payload->'meals', '[]'::jsonb)) e;
 
   delete from public.food_products where user_id = uid;
-  insert into public.food_products (user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, created_at)
+  insert into public.food_products (user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, image_url, created_at)
     select uid, e->>'name', coalesce(e->>'brand', ''), coalesce(e->>'barcode', ''),
            (e->>'protein100')::float8, (e->>'kcal100')::float8,
            coalesce((e->>'carbs100')::float8, 0), coalesce((e->>'fat100')::float8, 0),
-           coalesce((e->>'favorite')::boolean, false), (e->>'created_at')::timestamptz
+           coalesce((e->>'favorite')::boolean, false), coalesce(e->>'image_url', ''), (e->>'created_at')::timestamptz
     from jsonb_array_elements(coalesce(payload->'foods', '[]'::jsonb)) e;
 
   delete from public.scales where user_id = uid;
