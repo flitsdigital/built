@@ -6,9 +6,17 @@ struct ProfileView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Scale.name) private var scales: [Scale]
     @Query(sort: \CustomHabit.createdAt) private var customHabits: [CustomHabit]
+    @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
 
     @AppStorage("restSeconds") private var restSeconds = 120
     @AppStorage("lastSync") private var lastBackup = 0.0
+    // Zelfde keys als NotificationsSettingsView → status-badge blijft live kloppen
+    @AppStorage("notifMorningOn") private var notifMorningOn = false
+    @AppStorage("notifEveningOn") private var notifEveningOn = false
+    @AppStorage("notifStreakOn") private var notifStreakOn = true
+    @AppStorage("notifWeekOn") private var notifWeekOn = true
+    @AppStorage("notifReviewOn") private var notifReviewOn = true
+    @AppStorage("notifRestOn") private var notifRestOn = true
 
     @State private var showAddScale = false
     @State private var scaleName = ""
@@ -19,27 +27,91 @@ struct ProfileView: View {
     @State private var confirmRestore = false
     @State private var showLogin = false
     @State private var confirmLogout = false
+    @State private var habitToDelete: CustomHabit?
+    @State private var scaleToDelete: Scale?
     private let syncStatus = SyncStatus.shared
 
     private let weekdayOptions: [(day: Int, label: String)] = [
         (2, "Ma"), (3, "Di"), (4, "Wo"), (5, "Do"), (6, "Vr"), (7, "Za"), (1, "Zo"),
     ]
 
+    private var activeNotifs: Int {
+        [notifMorningOn, notifEveningOn, notifStreakOn, notifWeekOn, notifReviewOn, notifRestOn]
+            .filter { $0 }.count
+    }
+
+    private var trainingDaysSummary: String? {
+        let picked = weekdayOptions.filter { profile.trainingDays.contains($0.day) }.map(\.label)
+        guard !picked.isEmpty else { return nil }
+        return "Gekozen: \(picked.joined(separator: ", "))"
+    }
+
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(v) (\(b))"
+    }
+
+    private var weightCSV: String {
+        var lines = ["datum,kg,weegschaal"]
+        let df = Date.FormatStyle(date: .numeric, time: .shortened)
+        for w in weights {
+            lines.append("\(w.date.formatted(df)),\(w.kg),\(w.scale)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     var body: some View {
         List {
-            Section("Jouw doel") {
+            Section {
+                HStack(spacing: 14) {
+                    Text(profile.name.isEmpty ? "💪" : String(profile.name.prefix(1)).uppercased())
+                        .font(.title2.bold())
+                        .foregroundStyle(.green)
+                        .frame(width: 52, height: 52)
+                        .background(.green.opacity(0.15), in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(profile.name.isEmpty ? "Jij" : profile.name)
+                            .font(.headline)
+                        Text("\(profile.startWeight.kgText) → \(profile.goalWeight.kgText) kg · dag \(profile.daysIn)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Section {
                 LabeledContent("Naam") {
                     TextField("Naam", text: $profile.name).multilineTextAlignment(.trailing)
                 }
                 LabeledContent("Doelgewicht") {
-                    TextField("kg", value: $profile.goalWeight, format: .number)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
+                    HStack(spacing: 4) {
+                        TextField("75", value: $profile.goalWeight, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 64)
+                        Text("kg").foregroundStyle(.secondary)
+                    }
                 }
                 DatePicker("Deadline", selection: $profile.goalDate, in: Date.now..., displayedComponents: .date)
                 Stepper("Training: \(profile.trainingsPerWeek)×/week", value: $profile.trainingsPerWeek, in: 1...7)
+            } header: {
+                Text("Jouw doel")
+            }
+
+            Section {
                 LabeledContent("Eiwitdoel", value: "\(profile.proteinTarget) g/dag")
                 LabeledContent("Tempo", value: "\(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2)))) kg/week")
+            } header: {
+                Text("Berekend uit je doel")
+            } footer: {
+                if profile.weeklyRate > 0.5 {
+                    Label("Meer dan +0,5 kg/week wordt vooral vet. Overweeg een latere deadline.", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("Eiwitdoel = doelgewicht × 1,6. Tempo volgt uit doel en deadline.")
+                }
             }
 
             Section {
@@ -66,7 +138,12 @@ struct ProfileView: View {
             } header: {
                 Text("Trainingsdagen")
             } footer: {
-                Text("Optioneel. Met vaste dagen telt \"rustdag volgens plan\" mee als perfect, en herinneren meldingen je alleen op trainingsdagen.")
+                VStack(alignment: .leading, spacing: 4) {
+                    if let trainingDaysSummary {
+                        Text(trainingDaysSummary)
+                    }
+                    Text("Optioneel. Met vaste dagen telt \"rustdag volgens plan\" mee als perfect, en herinneren meldingen je alleen op trainingsdagen.")
+                }
             }
 
             Section {
@@ -75,25 +152,7 @@ struct ProfileView: View {
             } header: {
                 Text("Kern-habits")
             } footer: {
-                Text("Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor je score, streak en perfecte dagen.")
-            }
-
-            Section {
-                NavigationLink {
-                    NotificationsSettingsView()
-                } label: {
-                    Label("Meldingen", systemImage: "bell.badge")
-                }
-            }
-
-            Section("Rust-timer") {
-                Picker("Na elke set", selection: $restSeconds) {
-                    Text("Uit").tag(0)
-                    Text("1:00").tag(60)
-                    Text("1:30").tag(90)
-                    Text("2:00").tag(120)
-                    Text("3:00").tag(180)
-                }
+                Text("Je Groei Score telt nu: eiwit, wegen, training\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""). Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen.")
             }
 
             Section("Eigen habits") {
@@ -101,7 +160,7 @@ struct ProfileView: View {
                     Text(habit.name)
                 }
                 .onDelete { offsets in
-                    for i in offsets { context.delete(customHabits[i]) }
+                    habitToDelete = offsets.first.map { customHabits[$0] }
                 }
                 Button { showAddHabit = true } label: {
                     Label("Habit toevoegen", systemImage: "plus")
@@ -109,11 +168,36 @@ struct ProfileView: View {
             }
 
             Section {
+                NavigationLink {
+                    NotificationsSettingsView()
+                } label: {
+                    LabeledContent {
+                        Text(activeNotifs == 0 ? "Uit" : "\(activeNotifs) actief")
+                    } label: {
+                        Label("Meldingen", systemImage: "bell.badge")
+                    }
+                }
+                Picker(selection: $restSeconds) {
+                    Text("Uit").tag(0)
+                    Text("1:00").tag(60)
+                    Text("1:30").tag(90)
+                    Text("2:00").tag(120)
+                    Text("3:00").tag(180)
+                } label: {
+                    Label("Rust-timer", systemImage: "timer")
+                }
+            } header: {
+                Text("Tijdens het trainen")
+            } footer: {
+                Text("De rust-timer start automatisch na elke afgevinkte set.")
+            }
+
+            Section {
                 ForEach(scales) { scale in
                     ScaleRow(scale: scale)
                 }
                 .onDelete { offsets in
-                    for i in offsets { context.delete(scales[i]) }
+                    scaleToDelete = offsets.first.map { scales[$0] }
                 }
                 Button { showAddScale = true } label: {
                     Label("Weegschaal toevoegen", systemImage: "plus")
@@ -124,8 +208,8 @@ struct ProfileView: View {
                 Text("Correctie wordt verrekend bij het opslaan van nieuwe metingen. Weegt je weegschaal 0,3 kg te zwaar, zet de correctie dan op -0,3.")
             }
 
-            Section {
-                if Sync.isConfigured {
+            if Sync.isConfigured {
+                Section {
                     LabeledContent("Account", value: Sync.currentEmail ?? "Anoniem (alleen dit toestel)")
                     Button {
                         showLogin = true
@@ -140,6 +224,15 @@ struct ProfileView: View {
                         }
                         .disabled(busy)
                     }
+                } header: {
+                    Text("Account")
+                } footer: {
+                    if Sync.isAnonymous {
+                        Text("Koppel een account zodat je data ook op andere toestellen beschikbaar is.")
+                    }
+                }
+
+                Section {
                     LabeledContent("Automatische sync", value: lastBackup > 0
                         ? "Laatst: \(Date(timeIntervalSinceReferenceDate: lastBackup).formatted(date: .abbreviated, time: .shortened))"
                         : "Nog niet gesynct")
@@ -147,6 +240,7 @@ struct ProfileView: View {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote)
                             .foregroundStyle(.orange)
+                            .lineLimit(2)
                     }
                     Button {
                         runPush()
@@ -163,15 +257,29 @@ struct ProfileView: View {
                     if let backupMessage {
                         Text(backupMessage).font(.footnote).foregroundStyle(.secondary)
                     }
-                } else {
+                } header: {
+                    Text("Synchronisatie")
+                } footer: {
+                    Text("Elke wijziging gaat automatisch naar de server. \"Data ophalen\" vervangt alles op dit toestel door de serverversie — je account raakt nooit iets kwijt.")
+                }
+            } else {
+                Section("Synchronisatie") {
                     Text("Niet geconfigureerd. Vul SUPABASE_URL en SUPABASE_ANON_KEY in Built/Secrets.plist in en draai supabase/schema.sql in je Supabase-project.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-            } header: {
-                Text("Supabase")
-            } footer: {
-                Text("Elke wijziging wordt automatisch naar Supabase gesynct. \"Data ophalen\" vervangt alles op dit toestel door wat er op de server staat.")
+            }
+
+            Section("Over") {
+                LabeledContent("Versie", value: appVersion)
+                if !weights.isEmpty {
+                    ShareLink(item: weightCSV, preview: SharePreview("Gewichtsdata (CSV)")) {
+                        Label("Exporteer gewichtsdata", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Link(destination: URL(string: "mailto:flitsdigital1@gmail.com?subject=Built%20feedback")!) {
+                    Label("Feedback sturen", systemImage: "envelope")
+                }
             }
         }
         .tabBarClearance()
@@ -195,6 +303,26 @@ struct ProfileView: View {
                 scaleName = ""
             }
             Button("Annuleer", role: .cancel) { scaleName = "" }
+        }
+        .confirmationDialog("Habit én alle vinkjes ervan verwijderen?",
+                            isPresented: Binding(get: { habitToDelete != nil },
+                                                 set: { if !$0 { habitToDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("Verwijder \"\(habitToDelete?.name ?? "")\"", role: .destructive) {
+                if let habitToDelete { context.delete(habitToDelete) }
+                habitToDelete = nil
+            }
+            Button("Annuleer", role: .cancel) { habitToDelete = nil }
+        }
+        .confirmationDialog("Weegschaal verwijderen? Bestaande metingen blijven staan.",
+                            isPresented: Binding(get: { scaleToDelete != nil },
+                                                 set: { if !$0 { scaleToDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("Verwijder \"\(scaleToDelete?.name ?? "")\"", role: .destructive) {
+                if let scaleToDelete { context.delete(scaleToDelete) }
+                scaleToDelete = nil
+            }
+            Button("Annuleer", role: .cancel) { scaleToDelete = nil }
         }
         .confirmationDialog("Alle lokale data vervangen door de server?", isPresented: $confirmRestore, titleVisibility: .visible) {
             Button("Data ophalen", role: .destructive) { runPull() }
@@ -436,7 +564,7 @@ struct ScaleRow: View {
                 Text("correctie")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                TextField("0", value: Binding(
+                TextField("-0,3", value: Binding(
                     get: { scale.offset },
                     set: { scale.offset = min(5, max(-5, $0)) } // ponytail: clamp — typo's van -50 kg vervuilen anders alles
                 ), format: .number)

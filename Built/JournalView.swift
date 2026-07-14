@@ -8,6 +8,14 @@ struct JournalView: View {
     @Query private var sets: [SetEntry]
     @Query private var habits: [DayHabits]
 
+    enum Filter: String, CaseIterable {
+        case all = "Alles"
+        case training = "Trainingsdagen"
+        case notes = "Met notitie"
+    }
+
+    @State private var filter: Filter = .all
+
     private var cal: Calendar { .current }
 
     private var days: [Date] {
@@ -17,15 +25,41 @@ struct JournalView: View {
         for s in sets { all.insert(cal.startOfDay(for: s.date)) }
         for h in habits { all.insert(cal.startOfDay(for: h.date)) }
         all.insert(cal.startOfDay(for: .now))
-        return all.sorted(by: >).prefix(365).map { $0 }
+        return all.sorted(by: >).prefix(365).filter(matchesFilter)
+    }
+
+    private func matchesFilter(_ day: Date) -> Bool {
+        switch filter {
+        case .all:
+            return true
+        case .training:
+            return sets.contains { cal.isDate($0.date, inSameDayAs: day) }
+        case .notes:
+            return note(day) != nil
+        }
+    }
+
+    /// Gegroepeerd per maand, nieuwste eerst.
+    private var monthGroups: [(month: Date, days: [Date])] {
+        Dictionary(grouping: days) {
+            cal.date(from: cal.dateComponents([.year, .month], from: $0)) ?? $0
+        }
+        .map { (month: $0.key, days: $0.value.sorted(by: >)) }
+        .sorted { $0.month > $1.month }
     }
 
     private func summary(_ day: Date) -> String {
         var parts: [String] = []
         if sets.contains(where: { cal.isDate($0.date, inSameDayAs: day) }) { parts.append("Training") }
-        let protein = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +)
+        let dayProteins = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }
+        let protein = dayProteins.map(\.grams).reduce(0, +)
         if protein > 0 { parts.append("\(protein) g eiwit") }
+        let kcal = dayProteins.map(\.kcal).reduce(0, +)
+        if kcal > 0 { parts.append("\(kcal) kcal") }
         if let w = weights.last(where: { cal.isDate($0.date, inSameDayAs: day) }) { parts.append("\(w.kg.kgText) kg") }
+        if let h = habits.first(where: { cal.isDate($0.date, inSameDayAs: day) }), let hours = h.sleepHours {
+            parts.append("\(hours.kgText) u slaap")
+        }
         return parts.isEmpty ? "Niets gelogd" : parts.joined(separator: " · ")
     }
 
@@ -34,19 +68,68 @@ struct JournalView: View {
         return n.isEmpty ? nil : n
     }
 
+    private func isPerfect(_ day: Date) -> Bool {
+        DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits,
+                         target: profile.proteinTarget,
+                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                         sets: sets, trainingDays: profile.trainingDays)
+    }
+
     var body: some View {
         List {
-            ForEach(days, id: \.self) { day in
-                NavigationLink {
-                    DayDetailView(day: day, profile: profile)
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
-                            .font(.headline)
+            ForEach(monthGroups, id: \.month) { group in
+                Section(group.month.formatted(.dateTime.month(.wide).year())) {
+                    ForEach(group.days, id: \.self) { day in
+                        dayRow(day)
+                            .listRowBackground(cal.isDateInToday(day) ? Color.green.opacity(0.08) : nil)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Logboek")
+        .toolbar {
+            Menu {
+                Picker("Filter", selection: $filter) {
+                    ForEach(Filter.allCases, id: \.self) { f in
+                        Text(f.rawValue).tag(f)
+                    }
+                }
+            } label: {
+                Image(systemName: filter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+            }
+        }
+    }
+
+    private func dayRow(_ day: Date) -> some View {
+        NavigationLink {
+            DayDetailView(day: day, profile: profile)
+        } label: {
+            HStack(spacing: 12) {
+                VStack(spacing: 0) {
+                    Text(day.formatted(.dateTime.weekday(.abbreviated)).uppercased())
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    Text(day.formatted(.dateTime.day()))
+                        .font(.title3.bold().monospacedDigit())
+                }
+                .frame(width: 38)
+                .overlay(alignment: .topTrailing) {
+                    if isPerfect(day) {
+                        Circle().fill(.green).frame(width: 7, height: 7).offset(x: 4, y: -2)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(cal.isDateInToday(day) ? "Vandaag" : summary(day))
+                        .font(.subheadline.weight(cal.isDateInToday(day) ? .semibold : .regular))
+                        .foregroundStyle(summary(day) == "Niets gelogd" ? .secondary : .primary)
+                    if cal.isDateInToday(day) {
                         Text(summary(day))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        if let note = note(day) {
+                    }
+                    if let note = note(day) {
+                        HStack(spacing: 6) {
+                            Rectangle().fill(.green.opacity(0.5)).frame(width: 3)
                             Text(note)
                                 .font(.footnote)
                                 .italic()
@@ -56,13 +139,12 @@ struct JournalView: View {
                     }
                 }
             }
+            .opacity(summary(day) == "Niets gelogd" && !cal.isDateInToday(day) ? 0.55 : 1)
         }
-        .navigationTitle("Logboek")
     }
 }
 
 struct DayDetailView: View {
-    let day: Date
     let profile: Profile
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
@@ -72,12 +154,16 @@ struct DayDetailView: View {
     @Query(sort: \CustomHabit.createdAt) private var customHabits: [CustomHabit]
     @Query private var habitLogs: [HabitLog]
 
-    @State private var showProteinAlert = false
-    @State private var labelInput = ""
-    @State private var gramsInput = ""
-    @State private var kcalInput = ""
+    @State private var day: Date
+    @State private var showProteinSheet = false
+    @State private var editingEntry: ProteinEntry?
     @State private var showWeightAlert = false
     @State private var weightInput = ""
+
+    init(day: Date, profile: Profile) {
+        self.profile = profile
+        _day = State(initialValue: day)
+    }
 
     private var cal: Calendar { .current }
     private var weights: [WeightEntry] { allWeights.filter { cal.isDate($0.date, inSameDayAs: day) } }
@@ -133,45 +219,85 @@ struct DayDetailView: View {
     var body: some View {
         List {
             Section("Habits") {
-                Toggle("Creatine", isOn: bind(\.creatine, default: false))
-                Toggle("Genoeg geslapen", isOn: bind(\.sleptEnough, default: false))
-                ForEach(customHabits) { habit in
-                    Toggle(habit.name, isOn: customBinding(habit.name))
+                if profile.tracksCreatine {
+                    Toggle("Creatine", isOn: bind(\.creatine, default: false))
+                }
+                if profile.tracksSleep {
+                    Toggle("Genoeg geslapen", isOn: bind(\.sleptEnough, default: false))
+                }
+                if !profile.tracksCreatine && !profile.tracksSleep {
+                    Text("Kern-habits staan uit — beheer ze via je profiel.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Slaap (optioneel)") {
-                DatePicker("Naar bed", selection: sleepTime(\.bedTime, defaultHour: 23), displayedComponents: .hourAndMinute)
-                DatePicker("Wakker", selection: sleepTime(\.wakeTime, defaultHour: 7), displayedComponents: .hourAndMinute)
-                if let h = habitsRecord?.sleepHours {
-                    LabeledContent("Geslapen", value: "\(h.kgText) uur")
+            if !customHabits.isEmpty {
+                Section("Eigen habits") {
+                    ForEach(customHabits) { habit in
+                        Toggle(habit.name, isOn: customBinding(habit.name))
+                    }
                 }
-                Picker("Kwaliteit", selection: bind(\.sleepQuality, default: 0)) {
-                    Text("—").tag(0)
-                    Text("😴").tag(1)
-                    Text("🙂").tag(2)
-                    Text("😃").tag(3)
+            }
+
+            if profile.tracksSleep {
+                Section("Slaap") {
+                    if habitsRecord?.bedTime == nil && habitsRecord?.wakeTime == nil {
+                        Button {
+                            let r = record()
+                            r.bedTime = cal.date(bySettingHour: 23, minute: 0, second: 0, of: day)
+                            r.wakeTime = cal.date(bySettingHour: 7, minute: 0, second: 0, of: day)
+                        } label: {
+                            Label("Slaaptijden invullen", systemImage: "moon.zzz")
+                        }
+                    } else {
+                        DatePicker("Naar bed", selection: sleepTime(\.bedTime, defaultHour: 23), displayedComponents: .hourAndMinute)
+                        DatePicker("Wakker", selection: sleepTime(\.wakeTime, defaultHour: 7), displayedComponents: .hourAndMinute)
+                        if let h = habitsRecord?.sleepHours {
+                            LabeledContent("Geslapen", value: "\(h.kgText) uur")
+                        }
+                        Picker("Kwaliteit", selection: bind(\.sleepQuality, default: 0)) {
+                            Text("—").tag(0)
+                            Text("😴").tag(1)
+                            Text("🙂").tag(2)
+                            Text("😃").tag(3)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                 }
-                .pickerStyle(.segmented)
             }
 
             Section("Notitie") {
-                TextField("Hoe ging deze dag?", text: bind(\.note, default: ""), axis: .vertical)
+                TextField("Hoe ging \(day.formatted(.dateTime.weekday(.wide)))?",
+                          text: bind(\.note, default: ""), axis: .vertical)
                     .lineLimit(3...8)
             }
 
             Section("Eiwit — \(proteins.map(\.grams).reduce(0, +)) / \(profile.proteinTarget) g") {
-                ForEach(proteins) { e in
-                    LabeledContent {
-                        Text("\(e.grams) g\(e.kcal > 0 ? " · \(e.kcal) kcal" : "")")
-                    } label: {
-                        Text(e.label)
+                ForEach(mealOrder, id: \.self) { meal in
+                    let list = proteins.filter { $0.mealKey == meal }
+                    if !list.isEmpty {
+                        Text(mealNames[meal] ?? meal)
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                            .listRowSeparator(.hidden)
+                        ForEach(list) { entry in
+                            Button {
+                                editingEntry = entry
+                            } label: {
+                                LabeledContent {
+                                    Text("\(entry.grams) g\(entry.kcal > 0 ? " · \(entry.kcal) kcal" : "")")
+                                } label: {
+                                    Text(entry.label).foregroundStyle(.primary)
+                                }
+                            }
+                        }
+                        .onDelete { offsets in
+                            for i in offsets { context.delete(list[i]) }
+                        }
                     }
                 }
-                .onDelete { offsets in
-                    for i in offsets { context.delete(proteins[i]) }
-                }
-                Button { showProteinAlert = true } label: {
+                Button { showProteinSheet = true } label: {
                     Label("Toevoegen", systemImage: "plus")
                 }
             }
@@ -179,11 +305,15 @@ struct DayDetailView: View {
             if !setsByExercise.isEmpty {
                 Section("Training") {
                     ForEach(setsByExercise, id: \.name) { group in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(group.name).font(.headline)
-                            Text(group.sets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                        NavigationLink {
+                            ExerciseDetailView(exercise: group.name)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.name).font(.headline)
+                                Text(group.sets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .onDelete { offsets in
@@ -216,26 +346,37 @@ struct DayDetailView: View {
         .tabBarClearance()
         .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(date: .abbreviated, time: .omitted))
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Eiwit toevoegen", isPresented: $showProteinAlert) {
-            TextField("Wat (bijv. Kwark)", text: $labelInput)
-            TextField("Eiwit (g)", text: $gramsInput).keyboardType(.numberPad)
-            TextField("Kcal (optioneel)", text: $kcalInput).keyboardType(.numberPad)
-            Button("Toevoegen") {
-                if let g = Int(gramsInput), g > 0 {
-                    let label = labelInput.trimmingCharacters(in: .whitespaces)
-                    context.insert(ProteinEntry(date: noon, grams: g,
-                                                label: label.isEmpty ? "Eigen maaltijd" : label,
-                                                kcal: Int(kcalInput) ?? 0))
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    withAnimation(.smooth(duration: 0.2)) {
+                        day = cal.date(byAdding: .day, value: -1, to: day) ?? day
+                    }
+                } label: {
+                    Image(systemName: "chevron.left")
                 }
-                labelInput = ""; gramsInput = ""; kcalInput = ""
+                Button {
+                    withAnimation(.smooth(duration: 0.2)) {
+                        day = cal.date(byAdding: .day, value: 1, to: day) ?? day
+                    }
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(cal.isDateInToday(day))
             }
-            Button("Annuleer", role: .cancel) { labelInput = ""; gramsInput = ""; kcalInput = "" }
+        }
+        .sheet(isPresented: $showProteinSheet) {
+            ProteinEntrySheet(entryDate: noon)
+        }
+        .sheet(item: $editingEntry) { entry in
+            ProteinEntrySheet(entry: entry)
         }
         .alert("Gewicht toevoegen", isPresented: $showWeightAlert) {
             TextField("bijv. 70,4", text: $weightInput).keyboardType(.decimalPad)
             Button("Opslaan") {
                 if let kg = Double(weightInput.replacingOccurrences(of: ",", with: ".")), kg > 20 {
-                    context.insert(WeightEntry(date: noon, kg: kg))
+                    let date = cal.isDateInToday(day) ? Date.now : noon
+                    context.insert(WeightEntry(date: date, kg: kg))
                 }
                 weightInput = ""
             }

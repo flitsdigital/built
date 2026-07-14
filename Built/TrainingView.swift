@@ -24,6 +24,7 @@ struct WorkoutSummary: Identifiable {
     let volume: Int
     let sets: Int
     let prs: [(exercise: String, new: Double, old: Double)]
+    var previousVolume: Int?
 }
 
 struct TrainingView: View {
@@ -44,7 +45,19 @@ struct TrainingView: View {
     @State private var showNewRoutine = false
     @State private var newRoutineName = ""
     @State private var confirmDiscard = false
+    @State private var dayToDelete: Date?
     @FocusState private var focusedSet: UUID?
+    private let workoutStatus = WorkoutStatus.shared
+
+    private static let pplTemplate: [(String, [String])] = [
+        ("Push", ["Bench Press", "Incline Dumbbell Press", "Shoulder Press", "Triceps Pushdown", "Lateral Raises"]),
+        ("Pull", ["Deadlift", "Lat Pulldown", "Barbell Row", "Face Pulls", "Biceps Curl"]),
+        ("Legs", ["Squat", "Leg Press", "Romanian Deadlift", "Leg Curl", "Calf Raises"]),
+    ]
+    private static let ulTemplate: [(String, [String])] = [
+        ("Upper", ["Bench Press", "Barbell Row", "Shoulder Press", "Lat Pulldown", "Biceps Curl"]),
+        ("Lower", ["Squat", "Romanian Deadlift", "Leg Press", "Leg Curl", "Calf Raises"]),
+    ]
 
     private var cal: Calendar { .current }
 
@@ -85,6 +98,35 @@ struct TrainingView: View {
         let weekStart = cal.startOfDay(for: .now).addingTimeInterval(-6 * 86_400)
         return Set(sets.filter { $0.date > weekStart }.map { cal.startOfDay(for: $0.date) }).count
     }
+
+    private var weekDays: [Date] {
+        (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: cal.startOfDay(for: .now)) }
+    }
+
+    private func trained(on day: Date) -> Bool {
+        sets.contains { cal.isDate($0.date, inSameDayAs: day) }
+    }
+
+    private func routineSubtitle(_ routine: Routine) -> String {
+        guard !routine.exercises.isEmpty else { return "Nog geen oefeningen — tik om toe te voegen" }
+        return "\(routine.exercises.count) oefeningen · " + routine.exercises.prefix(3).joined(separator: ", ")
+    }
+
+    private func lastDone(_ routine: Routine) -> Date? {
+        sets.filter { routine.exercises.contains($0.exercise) }.map(\.date).max()
+    }
+
+    /// Dag met minstens één nieuw e1RM-record. ponytail: O(dagen × sets), prima op deze schaal.
+    private func isPRDay(_ day: Date) -> Bool {
+        for s in sets(on: day) {
+            let before = sets.filter { $0.exercise == s.exercise && $0.date < cal.startOfDay(for: day) }
+            let best = before.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+            if best > 0, epley(s.weightKg, s.reps) > best + 0.1 { return true }
+        }
+        return false
+    }
+
+    private var prCount: Int { workout.compactMap { prInfo($0) }.count }
 
     // MARK: - Doelgerichte voorstellen (dubbele progressie)
 
@@ -173,11 +215,16 @@ struct TrainingView: View {
         WorkoutStatus.shared.stopRest()
         saveExerciseNotes()
         WorkoutStatus.shared.startedAt = nil
+        let previousDay = pastDays.first { !cal.isDateInToday($0) }
+        let previousVolume = previousDay.map { day in
+            Int(sets(on: day).map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+        }
         summary = WorkoutSummary(
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
             volume: volume,
             sets: doneCount,
-            prs: workout.compactMap { ex in prInfo(ex).map { (ex.name, $0.new, $0.old) } }
+            prs: workout.compactMap { ex in prInfo(ex).map { (ex.name, $0.new, $0.old) } },
+            previousVolume: previousVolume
         )
         withAnimation(.snappy(duration: 0.3)) {
             active = false
@@ -209,6 +256,11 @@ struct TrainingView: View {
         .navigationTitle("Training")
         .toolbar {
             if active {
+                ToolbarItem(placement: .principal) {
+                    Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
+                        .font(.subheadline.bold().monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Afronden") { finishWorkout() }
                         .font(.headline)
@@ -216,7 +268,25 @@ struct TrainingView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if workoutStatus.restEndsAt != nil {
+                Color.clear.frame(height: 48) // rust-pill overlapt anders de onderste rijen
+            }
+        }
         .sensoryFeedback(.impact, trigger: doneCount)
+        .sensoryFeedback(.success, trigger: prCount) { old, new in new > old }
+        .confirmationDialog("Trainingsdag verwijderen?",
+                            isPresented: Binding(get: { dayToDelete != nil },
+                                                 set: { if !$0 { dayToDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("Verwijder \(dayToDelete.map { sets(on: $0).count } ?? 0) sets", role: .destructive) {
+                if let day = dayToDelete {
+                    for s in sets(on: day) { context.delete(s) }
+                }
+                dayToDelete = nil
+            }
+            Button("Annuleer", role: .cancel) { dayToDelete = nil }
+        }
         .sheet(item: $summary) { s in
             WorkoutSummarySheet(summary: s, name: profile.name)
         }
@@ -255,31 +325,39 @@ struct TrainingView: View {
 
     @ViewBuilder private var idleSections: some View {
         Section {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(spacing: 10) {
+                HStack {
                     Text("Deze week").font(.headline)
+                    Spacer()
                     Text("\(trainedThisWeek) van \(profile.trainingsPerWeek) trainingen")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(trainedThisWeek >= profile.trainingsPerWeek ? .green : .secondary)
                 }
-                Spacer()
-                ZStack {
-                    Circle().stroke(Color(.tertiarySystemFill), lineWidth: 5)
-                    Circle()
-                        .trim(from: 0, to: min(1, Double(trainedThisWeek) / Double(max(profile.trainingsPerWeek, 1))))
-                        .stroke(.green, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    if trainedThisWeek >= profile.trainingsPerWeek {
-                        Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.green)
-                    } else {
-                        Text("\(trainedThisWeek)/\(profile.trainingsPerWeek)")
-                            .font(.caption2.bold().monospacedDigit())
-                            .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    ForEach(weekDays, id: \.self) { day in
+                        let did = trained(on: day)
+                        VStack(spacing: 4) {
+                            Text(day.formatted(.dateTime.weekday(.narrow)))
+                                .font(.caption2)
+                                .foregroundStyle(cal.isDateInToday(day) ? .primary : .secondary)
+                            ZStack {
+                                Circle()
+                                    .fill(did ? Color.green : Color(.tertiarySystemFill))
+                                    .frame(width: 30, height: 30)
+                                if did {
+                                    Image(systemName: "dumbbell.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white)
+                                } else if cal.isDateInToday(day) {
+                                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: 30, height: 30)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                .frame(width: 44, height: 44)
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 4)
         }
 
         Section("Snel starten") {
@@ -296,32 +374,39 @@ struct TrainingView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button {
-                    addTemplate([
-                        ("Push", ["Bench Press", "Incline Dumbbell Press", "Shoulder Press", "Triceps Pushdown", "Lateral Raises"]),
-                        ("Pull", ["Deadlift", "Lat Pulldown", "Barbell Row", "Face Pulls", "Biceps Curl"]),
-                        ("Legs", ["Squat", "Leg Press", "Romanian Deadlift", "Leg Curl", "Calf Raises"]),
-                    ])
+                    addTemplate(Self.pplTemplate)
                 } label: {
                     Label("Push / Pull / Legs", systemImage: "square.stack.3d.up")
                 }
                 Button {
-                    addTemplate([
-                        ("Upper", ["Bench Press", "Barbell Row", "Shoulder Press", "Lat Pulldown", "Biceps Curl"]),
-                        ("Lower", ["Squat", "Romanian Deadlift", "Leg Press", "Leg Curl", "Calf Raises"]),
-                    ])
+                    addTemplate(Self.ulTemplate)
                 } label: {
                     Label("Upper / Lower", systemImage: "square.stack.3d.up")
                 }
             }
             ForEach(routines) { routine in
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top) {
+                Button {
+                    if routine.exercises.isEmpty {
+                        editingRoutine = routine
+                    } else {
+                        startWorkout(with: routine.exercises)
+                    }
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: routine.exercises.isEmpty ? "square.and.pencil" : "play.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.green)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(routine.name).font(.headline)
-                            Text(routine.exercises.isEmpty ? "Nog geen oefeningen" : routine.exercises.joined(separator: ", "))
-                                .font(.subheadline)
+                            Text(routine.name).font(.headline).foregroundStyle(.primary)
+                            Text(routineSubtitle(routine))
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(2)
+                                .lineLimit(1)
+                            if let last = lastDone(routine) {
+                                Text("Laatst: \(last.formatted(.relative(presentation: .named)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
                         Spacer()
                         Menu {
@@ -332,31 +417,23 @@ struct TrainingView: View {
                         } label: {
                             Image(systemName: "ellipsis")
                                 .foregroundStyle(.secondary)
-                                .frame(width: 32, height: 24)
+                                .frame(width: 32, height: 32)
+                                .contentShape(.rect)
                         }
                     }
-                    Button {
-                        if routine.exercises.isEmpty {
-                            editingRoutine = routine
-                        } else {
-                            startWorkout(with: routine.exercises)
-                        }
-                    } label: {
-                        Text(routine.exercises.isEmpty ? "Oefeningen toevoegen" : "Start routine")
-                            .font(.subheadline.bold())
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.borderedProminent)
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 6)
+                .buttonStyle(PressableStyle())
             }
         } header: {
             HStack {
                 Text("Routines")
                 Spacer()
-                Button {
-                    showNewRoutine = true
+                Menu {
+                    Button("Nieuwe routine…", systemImage: "plus") { showNewRoutine = true }
+                    Divider()
+                    Button("Template: Push / Pull / Legs") { addTemplate(Self.pplTemplate) }
+                    Button("Template: Upper / Lower") { addTemplate(Self.ulTemplate) }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -364,19 +441,29 @@ struct TrainingView: View {
             }
         }
 
-        if !pastDays.isEmpty {
-            Section("Geschiedenis") {
-                ForEach(pastDays, id: \.self) { day in
-                    let daySets = sets(on: day)
-                    let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+        Section("Geschiedenis") {
+            if pastDays.isEmpty {
+                Text("Je eerste training verschijnt hier — met volume, oefeningen en records.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(pastDays, id: \.self) { day in
+                let daySets = sets(on: day)
+                let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+                NavigationLink {
+                    DayDetailView(day: day, profile: profile)
+                } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
                                 .font(.headline)
+                            if isPRDay(day) {
+                                Text("🏆").font(.caption)
+                            }
                             Spacer()
                             Text("\(vol) kg")
                                 .font(.caption.monospacedDigit())
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.secondary)
                         }
                         ForEach(byExercise(daySets), id: \.name) { group in
                             Text("\(group.name): " + group.sets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
@@ -386,11 +473,9 @@ struct TrainingView: View {
                     }
                     .padding(.vertical, 2)
                 }
-                .onDelete { offsets in
-                    for i in offsets {
-                        for s in sets(on: pastDays[i]) { context.delete(s) }
-                    }
-                }
+            }
+            .onDelete { offsets in
+                if let i = offsets.first { dayToDelete = pastDays[i] }
             }
         }
     }
@@ -423,6 +508,11 @@ struct TrainingView: View {
                         .animation(.snappy(duration: 0.25), value: doneCount)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if doneCount == 0 {
+                Text("Vink een set af om te kunnen afronden.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
 
@@ -474,7 +564,7 @@ struct TrainingView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(ex.name)
                             .font(.headline)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.primary)
                         if let pr = prInfo(ex) {
                             Text("🏆 Nieuw record — geschat 1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
                                 .font(.caption.bold())
@@ -532,27 +622,35 @@ struct TrainingView: View {
                 .font(.subheadline.monospacedDigit().bold())
                 .foregroundStyle(.secondary)
                 .frame(width: 24, alignment: .leading)
+                .opacity(set.wrappedValue.done ? 0.55 : 1)
             Text(set.wrappedValue.previous ?? "—")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .frame(width: 64, alignment: .leading)
+                .opacity(set.wrappedValue.done ? 0.55 : 1)
             TextField("kg", value: set.kg, format: .number)
                 .keyboardType(.decimalPad)
                 .multilineTextAlignment(.center)
                 .font(.subheadline.bold().monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .frame(width: 56)
                 .padding(.vertical, 6)
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
                 .focused($focusedSet, equals: set.wrappedValue.id)
                 .disabled(set.wrappedValue.done)
+                .opacity(set.wrappedValue.done ? 0.55 : 1)
             TextField("reps", value: set.reps, format: .number)
                 .keyboardType(.numberPad)
                 .multilineTextAlignment(.center)
                 .font(.subheadline.bold().monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .frame(width: 48)
                 .padding(.vertical, 6)
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
                 .disabled(set.wrappedValue.done)
+                .opacity(set.wrappedValue.done ? 0.55 : 1)
             Spacer()
             Button {
                 withAnimation(.snappy(duration: 0.25)) {
@@ -599,6 +697,12 @@ struct WorkoutSummarySheet: View {
                 statTile("\(summary.minutes)", "minuten")
                 statTile("\(summary.volume)", "kg volume")
                 statTile("\(summary.sets)", "sets")
+            }
+            if let prev = summary.previousVolume, prev > 0 {
+                let delta = summary.volume - prev
+                Text("\(delta >= 0 ? "+" : "")\(delta) kg volume t.o.v. je vorige training")
+                    .font(.footnote)
+                    .foregroundStyle(delta >= 0 ? .green : .secondary)
             }
             if !summary.prs.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {

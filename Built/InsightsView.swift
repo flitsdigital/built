@@ -77,35 +77,34 @@ struct InsightsView: View {
         return trainingDays >= profile.trainingsPerWeek && abs(d - profile.weeklyRate) < 0.2
     }
 
-    private var advice: [String] {
-        var out: [String] = []
+    private var advices: [(text: String, warning: Bool)] {
+        var out: [(text: String, warning: Bool)] = []
         if trainingDays < profile.trainingsPerWeek {
-            out.append("Plan je trainingen vooraf in — je mist er \(profile.trainingsPerWeek - trainingDays) deze week.")
+            out.append(("Plan je trainingen vooraf in — je mist er \(profile.trainingsPerWeek - trainingDays) deze week.", true))
         }
         if proteinDays < 5 {
-            out.append("Eiwit is de bottleneck: zet elke ochtend een shake klaar.")
+            out.append(("Eiwit is de bottleneck: zet elke ochtend een shake klaar.", true))
         }
         if let d = weekDelta, profile.weeklyRate > 0, d < 0.05 {
-            out.append("Gewicht staat stil. Voeg ±250 kcal per dag toe.")
+            out.append(("Gewicht staat stil. Voeg ±250 kcal per dag toe.", true))
         }
         for name in topExercises {
             let tops = sessionTops(name)
             if tops.count >= 4, Set(tops.suffix(4).map(\.kg)).count == 1 {
-                out.append("\(name) staat al \(tops.suffix(4).count) sessies op \(tops.last!.kg.kgText) kg — probeer een deload (-10%) of een variatie.")
+                out.append(("\(name) staat al \(tops.suffix(4).count) sessies op \(tops.last!.kg.kgText) kg — probeer een deload (-10%) of een variatie.", true))
             }
         }
-        // Eiwitverdeling: spiereiwitsynthese wil spreiding over de dag
         let recentProteins = proteins.filter { inLastWeek($0.date) }
         let totalGrams = recentProteins.map(\.grams).reduce(0, +)
         if totalGrams > 100 {
             let evening = recentProteins.filter { cal.component(.hour, from: $0.date) >= 17 }.map(\.grams).reduce(0, +)
             let share = Double(evening) / Double(totalGrams)
             if share > 0.6 {
-                out.append("\(Int(share * 100))% van je eiwit komt na 17:00 — schuif ~30 g naar je ontbijt voor betere spreiding.")
+                out.append(("\(Int(share * 100))% van je eiwit komt na 17:00 — schuif ~30 g naar je ontbijt voor betere spreiding.", false))
             }
         }
         if out.isEmpty {
-            out.append("Alles staat goed. Gewoon doorgaan. 💪")
+            out.append(("Alles staat goed. Gewoon doorgaan. 💪", false))
         }
         return out
     }
@@ -123,7 +122,7 @@ struct InsightsView: View {
             result.append((week: week, volume: volume))
         }
         result.sort { $0.week < $1.week }
-        return result.suffix(8).map { $0 }
+        return result.suffix(volumeWeeks).map { $0 }
     }
 
     private var topExercises: [String] {
@@ -147,63 +146,165 @@ struct InsightsView: View {
 
     // MARK: - Body
 
+    struct DayBox: Identifiable, Hashable {
+        let day: Date
+        var id: Date { day }
+    }
+
+    @State private var showReview = false
+    @State private var volumeWeeks = 8
+    @State private var selectedDayBox: DayBox?
+
+    private var perfectLast7: Int { daysBack(7).filter(perfectDay).count }
+
     var body: some View {
         List {
-            Section("Week \(profile.daysIn / 7 + 1) Review") {
-                LabeledContent("Training", value: "\(trainingDays)/\(profile.trainingsPerWeek) voltooid \(trainingDays >= profile.trainingsPerWeek ? "✅" : "")")
-                LabeledContent("Eiwit", value: "\(proteinDays)/7 dagen gehaald")
-                if let d = weekDelta {
-                    LabeledContent("Gewicht", value: "\(d >= 0 ? "+" : "")\(d.formatted(.number.precision(.fractionLength(1)))) kg")
-                }
-                LabeledContent("Voorspelling", value: onTrack ? "Op schema 🚀" : "Bijsturen nodig")
-            }
-
-            Section("Perfecte dagen") {
-                HStack {
-                    statTile(value: "\(perfectLast30)", label: "van 30 dagen")
-                    Divider()
-                    statTile(value: "🔥 \(streak)", label: "huidige reeks")
-                }
-            }
-
             Section("Deze week") {
-                weekGrid
-            }
-
-            if !weeklyVolume.isEmpty {
-                Section("Trainingsvolume per week") {
-                    Chart(weeklyVolume, id: \.week) { item in
-                        BarMark(
-                            x: .value("Week", item.week, unit: .weekOfYear),
-                            y: .value("Volume", item.volume)
-                        )
-                        .foregroundStyle(.green.gradient)
-                        .cornerRadius(4)
-                    }
-                    .frame(height: 160)
-                    .padding(.vertical, 8)
+                HStack {
+                    statTile(value: "\(trainingDays)/\(profile.trainingsPerWeek)", label: "trainingen")
+                    Divider()
+                    statTile(value: "\(proteinDays)/7", label: "eiwit-dagen")
                 }
-            }
-
-            if !topExercises.isEmpty {
-                Section("Kracht") {
-                    ForEach(topExercises, id: \.self) { name in
-                        NavigationLink {
-                            ExerciseDetailView(exercise: name)
-                        } label: {
-                            strengthRow(name)
-                        }
-                    }
+                HStack {
+                    statTile(value: weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—",
+                             label: "kg deze week")
+                    Divider()
+                    statTile(value: "\(perfectLast7)/7", label: "perfecte dagen")
+                }
+                Button {
+                    showReview = true
+                } label: {
+                    Label("Bekijk week review", systemImage: "chart.bar.doc.horizontal")
                 }
             }
 
             Section("Coach") {
-                ForEach(advice, id: \.self) { line in
-                    Label(line, systemImage: "lightbulb")
+                ForEach(advices, id: \.text) { advice in
+                    Label {
+                        Text(advice.text)
+                    } icon: {
+                        Image(systemName: advice.warning ? "exclamationmark.circle.fill" : "lightbulb")
+                            .foregroundStyle(advice.warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    }
+                    .font(.subheadline)
+                }
+            }
+
+            Section {
+                HStack {
+                    statTile(value: "\(perfectLast30)", label: "van 30 dagen")
+                    Divider()
+                    statTile(value: streak > 0 ? "🔥 \(streak)" : "—",
+                             label: streak > 0 ? "huidige reeks" : "start vandaag je reeks")
+                }
+                heatmap
+            } header: {
+                Text("Perfecte dagen")
+            } footer: {
+                Text("De laatste vijf weken — tik op een dag voor het logboek.")
+            }
+
+            Section("Habits per dag") {
+                weekGrid
+            }
+
+            Section("Trainingsvolume per week") {
+                Picker("Periode", selection: $volumeWeeks) {
+                    Text("8 wk").tag(8)
+                    Text("16 wk").tag(16)
+                    Text("26 wk").tag(26)
+                }
+                .pickerStyle(.segmented)
+                .listRowSeparator(.hidden)
+                if weeklyVolume.isEmpty {
+                    Text("Na je eerste trainingen zie hier je volume per week groeien.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    volumeChart
+                }
+            }
+
+            Section {
+                if topExercises.isEmpty {
+                    Text("Na 2+ sessies per oefening verschijnt hier je krachtcurve.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(topExercises, id: \.self) { name in
+                    NavigationLink {
+                        ExerciseDetailView(exercise: name)
+                    } label: {
+                        strengthRow(name)
+                    }
+                }
+            } header: {
+                Text("Kracht")
+            } footer: {
+                if !topExercises.isEmpty {
+                    Text("Topgewicht per sessie; records op geschat 1RM (Epley).")
                 }
             }
         }
         .navigationTitle("Inzicht")
+        .sheet(isPresented: $showReview) { WeeklyReviewSheet(profile: profile) }
+        .navigationDestination(item: $selectedDayBox) { box in
+            DayDetailView(day: box.day, profile: profile)
+        }
+    }
+
+    /// 5 weken × 7 dagen; gevuld = perfecte dag, tik = logboek.
+    private var heatmap: some View {
+        let days = (0..<35).compactMap { cal.date(byAdding: .day, value: -34 + $0, to: cal.startOfDay(for: .now)) }
+        return VStack(spacing: 5) {
+            ForEach(0..<5, id: \.self) { row in
+                HStack(spacing: 5) {
+                    ForEach(0..<7, id: \.self) { col in
+                        let day = days[row * 7 + col]
+                        Button {
+                            selectedDayBox = DayBox(day: day)
+                        } label: {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(perfectDay(day) ? Color.green : Color(.quaternarySystemFill))
+                                .frame(height: 26)
+                                .overlay {
+                                    if cal.isDateInToday(day) {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .strokeBorder(.green, lineWidth: 1.5)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var volumeChart: some View {
+        let avg = weeklyVolume.map(\.volume).reduce(0, +) / Double(max(weeklyVolume.count, 1))
+        return Chart {
+            ForEach(weeklyVolume, id: \.week) { item in
+                BarMark(
+                    x: .value("Week", item.week, unit: .weekOfYear),
+                    y: .value("Volume", item.volume)
+                )
+                .foregroundStyle(.green.gradient)
+                .cornerRadius(4)
+            }
+            RuleMark(y: .value("Gemiddeld", avg))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: [4]))
+                .annotation(position: .top, alignment: .leading) {
+                    Text("gem. \(Int(avg)) kg")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+        }
+        .frame(height: 170)
+        .padding(.vertical, 8)
+        .animation(.smooth(duration: 0.3), value: volumeWeeks)
     }
 
     private func statTile(value: String, label: String) -> some View {
@@ -233,9 +334,20 @@ struct InsightsView: View {
                         .foregroundStyle(.secondary)
                         .gridColumnAlignment(.leading)
                     ForEach(days, id: \.self) { d in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(factor.done(d) ? Color.green : Color(.quaternarySystemFill))
-                            .frame(width: 22, height: 22)
+                        Button {
+                            selectedDayBox = DayBox(day: d)
+                        } label: {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(factor.done(d) ? Color.green : Color(.quaternarySystemFill))
+                                .frame(width: 22, height: 22)
+                                .overlay {
+                                    if cal.isDateInToday(d) {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .strokeBorder(.green.opacity(0.7), lineWidth: 1.5)
+                                    }
+                                }
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -261,6 +373,9 @@ struct InsightsView: View {
             }
             Spacer()
             if tops.count >= 2 {
+                Text("\(tops.last?.kg.kgText ?? "—") kg")
+                    .font(.caption.bold().monospacedDigit())
+                    .foregroundStyle(.secondary)
                 Chart(tops, id: \.day) { item in
                     LineMark(x: .value("Dag", item.day), y: .value("kg", item.kg))
                         .foregroundStyle(.green)
@@ -401,6 +516,12 @@ struct ExerciseDetailView: View {
             .sorted { $0.0 < $1.0 }
     }
 
+    private func isRecordDay(_ day: Date) -> Bool {
+        let dayBest = sets.filter { cal.isDate($0.date, inSameDayAs: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+        let before = sets.filter { $0.date < cal.startOfDay(for: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+        return before > 0 && dayBest > before + 0.1
+    }
+
     var body: some View {
         List {
             Section {
@@ -408,6 +529,8 @@ struct ExerciseDetailView: View {
                 LabeledContent("Geschat 1RM", value: "\(sets.map { epley($0.weightKg, $0.reps) }.max()?.kgText ?? "—") kg")
                 LabeledContent("Sessies", value: "\(days.count)")
                 LabeledContent("Totaal sets", value: "\(sets.count)")
+            } footer: {
+                Text("Geschat 1RM via de Epley-formule: gewicht × (1 + reps ÷ 30).")
             }
             if tops.count >= 2 {
                 Section("Topgewicht per sessie") {
@@ -425,9 +548,19 @@ struct ExerciseDetailView: View {
             Section("Historie") {
                 ForEach(days, id: \.self) { day in
                     let daySets = sets.filter { cal.isDate($0.date, inSameDayAs: day) }
+                    let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(day.formatted(.dateTime.weekday(.wide).day().month()))
-                            .font(.headline)
+                        HStack {
+                            Text(day.formatted(.dateTime.weekday(.wide).day().month()))
+                                .font(.headline)
+                            if isRecordDay(day) {
+                                Text("🏆").font(.caption)
+                            }
+                            Spacer()
+                            Text("\(vol) kg")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
                         Text(daySets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
                             .font(.footnote)
                             .foregroundStyle(.secondary)

@@ -195,6 +195,7 @@ struct ProteinLogSheet: View {
 struct ProteinEntrySheet: View {
     var entry: ProteinEntry?
     var prefill: ProteinLogSheet.QuickAdd?
+    var entryDate: Date = .now
 
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -251,6 +252,7 @@ struct ProteinEntrySheet: View {
                 kcal = entry.kcal
                 meal = entry.mealKey
             } else if let prefill {
+                meal = ProteinEntry.guessMeal(for: entryDate)
                 label = prefill.label
                 grams = prefill.grams
                 kcal = prefill.kcal
@@ -266,7 +268,7 @@ struct ProteinEntrySheet: View {
             entry.kcal = kcal
             entry.meal = meal
         } else {
-            context.insert(ProteinEntry(grams: grams,
+            context.insert(ProteinEntry(date: entryDate, grams: grams,
                                         label: cleanLabel.isEmpty ? "Eigen maaltijd" : cleanLabel,
                                         kcal: kcal, meal: meal))
             if saveAsMeal, !cleanLabel.isEmpty {

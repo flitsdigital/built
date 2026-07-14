@@ -171,7 +171,7 @@ struct DashboardView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(greeting) \(profile.name) 👋")
+                Text(profile.name.isEmpty ? "\(greeting) 👋" : "\(greeting) \(profile.name) 👋")
                     .font(.title2.bold())
                 Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)))
                     .font(.subheadline)
