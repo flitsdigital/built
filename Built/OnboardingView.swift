@@ -27,7 +27,7 @@ struct OnboardingView: View {
         }
         .tabViewStyle(.page(indexDisplayMode: .always))
         .indexViewStyle(.page(backgroundDisplayMode: .always))
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
         .animation(.snappy(duration: 0.3), value: step)
     }
 
@@ -65,17 +65,13 @@ struct OnboardingView: View {
                             .foregroundStyle(.orange)
                     }
                 }
-                .listRowBackground(Color.cleanCard)
-                Section {
-                    Stepper("Leeftijd: \(age)", value: $age, in: 14...80)
-                    Stepper("Lengte: \(height) cm", value: $height, in: 120...220)
-                    LabeledContent("Huidig gewicht") {
-                        TextField("kg", value: $weight, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
+                Stepper("Leeftijd: \(age)", value: $age, in: 14...80)
+                Stepper("Lengte: \(height) cm", value: $height, in: 120...220)
+                LabeledContent("Huidig gewicht") {
+                    TextField("kg", value: $weight, format: .number)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
                 }
-                .listRowBackground(Color.cleanCard)
             }
             .scrollContentBackground(.hidden)
             nextButton("Volgende") {
@@ -94,16 +90,13 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             header("Jouw doel 🎯", "Waar werk je naartoe?")
             Form {
-                Section {
-                    LabeledContent("Doelgewicht") {
-                        TextField("kg", value: $goalWeight, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    DatePicker("Deadline", selection: $goalDate, in: Date.now..., displayedComponents: .date)
-                    Stepper("Training: \(trainings)×/week", value: $trainings, in: 1...7)
+                LabeledContent("Doelgewicht") {
+                    TextField("kg", value: $goalWeight, format: .number)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
                 }
-                .listRowBackground(Color.cleanCard)
+                DatePicker("Deadline", selection: $goalDate, in: Date.now..., displayedComponents: .date)
+                Stepper("Training: \(trainings)×/week", value: $trainings, in: 1...7)
             }
             .scrollContentBackground(.hidden)
             nextButton("Maak mijn plan") {
@@ -124,7 +117,6 @@ struct OnboardingView: View {
                 } footer: {
                     Text("Alles is later aan te passen via je profiel.")
                 }
-                .listRowBackground(Color.cleanCard)
             }
             .scrollContentBackground(.hidden)
             nextButton("Start") {

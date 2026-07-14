@@ -56,9 +56,7 @@ struct JournalView: View {
                     }
                 }
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .navigationTitle("Logboek")
     }
 }
@@ -141,7 +139,6 @@ struct DayDetailView: View {
                     Toggle(habit.name, isOn: customBinding(habit.name))
                 }
             }
-            .listRowBackground(Color.cleanCard)
 
             Section("Slaap (optioneel)") {
                 DatePicker("Naar bed", selection: sleepTime(\.bedTime, defaultHour: 23), displayedComponents: .hourAndMinute)
@@ -157,13 +154,11 @@ struct DayDetailView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            .listRowBackground(Color.cleanCard)
 
             Section("Notitie") {
                 TextField("Hoe ging deze dag?", text: bind(\.note, default: ""), axis: .vertical)
                     .lineLimit(3...8)
             }
-            .listRowBackground(Color.cleanCard)
 
             Section("Eiwit — \(proteins.map(\.grams).reduce(0, +)) / \(profile.proteinTarget) g") {
                 ForEach(proteins) { e in
@@ -180,7 +175,6 @@ struct DayDetailView: View {
                     Label("Toevoegen", systemImage: "plus")
                 }
             }
-            .listRowBackground(Color.cleanCard)
 
             if !setsByExercise.isEmpty {
                 Section("Training") {
@@ -198,7 +192,6 @@ struct DayDetailView: View {
                         }
                     }
                 }
-                .listRowBackground(Color.cleanCard)
             }
 
             Section("Gewicht") {
@@ -219,9 +212,7 @@ struct DayDetailView: View {
                     Label("Toevoegen", systemImage: "plus")
                 }
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .tabBarClearance()
         .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(date: .abbreviated, time: .omitted))
         .navigationBarTitleDisplayMode(.inline)

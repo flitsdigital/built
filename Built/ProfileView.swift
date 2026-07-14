@@ -35,7 +35,6 @@ struct ProfileView: View {
                 LabeledContent("Eiwitdoel", value: "\(profile.proteinTarget) g/dag")
                 LabeledContent("Tempo", value: "\(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2)))) kg/week")
             }
-            .listRowBackground(Color.cleanCard)
 
             Section {
                 Toggle("Creatine bijhouden", isOn: $profile.tracksCreatine)
@@ -45,7 +44,6 @@ struct ProfileView: View {
             } footer: {
                 Text("Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor je score, streak en perfecte dagen.")
             }
-            .listRowBackground(Color.cleanCard)
 
             Section {
                 NavigationLink {
@@ -53,13 +51,7 @@ struct ProfileView: View {
                 } label: {
                     Label("Meldingen", systemImage: "bell.badge")
                 }
-                NavigationLink {
-                    MealsView()
-                } label: {
-                    Label("Maaltijden & recepten", systemImage: "fork.knife")
-                }
             }
-            .listRowBackground(Color.cleanCard)
 
             Section("Rust-timer") {
                 Picker("Na elke set", selection: $restSeconds) {
@@ -70,7 +62,6 @@ struct ProfileView: View {
                     Text("3:00").tag(180)
                 }
             }
-            .listRowBackground(Color.cleanCard)
 
             Section("Eigen habits") {
                 ForEach(customHabits) { habit in
@@ -83,7 +74,6 @@ struct ProfileView: View {
                     Label("Habit toevoegen", systemImage: "plus")
                 }
             }
-            .listRowBackground(Color.cleanCard)
 
             Section {
                 ForEach(scales) { scale in
@@ -100,7 +90,6 @@ struct ProfileView: View {
             } footer: {
                 Text("Correctie wordt verrekend bij het opslaan van nieuwe metingen. Weegt je weegschaal 0,3 kg te zwaar, zet de correctie dan op -0,3.")
             }
-            .listRowBackground(Color.cleanCard)
 
             Section {
                 if Sync.isConfigured {
@@ -137,9 +126,7 @@ struct ProfileView: View {
             } footer: {
                 Text("Elke wijziging wordt automatisch naar Supabase gesynct. \"Data ophalen\" vervangt alles op dit toestel door wat er op de server staat.")
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .tabBarClearance()
         .navigationTitle("Profiel")
         .alert("Nieuwe habit", isPresented: $showAddHabit) {
@@ -236,7 +223,6 @@ struct NotificationsSettingsView: View {
             } footer: {
                 Text("Stil bij succes: al gewogen of dag al binnen → geen melding. De avondcheck vertelt precies wat er nog openstaat, met knoppen om direct te loggen.")
             }
-            .listRowBackground(Color.cleanCard)
 
             Section {
                 Toggle("Streak-bescherming", isOn: $streakOn)
@@ -246,7 +232,6 @@ struct NotificationsSettingsView: View {
             } footer: {
                 Text("Streak: om 21:30, alleen als je streak ≥ 3 dagen is én de dag nog niet perfect. Trainingsweek: do/vr 17:00, alleen als je achterloopt op je weekdoel.")
             }
-            .listRowBackground(Color.cleanCard)
 
             Section {
                 Toggle("Week Review (zo 19:00)", isOn: $reviewOn)
@@ -256,9 +241,7 @@ struct NotificationsSettingsView: View {
             } footer: {
                 Text("De rust-timer melding komt alleen als de app niet open is — in de app voel je een tik.")
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .tabBarClearance()
         .navigationTitle("Meldingen")
         .navigationBarTitleDisplayMode(.inline)

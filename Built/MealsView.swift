@@ -35,14 +35,13 @@ struct ProteinLogSheet: View {
                 Section {
                     LabeledContent("Vandaag", value: "\(todayProtein) / \(profile.proteinTarget) g\(todayKcal > 0 ? " · \(todayKcal) kcal" : "")")
                 }
-                .listRowBackground(Color.cleanCard)
                 Section("Snel toevoegen") {
                     ForEach(quickAdds, id: \.key) { s in
                         Button {
                             context.insert(ProteinEntry(grams: s.grams, label: s.label, kcal: s.kcal))
                         } label: {
                             HStack {
-                                Image(systemName: "plus.circle.fill").foregroundStyle(.primary)
+                                Image(systemName: "plus.circle.fill").foregroundStyle(.green)
                                 Text(s.label).foregroundStyle(.primary)
                                 Spacer()
                                 Text("\(s.grams) g").foregroundStyle(.secondary)
@@ -56,7 +55,6 @@ struct ProteinLogSheet: View {
                         }
                     }
                 }
-                .listRowBackground(Color.cleanCard)
                 if !todayEntries.isEmpty {
                     Section("Vandaag gelogd") {
                         ForEach(todayEntries) { e in
@@ -66,16 +64,13 @@ struct ProteinLogSheet: View {
                             for i in offsets { context.delete(todayEntries[i]) }
                         }
                     }
-                    .listRowBackground(Color.cleanCard)
                 }
                 Section {
                     NavigationLink { MealsView() } label: {
                         Label("Maaltijden & recepten", systemImage: "fork.knife")
                     }
                 }
-                .listRowBackground(Color.cleanCard)
             }
-            .cleanScreen()
             .navigationTitle("Eiwit loggen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -132,9 +127,7 @@ struct MealsView: View {
             } footer: {
                 Text("Vaste gerechten staan bovenaan je quick-add lijst. Tik op een maaltijd om er een recept met ingrediënten en porties van te maken.")
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .navigationTitle("Maaltijden & recepten")
         .alert("Nieuwe maaltijd", isPresented: $showAdd) {
             TextField("Naam (bijv. Kip & rijst)", text: $nameInput)
@@ -167,7 +160,6 @@ struct MealEditorView: View {
                     Stepper("Porties: \(meal.servings.kgText)", value: $meal.servings, in: 0.5...20, step: 0.5)
                 }
             }
-            .listRowBackground(Color.cleanCard)
 
             if meal.ingredients.isEmpty {
                 Section {
@@ -186,7 +178,6 @@ struct MealEditorView: View {
                 } footer: {
                     Text("Of voeg ingrediënten toe — dan rekent de app het per portie uit.")
                 }
-                .listRowBackground(Color.cleanCard)
             }
 
             Section("Ingrediënten") {
@@ -198,9 +189,7 @@ struct MealEditorView: View {
                     Label("Ingrediënt toevoegen", systemImage: "plus")
                 }
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .navigationTitle($meal.name)
         .navigationBarTitleDisplayMode(.inline)
         .alert("Ingrediënt toevoegen", isPresented: $showAddIngredient) {

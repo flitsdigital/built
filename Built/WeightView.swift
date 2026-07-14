@@ -35,7 +35,6 @@ struct WeightView: View {
 
     private var current: Double? { weights.average(daysBack: 0..<7) ?? weights.last?.kg }
 
-    // ponytail: alleen feiten — coaching-advies woont op één plek: Inzicht → Coach
     private var insight: String {
         guard let trend = weights.trendPerWeek else {
             return "Log minimaal twee weken gewicht voor een betrouwbare trend."
@@ -44,6 +43,12 @@ struct WeightView: View {
         var lines = ["Trend: \(trend >= 0 ? "+" : "")\(trend.formatted(.number.precision(.fractionLength(2)))) kg/week (doel \(target >= 0 ? "+" : "")\(target.formatted(.number.precision(.fractionLength(2)))))."]
         if abs(trend - target) < 0.1 {
             lines.append("Perfect op schema. 🎯")
+        } else if target > 0 && trend < 0.05 {
+            lines.append("Je gewicht stijgt amper. Voeg ±250 kcal per dag toe.")
+        } else if target > 0 && trend > target + 0.15 {
+            lines.append("Iets sneller dan gepland — hou vetopslag in de gaten.")
+        } else {
+            lines.append("Prima richting, blijf consistent.")
         }
         if abs(profile.weeklyRate) > 0.01, let cur = current {
             let daysAhead = Int(((cur - profile.startWeight) - profile.expectedGain) / profile.weeklyRate * 7)
@@ -61,7 +66,6 @@ struct WeightView: View {
                     LabeledContent("Nog te gaan", value: "\(abs(profile.goalWeight - current).kgText) kg")
                 }
             }
-            .listRowBackground(Color.cleanCard)
             Section {
                 Picker("Periode", selection: $periodDays) {
                     Text("1 mnd").tag(30)
@@ -95,11 +99,9 @@ struct WeightView: View {
                 .frame(height: 260)
                 .padding(.vertical, 8)
             }
-            .listRowBackground(Color.cleanCard)
             Section("Inzicht") {
                 Text(insight)
             }
-            .listRowBackground(Color.cleanCard)
             Section("Metingen") {
                 ForEach(weights.suffix(10).reversed()) { w in
                     LabeledContent {
@@ -116,9 +118,7 @@ struct WeightView: View {
                     for i in offsets { context.delete(visible[i]) }
                 }
             }
-            .listRowBackground(Color.cleanCard)
         }
-        .cleanScreen()
         .navigationTitle("Gewicht")
         .toolbar {
             Button("Wegen", systemImage: "plus") { showLogSheet = true }
@@ -146,17 +146,14 @@ struct WeightLogSheet: View {
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                 }
-                .listRowBackground(Color.cleanCard)
                 if !scales.isEmpty {
                     Picker("Weegschaal", selection: $selectedScale) {
                         ForEach(scales) { s in
                             Text(s.name).tag(s.name)
                         }
                     }
-                    .listRowBackground(Color.cleanCard)
                 }
             }
-            .cleanScreen()
             .navigationTitle("Wegen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

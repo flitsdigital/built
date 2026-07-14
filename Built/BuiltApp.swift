@@ -10,7 +10,7 @@ struct BuiltApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .tint(.primary) // Clean: monochroom accent — kleur is voor data en status
+                .tint(.green) // ponytail: één accentkleur voor de hele app
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
         .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, CustomHabit.self, HabitLog.self])
@@ -23,7 +23,6 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = 0
     @State private var restoring = false
-    @AppStorage("restSeconds") private var restSeconds = 120
     private let workoutStatus = WorkoutStatus.shared
 
     init() {
@@ -48,10 +47,6 @@ struct RootView: View {
                     Task { await Sync.pushIfChanged(context) }
                 }
             }
-    }
-
-    private func restLabel(_ seconds: Int) -> String {
-        "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 
     @ViewBuilder private var content: some View {
@@ -81,21 +76,7 @@ struct RootView: View {
                 VStack(spacing: 8) {
                     if let restEnd = workoutStatus.restEndsAt, restEnd > .now {
                         HStack(spacing: 10) {
-                            Menu {
-                                ForEach([60, 90, 120, 180], id: \.self) { s in
-                                    Button {
-                                        restSeconds = s
-                                    } label: {
-                                        if restSeconds == s {
-                                            Label(restLabel(s), systemImage: "checkmark")
-                                        } else {
-                                            Text(restLabel(s))
-                                        }
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "timer").foregroundStyle(.green)
-                            }
+                            Image(systemName: "timer").foregroundStyle(.green)
                             Text(timerInterval: Date.now...restEnd, countsDown: true)
                                 .font(.footnote.bold().monospacedDigit())
                             Button("+15s") { workoutStatus.startRest(until: restEnd.addingTimeInterval(15)) }
@@ -159,7 +140,7 @@ struct FloatingTabBar: View {
             ForEach(items.indices, id: \.self) { i in
                 let selected = selection == i
                 Button {
-                    withAnimation(.snappy(duration: 0.25)) { // tientallen keren per dag → kort en zonder bounce
+                    withAnimation(.snappy(duration: 0.3, extraBounce: 0.05)) {
                         selection = i
                     }
                 } label: {
@@ -178,11 +159,11 @@ struct FloatingTabBar: View {
                         if selected {
                             // ponytail: matchedGeometry laat de pill tussen tabs glijden
                             Capsule()
-                                .fill(Color.primary)
+                                .fill(.green.opacity(0.18))
                                 .matchedGeometryEffect(id: "pill", in: pill)
                         }
                     }
-                    .foregroundStyle(selected ? AnyShapeStyle(Color(.systemBackground)) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(selected ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
                 }
                 .buttonStyle(.plain)
             }
@@ -201,27 +182,13 @@ extension View {
     func tabBarClearance() -> some View {
         safeAreaInset(edge: .bottom) { Color.clear.frame(height: 64) }
     }
-
-    /// Clean-taal voor lijstschermen: witte pagina in plaats van grouped-grijs.
-    func cleanScreen() -> some View {
-        scrollContentBackground(.hidden)
-            .background(Color(.systemBackground))
-    }
-}
-
-extension Color {
-    /// Kaartkleur in de Clean-taal: zachte kaart op systemBackground.
-    static let cleanCard = Color(.secondarySystemBackground)
 }
 
 /// Press-feedback: subtiel (0.97), snel, ease-out — voelbaar maar onzichtbaar.
-/// Grote vlakken krijgen een kleinere scale: 3% van 350pt beweegt te veel.
 struct PressableStyle: ButtonStyle {
-    var scale: CGFloat = 0.97
-
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? scale : 1)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
