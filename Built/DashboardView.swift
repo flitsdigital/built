@@ -17,6 +17,7 @@ struct DashboardView: View {
     @State private var showWeightSheet = false
     @State private var showProteinSheet = false
     @State private var showNoteAlert = false
+    @State private var showSleepSheet = false
     @State private var showWeeklyReview = false
     @State private var noteInput = ""
     @AppStorage("lastReviewWeek") private var lastReviewWeek = 0
@@ -137,6 +138,7 @@ struct DashboardView: View {
         .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet() }
         .sheet(isPresented: $showProteinSheet) { ProteinLogSheet(profile: profile) }
+        .sheet(isPresented: $showSleepSheet) { SleepSheet() }
         .alert("Notitie voor vandaag", isPresented: $showNoteAlert) {
             TextField("bijv. Veel energie vandaag", text: $noteInput)
             Button("Opslaan") {
@@ -335,7 +337,7 @@ struct DashboardView: View {
             if profile.tracksSleep {
                 Divider()
                 checkRow(icon: "moon.fill", color: .indigo, title: sleepText,
-                         done: todayHabits?.sleptEnough == true) { toggleHabit(\.sleptEnough) }
+                         done: todayHabits?.sleptEnough == true) { showSleepSheet = true }
             }
             Divider()
             checkRow(icon: "pencil", color: .gray, title: "Notitie",
@@ -440,5 +442,106 @@ struct DashboardView: View {
     private func toggleHabit(_ keyPath: ReferenceWritableKeyPath<DayHabits, Bool>) {
         let h = todayHabitsOrCreate()
         h[keyPath: keyPath].toggle()
+    }
+}
+
+/// Snel slaap loggen vanaf het dashboard: tijden staan vooringevuld met je vorige
+/// bed-/wektijd, dus meestal is het alleen "Opslaan". Afvinken-zonder-tijden kan ook.
+struct SleepSheet: View {
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @Query(sort: \DayHabits.date, order: .reverse) private var habits: [DayHabits]
+
+    @State private var bed = Date.now
+    @State private var wake = Date.now
+    @State private var quality = 0
+    @State private var loaded = false
+
+    private var cal: Calendar { .current }
+    private var today: DayHabits? { habits.first { cal.isDateInToday($0.date) } }
+
+    private var hours: Double {
+        var h = wake.timeIntervalSince(bed) / 3600
+        if h < 0 { h += 24 }
+        return h
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    DatePicker("Naar bed", selection: $bed, displayedComponents: .hourAndMinute)
+                    DatePicker("Wakker", selection: $wake, displayedComponents: .hourAndMinute)
+                    LabeledContent("Geslapen") {
+                        Text("\(hours.kgText) uur\(hours >= 8 ? " ✓" : " · doel 8 u")")
+                            .foregroundStyle(hours >= 8 ? .green : .secondary)
+                    }
+                }
+                Section("Hoe geslapen?") {
+                    Picker("Kwaliteit", selection: $quality) {
+                        Text("—").tag(0)
+                        Text("😴").tag(1)
+                        Text("🙂").tag(2)
+                        Text("😃").tag(3)
+                    }
+                    .pickerStyle(.segmented)
+                }
+                Section {
+                    if today?.sleptEnough == true {
+                        Button("Vinkje weghalen", role: .destructive) {
+                            todayOrCreate().sleptEnough = false
+                            dismiss()
+                        }
+                    } else {
+                        Button("Alleen afvinken (8+ uur, zonder tijden)") {
+                            todayOrCreate().sleptEnough = true
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Slaap")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuleer") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Opslaan") { save() }
+                }
+            }
+        }
+        .presentationDetents([.height(420)])
+        .onAppear { prefill() }
+    }
+
+    private func todayOrCreate() -> DayHabits {
+        if let today { return today }
+        let h = DayHabits()
+        context.insert(h)
+        return h
+    }
+
+    private func prefill() {
+        guard !loaded else { return }
+        loaded = true
+        quality = today?.sleepQuality ?? 0
+        // vandaag al tijden? die. Anders: de klok-tijden van je laatste ingevulde nacht.
+        let source = (today?.bedTime != nil && today?.wakeTime != nil)
+            ? today
+            : habits.first { $0.bedTime != nil && $0.wakeTime != nil }
+        let bedComps = source?.bedTime.map { cal.dateComponents([.hour, .minute], from: $0) }
+        let wakeComps = source?.wakeTime.map { cal.dateComponents([.hour, .minute], from: $0) }
+        bed = cal.date(bySettingHour: bedComps?.hour ?? 23, minute: bedComps?.minute ?? 0, second: 0, of: .now) ?? .now
+        wake = cal.date(bySettingHour: wakeComps?.hour ?? 7, minute: wakeComps?.minute ?? 0, second: 0, of: .now) ?? .now
+    }
+
+    private func save() {
+        let record = todayOrCreate()
+        record.bedTime = bed
+        record.wakeTime = wake
+        record.sleepQuality = quality
+        record.sleptEnough = hours >= 8
+        dismiss()
     }
 }
