@@ -18,6 +18,24 @@ struct DraftExercise: Identifiable {
     var note = ""
 }
 
+/// Lopende training op schijf, zodat een force-quit hem niet weggooit.
+struct SavedWorkout: Codable, Equatable {
+    struct SavedSet: Codable, Equatable {
+        var kg: Double
+        var reps: Int
+        var done: Bool
+        var previous: String?
+    }
+    struct SavedExercise: Codable, Equatable {
+        var name: String
+        var tip: String?
+        var note: String
+        var sets: [SavedSet]
+    }
+    var startedAt: Date
+    var exercises: [SavedExercise]
+}
+
 struct WorkoutSummary: Identifiable {
     let id = UUID()
     let minutes: Int
@@ -179,6 +197,29 @@ struct TrainingView: View {
         }
     }
 
+    private var draftSnapshot: SavedWorkout? {
+        guard active else { return nil }
+        return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
+            .init(name: ex.name, tip: ex.tip, note: ex.note,
+                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) })
+        })
+    }
+
+    /// Na een force-quit: training terugzetten en de Live Activity weer adopteren.
+    private func restoreDraft() {
+        guard !active,
+              let data = UserDefaults.standard.data(forKey: "activeWorkout"),
+              let saved = try? JSONDecoder().decode(SavedWorkout.self, from: data) else { return }
+        startedAt = saved.startedAt
+        workout = saved.exercises.map { ex in
+            DraftExercise(name: ex.name, tip: ex.tip,
+                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) },
+                          note: ex.note)
+        }
+        active = true
+        if workoutStatus.startedAt == nil { workoutStatus.resumeWorkout(at: saved.startedAt) }
+    }
+
     private func startWorkout(with names: [String]) {
         startedAt = .now
         workout = names.map(draft(for:))
@@ -269,6 +310,14 @@ struct TrainingView: View {
         .safeAreaInset(edge: .bottom) {
             if workoutStatus.restEndsAt != nil {
                 Color.clear.frame(height: 68) // rust-balk overlapt anders de onderste rijen
+            }
+        }
+        .task { restoreDraft() }
+        .onChange(of: draftSnapshot) { _, snap in
+            if let snap, let data = try? JSONEncoder().encode(snap) {
+                UserDefaults.standard.set(data, forKey: "activeWorkout")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "activeWorkout")
             }
         }
         .sensoryFeedback(.impact, trigger: doneCount)
@@ -680,8 +729,13 @@ struct TrainingView: View {
                         context.insert(e)
                         set.wrappedValue.savedEntry = e
                         WorkoutStatus.shared.startRest(seconds: restSeconds)
-                    } else if let e = set.wrappedValue.savedEntry {
-                        if !e.isDeleted { context.delete(e) }
+                    } else {
+                        // Na een herstelde training is savedEntry weg — zoek 'm terug
+                        let e = set.wrappedValue.savedEntry ?? sets.first {
+                            $0.exercise == exercise && $0.date >= startedAt
+                                && $0.weightKg == set.wrappedValue.kg && $0.reps == set.wrappedValue.reps
+                        }
+                        if let e, !e.isDeleted { context.delete(e) }
                         set.wrappedValue.savedEntry = nil
                     }
                     updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg)

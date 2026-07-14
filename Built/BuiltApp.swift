@@ -43,6 +43,12 @@ struct RootView: View {
                     workoutStatus.startRest(seconds: 180)
                 }
                 #endif
+                // Opgeslagen training meteen hervatten → "Training bezig"-balk staat er direct
+                if workoutStatus.startedAt == nil,
+                   let data = UserDefaults.standard.data(forKey: "activeWorkout"),
+                   let saved = try? JSONDecoder().decode(SavedWorkout.self, from: data) {
+                    workoutStatus.resumeWorkout(at: saved.startedAt)
+                }
                 workoutStatus.cleanupStaleActivities() // na herstart hangt er anders een oude activity
                 Notifier.shared.context = context
                 guard Sync.isConfigured else { return }

@@ -235,10 +235,13 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        // Geen async-variant: UIKit rondt die af op een achtergrond-thread en crasht
+        // dan op een main-thread-assert bij het snapshotten (state restoration).
         let action = response.notification.request.content.userInfo["action"] as? String
         let identifier = response.actionIdentifier
-        await MainActor.run {
+        DispatchQueue.main.async {
             switch identifier {
             case "creatineDone":
                 Notifier.shared.markCreatineDone()
@@ -247,12 +250,14 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
             default:
                 Notifier.shared.pendingAction = action
             }
+            completionHandler()
         }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         // In de app dekt de haptic het einde van de rust al — geen dubbele banner
-        notification.request.identifier == "rest" ? [] : [.banner, .sound]
+        completionHandler(notification.request.identifier == "rest" ? [] : [.banner, .sound])
     }
 }

@@ -24,6 +24,16 @@ final class WorkoutStatus {
                                          content: .init(state: .init(), staleDate: nil))
     }
 
+    /// Herstart na een force-quit: neem de nog-lopende Live Activity over i.p.v. een nieuwe te maken.
+    func resumeWorkout(at date: Date) {
+        startedAt = date
+        activity = Activity<WorkoutActivity>.activities.first
+        if activity == nil {
+            activity = try? Activity.request(attributes: WorkoutActivity(startedAt: date),
+                                             content: .init(state: .init(), staleDate: nil))
+        }
+    }
+
     func endWorkout() {
         startedAt = nil
         context = .init()
@@ -33,9 +43,10 @@ final class WorkoutStatus {
         Task { await activity?.end(nil, dismissalPolicy: .immediate) }
     }
 
-    /// Ruimt een activity op die is blijven hangen na een herstart (status leeft in geheugen).
+    /// Ruimt een activity op die is blijven hangen na een herstart — behalve als er
+    /// een opgeslagen training op herstel wacht; die adopteert hem via resumeWorkout.
     func cleanupStaleActivities() {
-        guard startedAt == nil else { return }
+        guard startedAt == nil, UserDefaults.standard.data(forKey: "activeWorkout") == nil else { return }
         Task {
             for stale in Activity<WorkoutActivity>.activities {
                 await stale.end(nil, dismissalPolicy: .immediate)
