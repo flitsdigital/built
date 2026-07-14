@@ -33,6 +33,14 @@ struct RootView: View {
     var body: some View {
         content
             .task {
+                #if DEBUG
+                // ponytail: screenshot-states forceren via `simctl launch ... -demoRest`
+                if ProcessInfo.processInfo.arguments.contains("-demoWorkout") { workoutStatus.startedAt = .now }
+                if ProcessInfo.processInfo.arguments.contains("-demoRest") {
+                    workoutStatus.startedAt = .now
+                    workoutStatus.startRest(seconds: 90)
+                }
+                #endif
                 Notifier.shared.context = context
                 guard Sync.isConfigured else { return }
                 // Bepaal veilig of auto-push mag; haalt bij een lege install eerst alles op
@@ -52,6 +60,101 @@ struct RootView: View {
 
     private func restLabel(_ seconds: Int) -> String {
         "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
+
+    /// Rusttimer als brede balk: leeglopende progressielijn (Hevy) + duurmenu, +15s en Skip.
+    private func restBar(end: Date) -> some View {
+        let start = workoutStatus.restStartedAt ?? end.addingTimeInterval(-Double(max(restSeconds, 30)))
+        return HStack(spacing: 12) {
+            Menu {
+                ForEach([60, 90, 120, 180], id: \.self) { s in
+                    Button {
+                        restSeconds = s
+                    } label: {
+                        if restSeconds == s {
+                            Label(restLabel(s), systemImage: "checkmark")
+                        } else {
+                            Text(restLabel(s))
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "timer")
+                    .font(.body.bold())
+                    .foregroundStyle(.green)
+                    .frame(width: 36, height: 36)
+                    .background(.green.opacity(0.15), in: Circle())
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("Rust")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(timerInterval: Date.now...end, countsDown: true)
+                        .font(.subheadline.bold().monospacedDigit())
+                }
+                ProgressView(timerInterval: start...end, countsDown: true) {
+                    EmptyView()
+                } currentValueLabel: {
+                    EmptyView()
+                }
+                .tint(.green)
+            }
+            Button("+15s") { workoutStatus.extendRest(by: 15) }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .tint(.green)
+                .font(.caption.bold())
+            Button("Skip") { workoutStatus.stopRest() }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .font(.caption.bold())
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
+        .padding(.horizontal, 24)
+    }
+
+    /// "Training bezig" als mini-player die terugbrengt naar de training (Ladder-patroon).
+    private func workoutBar(started: Date) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.3)) { tab = 1 }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "dumbbell.fill")
+                    .font(.body.bold())
+                    .foregroundStyle(.green)
+                    .frame(width: 36, height: 36)
+                    .background(.green.opacity(0.15), in: Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Training bezig")
+                        .font(.footnote.bold())
+                        .foregroundStyle(.primary)
+                    Text(timerInterval: started...Date.distantFuture, countsDown: false)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Verder")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.green)
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.green)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
+        }
+        .buttonStyle(PressableStyle(scale: 0.985))
+        .padding(.horizontal, 24)
     }
 
     @ViewBuilder private var content: some View {
@@ -79,55 +182,13 @@ struct RootView: View {
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
+                    // Eén mini-player-balk (Hevy/Ladder-patroon), nooit twee gestapelde pillen
                     if let restEnd = workoutStatus.restEndsAt, restEnd > .now {
-                        HStack(spacing: 10) {
-                            Menu {
-                                ForEach([60, 90, 120, 180], id: \.self) { s in
-                                    Button {
-                                        restSeconds = s
-                                    } label: {
-                                        if restSeconds == s {
-                                            Label(restLabel(s), systemImage: "checkmark")
-                                        } else {
-                                            Text(restLabel(s))
-                                        }
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "timer").foregroundStyle(.green)
-                            }
-                            Text(timerInterval: Date.now...restEnd, countsDown: true)
-                                .font(.footnote.bold().monospacedDigit())
-                            Button("+15s") { workoutStatus.startRest(until: restEnd.addingTimeInterval(15)) }
-                                .font(.caption.bold())
-                            Button("Skip") { workoutStatus.stopRest() }
-                                .font(.caption.bold())
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.regularMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(.green.opacity(0.4), lineWidth: 1))
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    if let started = workoutStatus.startedAt, tab != 1 {
-                        Button {
-                            withAnimation(.snappy(duration: 0.3)) { tab = 1 }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "dumbbell.fill")
-                                Text("Training bezig")
-                                    .font(.footnote.bold())
-                                Text(timerInterval: started...Date.distantFuture, countsDown: false)
-                                    .font(.footnote.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.regularMaterial, in: Capsule())
-                            .overlay(Capsule().strokeBorder(.green.opacity(0.4), lineWidth: 1))
-                        }
-                        .buttonStyle(PressableStyle())
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        restBar(end: restEnd)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else if let started = workoutStatus.startedAt, tab != 1 {
+                        workoutBar(started: started)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     FloatingTabBar(selection: $tab)
                 }

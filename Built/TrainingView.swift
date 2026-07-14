@@ -270,7 +270,7 @@ struct TrainingView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if workoutStatus.restEndsAt != nil {
-                Color.clear.frame(height: 48) // rust-pill overlapt anders de onderste rijen
+                Color.clear.frame(height: 68) // rust-balk overlapt anders de onderste rijen
             }
         }
         .sensoryFeedback(.impact, trigger: doneCount)

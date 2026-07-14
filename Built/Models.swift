@@ -9,6 +9,7 @@ import Observation
 final class WorkoutStatus {
     static let shared = WorkoutStatus()
     var startedAt: Date?
+    var restStartedAt: Date?
     var restEndsAt: Date?
     var restFired = false
     @ObservationIgnored private var restTask: Task<Void, Never>?
@@ -19,6 +20,17 @@ final class WorkoutStatus {
     }
 
     func startRest(until end: Date) {
+        restStartedAt = .now
+        schedule(end: end)
+    }
+
+    /// +15s: einde schuift op, start blijft — de progressiebalk rekt mee i.p.v. te resetten.
+    func extendRest(by seconds: Double) {
+        guard let end = restEndsAt else { return }
+        schedule(end: end.addingTimeInterval(seconds))
+    }
+
+    private func schedule(end: Date) {
         restEndsAt = end
         Notifier.shared.scheduleRest(at: end) // lockscreen-melding als de app dicht is
         restTask?.cancel()
