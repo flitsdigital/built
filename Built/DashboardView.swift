@@ -103,6 +103,14 @@ struct DashboardView: View {
             .padding(.bottom, 24)
         }
         .background(Color(.systemGroupedBackground))
+        .overlay(alignment: .top) {
+            // scroll-edge effect: content vervaagt onder de statusbalk i.p.v. er hard doorheen
+            LinearGradient(colors: [Color(.systemGroupedBackground), Color(.systemGroupedBackground).opacity(0)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: 72)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             appeared = true
@@ -134,7 +142,7 @@ struct DashboardView: View {
             }
             Notifier.shared.pendingAction = nil
         }
-        .sensoryFeedback(.success, trigger: score)
+        .sensoryFeedback(.success, trigger: score) { _, new in new == 100 } // succes-haptic alleen op het zeldzame moment
         .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet() }
         .sheet(isPresented: $showProteinSheet) { ProteinLogSheet(profile: profile) }
@@ -157,7 +165,7 @@ struct DashboardView: View {
         view
             .opacity(appeared ? 1 : 0)
             .offset(y: appeared || reduceMotion ? 0 : 12)
-            .animation(.easeOut(duration: 0.35).delay(Double(index) * 0.05), value: appeared)
+            .animation(.easeOut(duration: 0.3).delay(Double(index) * 0.05), value: appeared)
     }
 
     private var header: some View {
@@ -318,7 +326,7 @@ struct DashboardView: View {
                 }
             }
         }
-        .buttonStyle(PressableStyle())
+        .buttonStyle(PressableStyle(scale: 0.985))
     }
 
     private var checklistCard: some View {

@@ -21,6 +21,7 @@ struct OnboardingView: View {
     @State private var showLogin = false
     @State private var planRevealed = false
     @FocusState private var nameFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let totalSteps = 4
     private var weeks: Double { max(goalDate.timeIntervalSinceNow / 604_800, 1) }
@@ -43,7 +44,7 @@ struct OnboardingView: View {
                 }
             }
             .id(step)
-            .transition(.push(from: forward ? .trailing : .leading))
+            .transition(reduceMotion ? .opacity : .push(from: forward ? .trailing : .leading))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .background(Color(.systemGroupedBackground))
@@ -295,7 +296,7 @@ struct OnboardingView: View {
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
         .opacity(planRevealed ? 1 : 0)
-        .offset(y: planRevealed ? 0 : 14)
+        .offset(y: planRevealed || reduceMotion ? 0 : 14)
         .animation(.snappy(duration: 0.4).delay(0.15 + Double(index) * 0.08), value: planRevealed)
     }
 }

@@ -23,6 +23,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = 0
     @State private var restoring = false
+    @AppStorage("restSeconds") private var restSeconds = 120
     private let workoutStatus = WorkoutStatus.shared
 
     init() {
@@ -47,6 +48,10 @@ struct RootView: View {
                     Task { await Sync.pushIfChanged(context) }
                 }
             }
+    }
+
+    private func restLabel(_ seconds: Int) -> String {
+        "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 
     @ViewBuilder private var content: some View {
@@ -76,7 +81,21 @@ struct RootView: View {
                 VStack(spacing: 8) {
                     if let restEnd = workoutStatus.restEndsAt, restEnd > .now {
                         HStack(spacing: 10) {
-                            Image(systemName: "timer").foregroundStyle(.green)
+                            Menu {
+                                ForEach([60, 90, 120, 180], id: \.self) { s in
+                                    Button {
+                                        restSeconds = s
+                                    } label: {
+                                        if restSeconds == s {
+                                            Label(restLabel(s), systemImage: "checkmark")
+                                        } else {
+                                            Text(restLabel(s))
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "timer").foregroundStyle(.green)
+                            }
                             Text(timerInterval: Date.now...restEnd, countsDown: true)
                                 .font(.footnote.bold().monospacedDigit())
                             Button("+15s") { workoutStatus.startRest(until: restEnd.addingTimeInterval(15)) }
@@ -140,7 +159,7 @@ struct FloatingTabBar: View {
             ForEach(items.indices, id: \.self) { i in
                 let selected = selection == i
                 Button {
-                    withAnimation(.snappy(duration: 0.3, extraBounce: 0.05)) {
+                    withAnimation(.smooth(duration: 0.25)) { // reposition zonder momentum → geen bounce
                         selection = i
                     }
                 } label: {
@@ -186,9 +205,11 @@ extension View {
 
 /// Press-feedback: subtiel (0.97), snel, ease-out — voelbaar maar onzichtbaar.
 struct PressableStyle: ButtonStyle {
+    var scale: CGFloat = 0.97 // grote vlakken krijgen 0.985 — voelbaar, niet zichtbaar
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .scaleEffect(configuration.isPressed ? scale : 1)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
