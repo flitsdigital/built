@@ -2,6 +2,21 @@ import Foundation
 import SwiftData
 import Supabase
 import Observation
+import AuthenticationServices
+import UIKit
+
+/// Presentatie-anker voor de Google OAuth-websessie.
+@MainActor
+final class OAuthPresenter: NSObject, ASWebAuthenticationPresentationContextProviding {
+    static let shared = OAuthPresenter()
+    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        MainActor.assumeIsolated {
+            UIApplication.shared.connectedScenes
+                .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+                .first ?? ASPresentationAnchor()
+        }
+    }
+}
 
 /// Zichtbare sync-status voor Profiel en dashboard.
 @Observable
@@ -242,7 +257,7 @@ enum Sync {
         }
     }
 
-    // MARK: - Account (e-mail koppelen / inloggen op ander toestel)
+    // MARK: - Account (e-mail + wachtwoord of Google)
 
     static var currentEmail: String? {
         client?.auth.currentSession?.user.email
@@ -252,31 +267,55 @@ enum Sync {
         client?.auth.currentSession?.user.isAnonymous ?? true
     }
 
-    /// Anoniem account → e-mail koppelen (behoudt al je data);
-    /// al een e-mail-account → login-code voor dit toestel.
-    static func sendLoginCode(to email: String) async throws {
-        guard let client else {
-            throw NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd."])
-        }
-        let session = try? await client.auth.session
-        if session?.user.isAnonymous == true {
-            try await client.auth.update(user: UserAttributes(email: email))
-        } else {
-            try await client.auth.signInWithOTP(email: email, shouldCreateUser: true)
-        }
+    private static func notConfigured() -> Error {
+        NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])
     }
 
-    static func verifyLoginCode(email: String, code: String, context: ModelContext) async throws {
-        guard let client else { return }
+    /// Registreren. Anoniem account met data → wordt geconverteerd (zelfde user, data blijft).
+    static func register(email: String, password: String, context: ModelContext) async throws {
+        guard let client else { throw notConfigured() }
         let session = try? await client.auth.session
         if session?.user.isAnonymous == true {
-            try await client.auth.verifyOTP(email: email, token: code, type: .emailChange)
-            pushAllowed = true
+            try await client.auth.update(user: UserAttributes(email: email, password: password))
         } else {
-            try await client.auth.verifyOTP(email: email, token: code, type: .email)
-            try await pull(context) // ingelogd op bestaand account → data van server halen
+            try await client.auth.signUp(email: email, password: password)
         }
         SyncStatus.shared.lastError = nil
+        await bootstrap(context)
+    }
+
+    /// Inloggen op een bestaand account; haalt daarna veilig de serverstaat op.
+    static func signIn(email: String, password: String, context: ModelContext) async throws {
+        guard let client else { throw notConfigured() }
+        try await client.auth.signIn(email: email, password: password)
+        pushAllowed = false
+        lastPushedHash = nil
+        SyncStatus.shared.lastError = nil
+        await bootstrap(context)
+    }
+
+    /// Google via Supabase OAuth (ASWebAuthenticationSession, geen extra SDK).
+    static func signInWithGoogle(context: ModelContext) async throws {
+        guard let client else { throw notConfigured() }
+        let authURL = try client.auth.getOAuthSignInURL(provider: .google,
+                                                        redirectTo: URL(string: "built://auth-callback")!)
+        let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: authURL, callbackURLScheme: "built") { url, error in
+                if let url {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(throwing: error ?? notConfigured())
+                }
+            }
+            session.presentationContextProvider = OAuthPresenter.shared
+            session.prefersEphemeralWebBrowserSession = false
+            session.start()
+        }
+        try await client.auth.session(from: callbackURL)
+        pushAllowed = false
+        lastPushedHash = nil
+        SyncStatus.shared.lastError = nil
+        await bootstrap(context)
     }
 
     // MARK: - Automatische sync-lus

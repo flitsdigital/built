@@ -224,46 +224,70 @@ struct ProfileView: View {
     }
 }
 
-/// E-mail koppelen (anoniem → vast account) of inloggen op een bestaand account.
-/// Codeflow zonder deep links: Supabase mailt een 6-cijferige code.
+/// Inloggen of registreren met e-mail + wachtwoord, of doorgaan met Google.
+/// Registreren op een toestel met anonieme data converteert het account (data blijft).
 struct AccountLoginSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
+    @State private var registering = false
     @State private var email = ""
-    @State private var code = ""
-    @State private var codeSent = false
+    @State private var password = ""
     @State private var busy = false
     @State private var message: String?
+
+    private var formValid: Bool {
+        email.contains("@") && password.count >= 6
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    Picker("Modus", selection: $registering) {
+                        Text("Inloggen").tag(false)
+                        Text("Registreren").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
                     TextField("jij@voorbeeld.nl", text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .textContentType(.emailAddress)
+                    SecureField("Wachtwoord (min. 6 tekens)", text: $password)
+                        .textContentType(registering ? .newPassword : .password)
                     Button {
-                        send()
+                        submit()
                     } label: {
-                        if busy && !codeSent { ProgressView() } else { Text(codeSent ? "Stuur opnieuw" : "Stuur code") }
-                    }
-                    .disabled(busy || !email.contains("@"))
-                } footer: {
-                    Text("Op dit toestel: koppelt je e-mail aan je huidige data. Op een nieuw toestel: log in met hetzelfde adres en je data komt terug.")
-                }
-                if codeSent {
-                    Section {
-                        TextField("Code uit de e-mail", text: $code)
-                            .keyboardType(.numberPad)
-                        Button {
-                            verify()
-                        } label: {
-                            if busy { ProgressView() } else { Text("Bevestig") }
+                        if busy {
+                            ProgressView().frame(maxWidth: .infinity)
+                        } else {
+                            Text(registering ? "Maak account" : "Log in")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
                         }
-                        .disabled(busy || code.count < 6)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || !formValid)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                    .listRowBackground(Color.clear)
+                } footer: {
+                    Text(registering
+                         ? "Registreren op dit toestel koppelt je huidige data aan je account."
+                         : "Inloggen haalt de data van je account naar dit toestel.")
                 }
+
+                Section {
+                    Button {
+                        google()
+                    } label: {
+                        Label("Doorgaan met Google", systemImage: "globe")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .disabled(busy)
+                }
+
                 if let message {
                     Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 }
@@ -276,33 +300,32 @@ struct AccountLoginSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
-    private func send() {
-        busy = true
-        message = nil
-        Task {
-            do {
-                try await Sync.sendLoginCode(to: email.trimmingCharacters(in: .whitespaces))
-                codeSent = true
-                message = "Code verstuurd — check je mail (ook spam)."
-            } catch {
-                message = "Mislukt: \(error.localizedDescription)"
+    private func submit() {
+        run {
+            let mail = email.trimmingCharacters(in: .whitespaces)
+            if registering {
+                try await Sync.register(email: mail, password: password, context: context)
+            } else {
+                try await Sync.signIn(email: mail, password: password, context: context)
             }
-            busy = false
         }
     }
 
-    private func verify() {
+    private func google() {
+        run {
+            try await Sync.signInWithGoogle(context: context)
+        }
+    }
+
+    private func run(_ work: @escaping () async throws -> Void) {
         busy = true
         message = nil
         Task {
             do {
-                try await Sync.verifyLoginCode(email: email.trimmingCharacters(in: .whitespaces),
-                                               code: code.trimmingCharacters(in: .whitespaces),
-                                               context: context)
-                message = "Gelukt ✓"
+                try await work()
                 dismiss()
             } catch {
                 message = "Mislukt: \(error.localizedDescription)"
