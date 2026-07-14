@@ -16,7 +16,24 @@ alter table public.profiles add column if not exists tracks_creatine boolean not
 alter table public.profiles add column if not exists tracks_sleep boolean not null default true;
 alter table public.profiles add column if not exists training_days jsonb not null default '[]';
 alter table public.protein_entries add column if not exists meal text not null default '';
+alter table public.protein_entries add column if not exists carbs int not null default 0;
+alter table public.protein_entries add column if not exists fat int not null default 0;
+alter table public.profiles add column if not exists kcal_target int not null default 0;
 alter table public.meals add column if not exists favorite boolean not null default false;
+
+create table if not exists public.food_products (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  name text not null,
+  brand text not null default '',
+  barcode text not null default '',
+  protein100 float8 not null,
+  kcal100 float8 not null,
+  carbs100 float8 not null default 0,
+  fat100 float8 not null default 0,
+  favorite boolean not null default false,
+  created_at timestamptz not null
+);
 
 create table if not exists public.weight_entries (
   id uuid primary key default gen_random_uuid(),
@@ -100,7 +117,7 @@ create table if not exists public.habit_logs (
 do $$
 declare t text;
 begin
-  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','day_habits','routines','meals','scales','custom_habits','habit_logs']
+  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','day_habits','routines','meals','scales','custom_habits','habit_logs','food_products']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "own rows" on public.%I', t);
@@ -124,7 +141,7 @@ begin
   end if;
 
   if jsonb_typeof(payload->'profile') = 'object' then
-    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days)
+    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days, kcal_target)
     values (
       uid,
       payload#>>'{profile,name}',
@@ -137,7 +154,8 @@ begin
       (payload#>>'{profile,trainings_per_week}')::int,
       coalesce((payload#>>'{profile,tracks_creatine}')::boolean, true),
       coalesce((payload#>>'{profile,tracks_sleep}')::boolean, true),
-      coalesce(payload#>'{profile,training_days}', '[]'::jsonb)
+      coalesce(payload#>'{profile,training_days}', '[]'::jsonb),
+      coalesce((payload#>>'{profile,kcal_target}')::int, 0)
     )
     on conflict (user_id) do update set
       name = excluded.name,
@@ -150,7 +168,8 @@ begin
       trainings_per_week = excluded.trainings_per_week,
       tracks_creatine = excluded.tracks_creatine,
       tracks_sleep = excluded.tracks_sleep,
-      training_days = excluded.training_days;
+      training_days = excluded.training_days,
+      kcal_target = excluded.kcal_target;
   end if;
 
   delete from public.weight_entries where user_id = uid;
@@ -159,8 +178,9 @@ begin
     from jsonb_array_elements(coalesce(payload->'weights', '[]'::jsonb)) e;
 
   delete from public.protein_entries where user_id = uid;
-  insert into public.protein_entries (user_id, date, grams, label, kcal, meal)
+  insert into public.protein_entries (user_id, date, grams, label, kcal, carbs, fat, meal)
     select uid, (e->>'date')::timestamptz, (e->>'grams')::int, e->>'label', coalesce((e->>'kcal')::int, 0),
+           coalesce((e->>'carbs')::int, 0), coalesce((e->>'fat')::int, 0),
            coalesce(e->>'meal', '')
     from jsonb_array_elements(coalesce(payload->'proteins', '[]'::jsonb)) e;
 
@@ -187,6 +207,14 @@ begin
            (e->>'created_at')::timestamptz, coalesce((e->>'servings')::float8, 1),
            coalesce(e->'ingredients', '[]'::jsonb), coalesce((e->>'favorite')::boolean, false)
     from jsonb_array_elements(coalesce(payload->'meals', '[]'::jsonb)) e;
+
+  delete from public.food_products where user_id = uid;
+  insert into public.food_products (user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, created_at)
+    select uid, e->>'name', coalesce(e->>'brand', ''), coalesce(e->>'barcode', ''),
+           (e->>'protein100')::float8, (e->>'kcal100')::float8,
+           coalesce((e->>'carbs100')::float8, 0), coalesce((e->>'fat100')::float8, 0),
+           coalesce((e->>'favorite')::boolean, false), (e->>'created_at')::timestamptz
+    from jsonb_array_elements(coalesce(payload->'foods', '[]'::jsonb)) e;
 
   delete from public.scales where user_id = uid;
   insert into public.scales (user_id, name, correction)

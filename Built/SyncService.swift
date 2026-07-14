@@ -40,9 +40,18 @@ enum Sync {
         var tracks_creatine: Bool
         var tracks_sleep: Bool
         var training_days: [Int]
+        var kcal_target: Int
     }
     private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
-    private struct ProteinRow: Codable { var user_id: UUID; var date: Date; var grams: Int; var label: String; var kcal: Int; var meal: String }
+    private struct ProteinRow: Codable {
+        var user_id: UUID; var date: Date; var grams: Int; var label: String
+        var kcal: Int; var carbs: Int; var fat: Int; var meal: String
+    }
+    private struct FoodRow: Codable {
+        var user_id: UUID; var name: String; var brand: String; var barcode: String
+        var protein100: Double; var kcal100: Double; var carbs100: Double; var fat100: Double
+        var favorite: Bool; var created_at: Date
+    }
     private struct SetRow: Codable { var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int }
     private struct HabitsRow: Codable {
         var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
@@ -66,6 +75,7 @@ enum Sync {
         var habits: [HabitsRow] = []
         var routines: [RoutineRow] = []
         var meals: [MealRow] = []
+        var foods: [FoodRow] = []
         var scales: [ScaleRow] = []
         var customHabits: [CustomHabitRow] = []
         var habitLogs: [HabitLogRow] = []
@@ -104,12 +114,13 @@ enum Sync {
                                    start_date: profile.startDate, goal_date: profile.goalDate,
                                    trainings_per_week: profile.trainingsPerWeek,
                                    tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep,
-                                   training_days: profile.trainingDays)
+                                   training_days: profile.trainingDays, kcal_target: profile.kcalTarget)
         }
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
         p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)]))
-            .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label, kcal: $0.kcal, meal: $0.meal) }
+            .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label,
+                              kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
             .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
@@ -121,6 +132,11 @@ enum Sync {
             .map { MealRow(user_id: uid, name: $0.name, protein: $0.protein, kcal: $0.kcal,
                            created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients,
                            favorite: $0.favorite) }
+        p.foods = try context.fetch(FetchDescriptor<FoodProduct>(sortBy: [.init(\.createdAt)]))
+            .map { FoodRow(user_id: uid, name: $0.name, brand: $0.brand, barcode: $0.barcode,
+                           protein100: $0.protein100, kcal100: $0.kcal100,
+                           carbs100: $0.carbs100, fat100: $0.fat100,
+                           favorite: $0.favorite, created_at: $0.createdAt) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
             .map { ScaleRow(user_id: uid, name: $0.name, correction: $0.offset) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
@@ -168,6 +184,7 @@ enum Sync {
         let habitRows: [HabitsRow] = try await db.from("day_habits").select().eq("user_id", value: uid).execute().value
         let routineRows: [RoutineRow] = try await db.from("routines").select().eq("user_id", value: uid).execute().value
         let mealRows: [MealRow] = try await db.from("meals").select().eq("user_id", value: uid).execute().value
+        let foodRows: [FoodRow] = try await db.from("food_products").select().eq("user_id", value: uid).execute().value
         let scaleRows: [ScaleRow] = try await db.from("scales").select().eq("user_id", value: uid).execute().value
         let customRows: [CustomHabitRow] = try await db.from("custom_habits").select().eq("user_id", value: uid).execute().value
         let logRows: [HabitLogRow] = try await db.from("habit_logs").select().eq("user_id", value: uid).execute().value
@@ -181,10 +198,14 @@ enum Sync {
         profile.tracksCreatine = profileRow.tracks_creatine
         profile.tracksSleep = profileRow.tracks_sleep
         profile.trainingDays = profileRow.training_days
+        profile.kcalTarget = profileRow.kcal_target
         context.insert(profile)
 
         for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
-        for r in proteins { context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label, kcal: r.kcal)) }
+        for r in proteins {
+            context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label,
+                                        kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal))
+        }
         for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps)) }
         for r in habitRows {
             let h = DayHabits(date: r.date, creatine: r.creatine, sleptEnough: r.slept_enough)
@@ -206,6 +227,14 @@ enum Sync {
             meal.ingredients = r.ingredients
             meal.favorite = r.favorite
             context.insert(meal)
+        }
+        for r in foodRows {
+            let f = FoodProduct(name: r.name, brand: r.brand, barcode: r.barcode,
+                                protein100: r.protein100, kcal100: r.kcal100,
+                                carbs100: r.carbs100, fat100: r.fat100)
+            f.favorite = r.favorite
+            f.createdAt = r.created_at
+            context.insert(f)
         }
         for r in scaleRows {
             let scale = Scale(name: r.name)
@@ -234,6 +263,7 @@ enum Sync {
         try context.delete(model: DayHabits.self)
         try context.delete(model: Routine.self)
         try context.delete(model: Meal.self)
+        try context.delete(model: FoodProduct.self)
         try context.delete(model: Scale.self)
         try context.delete(model: CustomHabit.self)
         try context.delete(model: HabitLog.self)

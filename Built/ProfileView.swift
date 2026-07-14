@@ -52,6 +52,10 @@ struct ProfileView: View {
         return "\(v) (\(b))"
     }
 
+    private var autoKcal: Int {
+        profile.autoKcalTarget(currentWeight: weights.last?.kg ?? profile.startWeight)
+    }
+
     private var weightCSV: String {
         var lines = ["datum,kg,weegschaal"]
         let df = Date.FormatStyle(date: .numeric, time: .shortened)
@@ -96,6 +100,21 @@ struct ProfileView: View {
                 }
                 DatePicker("Deadline", selection: $profile.goalDate, in: Date.now..., displayedComponents: .date)
                 Stepper("Training: \(profile.trainingsPerWeek)×/week", value: $profile.trainingsPerWeek, in: 1...7)
+                LabeledContent("Lengte") {
+                    HStack(spacing: 4) {
+                        TextField("180", value: $profile.heightCm, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 64)
+                        Text("cm").foregroundStyle(.secondary)
+                    }
+                }
+                LabeledContent("Leeftijd") {
+                    TextField("25", value: $profile.age, format: .number)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 64)
+                }
             } header: {
                 Text("Jouw doel")
             }
@@ -103,6 +122,18 @@ struct ProfileView: View {
             Section {
                 LabeledContent("Eiwitdoel", value: "\(profile.proteinTarget) g/dag")
                 LabeledContent("Tempo", value: "\(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2)))) kg/week")
+                LabeledContent("Calorie-doel") {
+                    HStack(spacing: 4) {
+                        TextField("\(autoKcal)", value: Binding(
+                            get: { profile.kcalTarget == 0 ? nil : profile.kcalTarget },
+                            set: { profile.kcalTarget = $0 ?? 0 }
+                        ), format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 70)
+                        Text("kcal").foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Berekend uit je doel")
             } footer: {
@@ -110,7 +141,7 @@ struct ProfileView: View {
                     Label("Meer dan +0,5 kg/week wordt vooral vet. Overweeg een latere deadline.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 } else {
-                    Text("Eiwitdoel = doelgewicht × 1,6. Tempo volgt uit doel en deadline.")
+                    Text("Eiwitdoel = doelgewicht × 1,6. Calorie-doel leeg = automatisch (\(autoKcal) kcal): verbruik op basis van lengte, gewicht, leeftijd en trainingen, plus het overschot voor \(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(1)))) kg/week.")
                 }
             }
 

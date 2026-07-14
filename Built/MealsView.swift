@@ -202,6 +202,8 @@ struct ProteinEntrySheet: View {
     @State private var label = ""
     @State private var grams = 0
     @State private var kcal = 0
+    @State private var carbs = 0
+    @State private var fat = 0
     @State private var meal = ProteinEntry.guessMeal()
     @State private var saveAsMeal = false
     @State private var loaded = false
@@ -217,6 +219,16 @@ struct ProteinEntrySheet: View {
                 }
                 LabeledContent("Kcal") {
                     TextField("kcal", value: $kcal, format: .number)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Koolhydraten (g)") {
+                    TextField("g", value: $carbs, format: .number)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                }
+                LabeledContent("Vet (g)") {
+                    TextField("g", value: $fat, format: .number)
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
                 }
@@ -242,7 +254,7 @@ struct ProteinEntrySheet: View {
                 }
             }
         }
-        .presentationDetents([.height(380)])
+        .presentationDetents([.height(460)])
         .onAppear {
             guard !loaded else { return }
             loaded = true
@@ -250,6 +262,8 @@ struct ProteinEntrySheet: View {
                 label = entry.label
                 grams = entry.grams
                 kcal = entry.kcal
+                carbs = entry.carbs
+                fat = entry.fat
                 meal = entry.mealKey
             } else if let prefill {
                 meal = ProteinEntry.guessMeal(for: entryDate)
@@ -266,11 +280,13 @@ struct ProteinEntrySheet: View {
             entry.label = cleanLabel.isEmpty ? "Eigen maaltijd" : cleanLabel
             entry.grams = grams
             entry.kcal = kcal
+            entry.carbs = carbs
+            entry.fat = fat
             entry.meal = meal
         } else {
             context.insert(ProteinEntry(date: entryDate, grams: grams,
                                         label: cleanLabel.isEmpty ? "Eigen maaltijd" : cleanLabel,
-                                        kcal: kcal, meal: meal))
+                                        kcal: kcal, carbs: carbs, fat: fat, meal: meal))
             if saveAsMeal, !cleanLabel.isEmpty {
                 context.insert(Meal(name: cleanLabel, protein: grams, kcal: kcal))
             }

@@ -13,7 +13,7 @@ struct BuiltApp: App {
                 .tint(.green) // ponytail: één accentkleur voor de hele app
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
-        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, CustomHabit.self, HabitLog.self, PhotoEntry.self])
+        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self])
     }
 }
 
@@ -36,6 +36,7 @@ struct RootView: View {
                 #if DEBUG
                 // ponytail: screenshot-states forceren via `simctl launch ... -demoRest`
                 if ProcessInfo.processInfo.arguments.contains("-demoWorkout") { workoutStatus.startWorkout() }
+                if ProcessInfo.processInfo.arguments.contains("-demoEten") { tab = 2 }
                 if ProcessInfo.processInfo.arguments.contains("-demoRest") {
                     workoutStatus.startWorkout()
                     workoutStatus.updateContext(exercise: "Bankdrukken", setsDone: 2, setsTotal: 4,
@@ -192,12 +193,14 @@ struct RootView: View {
                     .tag(0)
                 NavigationStack { TrainingView(profile: profile).tabBarClearance() }
                     .tag(1)
-                NavigationStack { WeightView(profile: profile).tabBarClearance() }
+                NavigationStack { FoodView(profile: profile).tabBarClearance() }
                     .tag(2)
-                NavigationStack { InsightsView(profile: profile).tabBarClearance() }
+                NavigationStack { WeightView(profile: profile).tabBarClearance() }
                     .tag(3)
-                NavigationStack { JournalView(profile: profile).tabBarClearance() }
+                NavigationStack { InsightsView(profile: profile).tabBarClearance() }
                     .tag(4)
+                NavigationStack { JournalView(profile: profile).tabBarClearance() }
+                    .tag(5)
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
@@ -229,6 +232,7 @@ struct FloatingTabBar: View {
     private let items: [(icon: String, label: String)] = [
         ("flame.fill", "Vandaag"),
         ("dumbbell.fill", "Training"),
+        ("fork.knife", "Eten"),
         ("chart.line.uptrend.xyaxis", "Gewicht"),
         ("sparkles", "Inzicht"),
         ("book.fill", "Logboek"),

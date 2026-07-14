@@ -124,6 +124,8 @@ final class Profile {
     var trainingsPerWeek: Int
     var tracksCreatine: Bool = true
     var tracksSleep: Bool = true
+    /// Handmatig calorie-doel; 0 = automatisch berekenen uit lengte/gewicht/doel.
+    var kcalTarget: Int = 0
     /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
     var trainingDays: [Int] = []
 
@@ -144,6 +146,19 @@ final class Profile {
     var weeklyRate: Double { (goalWeight - startWeight) / totalWeeks }
     var daysIn: Int { max(Calendar.current.dateComponents([.day], from: startDate, to: .now).day ?? 0, 0) }
     var expectedGain: Double { weeklyRate * Double(daysIn) / 7 }
+
+    /// Mifflin-St Jeor (man) × activiteit op basis van trainingsfrequentie,
+    /// plus het overschot dat bij je gewenste tempo hoort (~7700 kcal per kg).
+    func autoKcalTarget(currentWeight: Double) -> Int {
+        let bmr = 10 * currentWeight + 6.25 * Double(heightCm) - 5 * Double(age) + 5
+        let activity = trainingsPerWeek >= 5 ? 1.725 : trainingsPerWeek >= 3 ? 1.55 : 1.375
+        let surplus = weeklyRate * 7700 / 7
+        return max(Int((bmr * activity + surplus).rounded()), 1200)
+    }
+
+    func kcalTargetEffective(currentWeight: Double) -> Int {
+        kcalTarget > 0 ? kcalTarget : autoKcalTarget(currentWeight: currentWeight)
+    }
 }
 
 @Model
@@ -219,12 +234,16 @@ final class ProteinEntry {
     var grams: Int
     var label: String
     var kcal: Int = 0
+    var carbs: Int = 0
+    var fat: Int = 0
     var meal: String = "" // "breakfast" | "lunch" | "dinner" | "snack"; leeg = raden op tijdstip
-    init(date: Date = .now, grams: Int, label: String, kcal: Int = 0, meal: String = "") {
+    init(date: Date = .now, grams: Int, label: String, kcal: Int = 0, carbs: Int = 0, fat: Int = 0, meal: String = "") {
         self.date = date
         self.grams = grams
         self.label = label
         self.kcal = kcal
+        self.carbs = carbs
+        self.fat = fat
         self.meal = meal
     }
 
@@ -239,6 +258,32 @@ final class ProteinEntry {
 
     /// Effectieve maaltijd: expliciet gekozen, anders geraden op tijdstip.
     var mealKey: String { meal.isEmpty ? Self.guessMeal(for: date) : meal }
+}
+
+/// Product uit de scanner of zoekfunctie; voedingswaarden per 100 g.
+@Model
+final class FoodProduct {
+    var name: String
+    var brand: String = ""
+    var barcode: String = ""
+    var protein100: Double
+    var kcal100: Double
+    var carbs100: Double = 0
+    var fat100: Double = 0
+    var favorite: Bool = false
+    var createdAt: Date = Date.now
+    var lastUsed: Date = Date.now
+
+    init(name: String, brand: String = "", barcode: String = "",
+         protein100: Double, kcal100: Double, carbs100: Double = 0, fat100: Double = 0) {
+        self.name = name
+        self.brand = brand
+        self.barcode = barcode
+        self.protein100 = protein100
+        self.kcal100 = kcal100
+        self.carbs100 = carbs100
+        self.fat100 = fat100
+    }
 }
 
 struct Ingredient: Codable, Identifiable, Hashable {

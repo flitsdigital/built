@@ -131,8 +131,7 @@ struct DashboardView: View {
                 selectedTab = 0
                 showWeightSheet = true
             case "protein":
-                selectedTab = 0
-                showProteinSheet = true
+                selectedTab = 2
             case "training":
                 selectedTab = 1
             case "review":
@@ -304,7 +303,9 @@ struct DashboardView: View {
     }
 
     private var proteinCard: some View {
-        Button { showProteinSheet = true } label: {
+        Button {
+            withAnimation(.snappy(duration: 0.3)) { selectedTab = 2 }
+        } label: {
             card {
                 HStack(spacing: 16) {
                     proteinRing
