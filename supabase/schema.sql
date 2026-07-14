@@ -15,6 +15,8 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists tracks_creatine boolean not null default true;
 alter table public.profiles add column if not exists tracks_sleep boolean not null default true;
 alter table public.profiles add column if not exists training_days jsonb not null default '[]';
+alter table public.protein_entries add column if not exists meal text not null default '';
+alter table public.meals add column if not exists favorite boolean not null default false;
 
 create table if not exists public.weight_entries (
   id uuid primary key default gen_random_uuid(),
@@ -157,8 +159,9 @@ begin
     from jsonb_array_elements(coalesce(payload->'weights', '[]'::jsonb)) e;
 
   delete from public.protein_entries where user_id = uid;
-  insert into public.protein_entries (user_id, date, grams, label, kcal)
-    select uid, (e->>'date')::timestamptz, (e->>'grams')::int, e->>'label', coalesce((e->>'kcal')::int, 0)
+  insert into public.protein_entries (user_id, date, grams, label, kcal, meal)
+    select uid, (e->>'date')::timestamptz, (e->>'grams')::int, e->>'label', coalesce((e->>'kcal')::int, 0),
+           coalesce(e->>'meal', '')
     from jsonb_array_elements(coalesce(payload->'proteins', '[]'::jsonb)) e;
 
   delete from public.set_entries where user_id = uid;
@@ -179,10 +182,10 @@ begin
     from jsonb_array_elements(coalesce(payload->'routines', '[]'::jsonb)) e;
 
   delete from public.meals where user_id = uid;
-  insert into public.meals (user_id, name, protein, kcal, created_at, servings, ingredients)
+  insert into public.meals (user_id, name, protein, kcal, created_at, servings, ingredients, favorite)
     select uid, e->>'name', (e->>'protein')::int, coalesce((e->>'kcal')::int, 0),
            (e->>'created_at')::timestamptz, coalesce((e->>'servings')::float8, 1),
-           coalesce(e->'ingredients', '[]'::jsonb)
+           coalesce(e->'ingredients', '[]'::jsonb), coalesce((e->>'favorite')::boolean, false)
     from jsonb_array_elements(coalesce(payload->'meals', '[]'::jsonb)) e;
 
   delete from public.scales where user_id = uid;

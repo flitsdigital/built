@@ -147,12 +147,26 @@ final class ProteinEntry {
     var grams: Int
     var label: String
     var kcal: Int = 0
-    init(date: Date = .now, grams: Int, label: String, kcal: Int = 0) {
+    var meal: String = "" // "breakfast" | "lunch" | "dinner" | "snack"; leeg = raden op tijdstip
+    init(date: Date = .now, grams: Int, label: String, kcal: Int = 0, meal: String = "") {
         self.date = date
         self.grams = grams
         self.label = label
         self.kcal = kcal
+        self.meal = meal
     }
+
+    static func guessMeal(for date: Date = .now) -> String {
+        switch Calendar.current.component(.hour, from: date) {
+        case 5..<11: "breakfast"
+        case 11..<15: "lunch"
+        case 17..<22: "dinner"
+        default: "snack"
+        }
+    }
+
+    /// Effectieve maaltijd: expliciet gekozen, anders geraden op tijdstip.
+    var mealKey: String { meal.isEmpty ? Self.guessMeal(for: date) : meal }
 }
 
 struct Ingredient: Codable, Identifiable, Hashable {
@@ -170,6 +184,7 @@ final class Meal {
     var createdAt: Date
     var servings: Double = 1
     var ingredients: [Ingredient] = []
+    var favorite: Bool = false
     init(name: String, protein: Int, kcal: Int) {
         self.name = name
         self.protein = protein

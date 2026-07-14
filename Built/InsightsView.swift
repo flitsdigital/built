@@ -94,6 +94,16 @@ struct InsightsView: View {
                 out.append("\(name) staat al \(tops.suffix(4).count) sessies op \(tops.last!.kg.kgText) kg — probeer een deload (-10%) of een variatie.")
             }
         }
+        // Eiwitverdeling: spiereiwitsynthese wil spreiding over de dag
+        let recentProteins = proteins.filter { inLastWeek($0.date) }
+        let totalGrams = recentProteins.map(\.grams).reduce(0, +)
+        if totalGrams > 100 {
+            let evening = recentProteins.filter { cal.component(.hour, from: $0.date) >= 17 }.map(\.grams).reduce(0, +)
+            let share = Double(evening) / Double(totalGrams)
+            if share > 0.6 {
+                out.append("\(Int(share * 100))% van je eiwit komt na 17:00 — schuif ~30 g naar je ontbijt voor betere spreiding.")
+            }
+        }
         if out.isEmpty {
             out.append("Alles staat goed. Gewoon doorgaan. 💪")
         }

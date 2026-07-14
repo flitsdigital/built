@@ -42,7 +42,7 @@ enum Sync {
         var training_days: [Int]
     }
     private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
-    private struct ProteinRow: Codable { var user_id: UUID; var date: Date; var grams: Int; var label: String; var kcal: Int }
+    private struct ProteinRow: Codable { var user_id: UUID; var date: Date; var grams: Int; var label: String; var kcal: Int; var meal: String }
     private struct SetRow: Codable { var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int }
     private struct HabitsRow: Codable {
         var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
@@ -52,6 +52,7 @@ enum Sync {
     private struct MealRow: Codable {
         var user_id: UUID; var name: String; var protein: Int; var kcal: Int
         var created_at: Date; var servings: Double; var ingredients: [Ingredient]
+        var favorite: Bool
     }
     private struct ScaleRow: Codable { var user_id: UUID; var name: String; var correction: Double }
     private struct CustomHabitRow: Codable { var user_id: UUID; var name: String; var created_at: Date }
@@ -108,7 +109,7 @@ enum Sync {
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
         p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)]))
-            .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label, kcal: $0.kcal) }
+            .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label, kcal: $0.kcal, meal: $0.meal) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
             .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
@@ -118,7 +119,8 @@ enum Sync {
             .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises, created_at: $0.createdAt) }
         p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)]))
             .map { MealRow(user_id: uid, name: $0.name, protein: $0.protein, kcal: $0.kcal,
-                           created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients) }
+                           created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients,
+                           favorite: $0.favorite) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
             .map { ScaleRow(user_id: uid, name: $0.name, correction: $0.offset) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
@@ -202,6 +204,7 @@ enum Sync {
             meal.createdAt = r.created_at
             meal.servings = r.servings
             meal.ingredients = r.ingredients
+            meal.favorite = r.favorite
             context.insert(meal)
         }
         for r in scaleRows {
