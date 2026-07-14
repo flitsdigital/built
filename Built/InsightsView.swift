@@ -139,6 +139,7 @@ struct InsightsView: View {
                 }
                 LabeledContent("Voorspelling", value: onTrack ? "Op schema 🚀" : "Bijsturen nodig")
             }
+            .listRowBackground(Color.cleanCard)
 
             Section("Perfecte dagen") {
                 HStack {
@@ -147,10 +148,12 @@ struct InsightsView: View {
                     statTile(value: "🔥 \(streak)", label: "huidige reeks")
                 }
             }
+            .listRowBackground(Color.cleanCard)
 
             Section("Deze week") {
                 weekGrid
             }
+            .listRowBackground(Color.cleanCard)
 
             if !weeklyVolume.isEmpty {
                 Section("Trainingsvolume per week") {
@@ -165,6 +168,7 @@ struct InsightsView: View {
                     .frame(height: 160)
                     .padding(.vertical, 8)
                 }
+                .listRowBackground(Color.cleanCard)
             }
 
             if !topExercises.isEmpty {
@@ -177,6 +181,7 @@ struct InsightsView: View {
                         }
                     }
                 }
+                .listRowBackground(Color.cleanCard)
             }
 
             Section("Coach") {
@@ -184,7 +189,9 @@ struct InsightsView: View {
                     Label(line, systemImage: "lightbulb")
                 }
             }
+            .listRowBackground(Color.cleanCard)
         }
+        .cleanScreen()
         .navigationTitle("Inzicht")
     }
 
@@ -216,7 +223,7 @@ struct InsightsView: View {
                         .gridColumnAlignment(.leading)
                     ForEach(days, id: \.self) { d in
                         RoundedRectangle(cornerRadius: 4)
-                            .fill(factor.done(d) ? Color.green : Color(.quaternarySystemFill))
+                            .fill(factor.done(d) ? Color.primary : Color(.quaternarySystemFill))
                             .frame(width: 22, height: 22)
                     }
                 }
@@ -286,6 +293,7 @@ struct ExerciseDetailView: View {
                 LabeledContent("Sessies", value: "\(days.count)")
                 LabeledContent("Totaal sets", value: "\(sets.count)")
             }
+            .listRowBackground(Color.cleanCard)
             if tops.count >= 2 {
                 Section("Topgewicht per sessie") {
                     Chart(tops, id: \.day) { item in
@@ -298,6 +306,7 @@ struct ExerciseDetailView: View {
                     .frame(height: 200)
                     .padding(.vertical, 8)
                 }
+                .listRowBackground(Color.cleanCard)
             }
             Section("Historie") {
                 ForEach(days, id: \.self) { day in
@@ -311,7 +320,9 @@ struct ExerciseDetailView: View {
                     }
                 }
             }
+            .listRowBackground(Color.cleanCard)
         }
+        .cleanScreen()
         .tabBarClearance()
         .navigationTitle(exercise)
         .navigationBarTitleDisplayMode(.inline)

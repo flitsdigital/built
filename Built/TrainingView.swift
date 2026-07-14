@@ -184,6 +184,7 @@ struct TrainingView: View {
         List {
             if active { activeSections } else { idleSections }
         }
+        .cleanScreen()
         .navigationTitle("Training")
         .toolbar {
             if active {
@@ -245,10 +246,10 @@ struct TrainingView: View {
                     Circle().stroke(Color(.tertiarySystemFill), lineWidth: 5)
                     Circle()
                         .trim(from: 0, to: min(1, Double(trainedThisWeek) / Double(max(profile.trainingsPerWeek, 1))))
-                        .stroke(.green, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                        .stroke(Color.primary, style: StrokeStyle(lineWidth: 5, lineCap: .round))
                         .rotationEffect(.degrees(-90))
                     if trainedThisWeek >= profile.trainingsPerWeek {
-                        Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.green)
+                        Image(systemName: "checkmark").font(.caption.bold())
                     } else {
                         Text("\(trainedThisWeek)/\(profile.trainingsPerWeek)")
                             .font(.caption2.bold().monospacedDigit())
@@ -259,6 +260,7 @@ struct TrainingView: View {
             }
             .padding(.vertical, 2)
         }
+        .listRowBackground(Color.cleanCard)
 
         Section("Snel starten") {
             Button {
@@ -267,6 +269,7 @@ struct TrainingView: View {
                 Label("Lege training starten", systemImage: "plus")
             }
         }
+        .listRowBackground(Color.cleanCard)
 
         Section {
             if routines.isEmpty {
@@ -324,6 +327,7 @@ struct TrainingView: View {
                 .font(.footnote.bold())
             }
         }
+        .listRowBackground(Color.cleanCard)
 
         if !pastDays.isEmpty {
             Section("Geschiedenis") {
@@ -337,7 +341,7 @@ struct TrainingView: View {
                             Spacer()
                             Text("\(vol) kg")
                                 .font(.caption.monospacedDigit())
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.secondary)
                         }
                         ForEach(byExercise(daySets), id: \.name) { group in
                             Text("\(group.name): " + group.sets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
@@ -353,6 +357,7 @@ struct TrainingView: View {
                     }
                 }
             }
+            .listRowBackground(Color.cleanCard)
         }
     }
 
@@ -365,7 +370,6 @@ struct TrainingView: View {
                     Text("Duur").font(.caption2).foregroundStyle(.secondary)
                     Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
                         .font(.subheadline.bold().monospacedDigit())
-                        .foregroundStyle(.green)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
@@ -386,6 +390,7 @@ struct TrainingView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        .listRowBackground(Color.cleanCard)
 
         ForEach($workout) { $ex in
             Section {
@@ -429,7 +434,7 @@ struct TrainingView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(ex.name)
                             .font(.headline)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.primary)
                         if let pr = prInfo(ex) {
                             Text("🏆 Nieuw record: \(pr.new.kgText) kg (was \(pr.old.kgText))")
                                 .font(.caption.bold())
@@ -452,6 +457,7 @@ struct TrainingView: View {
                 }
                 .textCase(nil) // ponytail: headers uppercasen anders ook het ⋯-menu
             }
+            .listRowBackground(Color.cleanCard)
         }
 
         Section {
@@ -466,6 +472,7 @@ struct TrainingView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+        .listRowBackground(Color.cleanCard)
 
         Section {
             Button(role: .destructive) {
@@ -479,6 +486,7 @@ struct TrainingView: View {
                     .frame(maxWidth: .infinity)
             }
         }
+        .listRowBackground(Color.cleanCard)
     }
 
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String) -> some View {
@@ -624,7 +632,9 @@ struct RoutineEditorView: View {
             } header: {
                 Text("Oefeningen — sleep om de volgorde te bepalen")
             }
+            .listRowBackground(Color.cleanCard)
         }
+        .cleanScreen()
         .tabBarClearance()
         .navigationTitle($routine.name)
         .navigationBarTitleDisplayMode(.inline)

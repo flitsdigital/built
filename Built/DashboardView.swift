@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import WidgetKit
 
+// Clean-richting (Cal AI): wit/zwart, dunne lijnen, één gigantisch getal als held —
+// de belangrijkste open actie ís de pagina. Kleur alleen semantisch (sync-waarschuwing).
 struct DashboardView: View {
     let profile: Profile
     @Binding var selectedTab: Int
@@ -17,10 +19,14 @@ struct DashboardView: View {
     @State private var showWeightSheet = false
     @State private var showProteinSheet = false
     @State private var showNoteAlert = false
+    @State private var showScoreSheet = false
+    @State private var showSleepDetail = false
     @State private var noteInput = ""
     @State private var appeared = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let syncStatus = SyncStatus.shared
+
+    // MARK: - Afgeleiden
 
     private var cal: Calendar { .current }
     private var todayProtein: Int { proteins.filter { cal.isDateInToday($0.date) }.map(\.grams).reduce(0, +) }
@@ -28,9 +34,13 @@ struct DashboardView: View {
     private var trainedToday: Bool { sets.contains { cal.isDateInToday($0.date) } }
     private var weightLoggedToday: Bool { weights.contains { cal.isDateInToday($0.date) } }
     private var todayHabits: DayHabits? { habits.first { cal.isDateInToday($0.date) } }
+    private var proteinRemaining: Int { max(profile.proteinTarget - todayProtein, 0) }
+
+    private var todayVolume: Int {
+        Int(sets.filter { cal.isDateInToday($0.date) }.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+    }
 
     private var score: Int {
-        // Genormaliseerd naar 100, ook als creatine/slaap uitgeschakeld zijn
         var raw = min(30, Int(30.0 * Double(todayProtein) / Double(max(profile.proteinTarget, 1))))
         var maxPoints = 70
         if trainedToday { raw += 25 }
@@ -56,18 +66,15 @@ struct DashboardView: View {
         return max(0, min(150, Int(pct)))
     }
 
-    private var goalProgress: Double {
-        let total = profile.goalWeight - profile.startWeight
-        guard abs(total) > 0.01 else { return 1 }
-        return min(1, max(0, (currentWeight - profile.startWeight) / total))
-    }
-
     private var streak: Int {
         DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
     }
 
-    private var proteinRemaining: Int { max(profile.proteinTarget - todayProtein, 0) }
+    private var trendLabel: String {
+        guard let t = weights.trendPerWeek else { return "kg" }
+        return "kg · \(t >= 0 ? "+" : "")\(t.formatted(.number.precision(.fractionLength(1))))/wk"
+    }
 
     private var greeting: String {
         switch cal.component(.hour, from: .now) {
@@ -85,17 +92,17 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 24) {
                 entranced(0, header)
-                entranced(1, weekCard)
-                entranced(2, scoreCard)
-                entranced(3, proteinCard)
-                entranced(4, checklistCard)
+                entranced(1, hero)
+                entranced(2, pillsRow)
+                entranced(3, checklist)
+                entranced(4, weekFooter)
             }
-            .padding(.horizontal)
+            .padding(.horizontal, 20)
             .padding(.bottom, 24)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Color(.systemBackground))
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             appeared = true
@@ -121,9 +128,13 @@ struct DashboardView: View {
             }
             Notifier.shared.pendingAction = nil
         }
-        .sensoryFeedback(.success, trigger: score)
+        .sensoryFeedback(.success, trigger: score) { _, new in new == 100 } // succes-haptic alleen op het zeldzame moment
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet() }
         .sheet(isPresented: $showProteinSheet) { ProteinLogSheet(profile: profile) }
+        .sheet(isPresented: $showScoreSheet) { ScoreBreakdownSheet(score: score, parts: scoreParts) }
+        .navigationDestination(isPresented: $showSleepDetail) {
+            DayDetailView(day: cal.startOfDay(for: .now), profile: profile)
+        }
         .alert("Notitie voor vandaag", isPresented: $showNoteAlert) {
             TextField("bijv. Veel energie vandaag", text: $noteInput)
             Button("Opslaan") {
@@ -134,209 +145,258 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Kaarten
-
-    /// Eenmalige entree per app-start: fade + 12pt rise, 50ms stagger.
-    /// Bij reduced motion alleen de fade.
+    /// Eenmalige entree per app-start: fade + 12pt rise, 50ms stagger. Reduced motion → alleen fade.
     private func entranced(_ index: Int, _ view: some View) -> some View {
         view
             .opacity(appeared ? 1 : 0)
             .offset(y: appeared || reduceMotion ? 0 : 12)
-            .animation(.easeOut(duration: 0.35).delay(Double(index) * 0.05), value: appeared)
+            .animation(.easeOut(duration: 0.3).delay(Double(index) * 0.05), value: appeared)
     }
 
+    // MARK: - Header
+
     private var header: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(greeting) \(profile.name) 👋")
-                    .font(.title2.bold())
+                Text("\(greeting), \(profile.name)")
+                    .font(.headline)
                 Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-                    .font(.subheadline)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 10) {
-                if streak > 0 { // ponytail: "🔥 0" demotiveert — pas tonen vanaf 1
-                    HStack(spacing: 4) {
-                        Text("🔥")
-                        Text("\(streak)")
-                            .font(.headline.monospacedDigit())
-                            .contentTransition(.numericText())
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.orange.opacity(0.15), in: Capsule())
-                    .animation(.snappy(duration: 0.25), value: streak)
-                }
-                NavigationLink {
-                    ProfileView(profile: profile)
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "person.crop.circle")
-                            .font(.title)
-                            .foregroundStyle(.secondary)
-                        if syncStatus.lastError != nil {
-                            Circle().fill(.orange).frame(width: 10, height: 10)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.top, 8)
-    }
-
-    private func writeSnapshot() {
-        WidgetSnapshot(score: score, protein: todayProtein, proteinTarget: profile.proteinTarget,
-                       trained: trainedToday, creatine: todayHabits?.creatine == true,
-                       weighed: weightLoggedToday, slept: todayHabits?.sleptEnough == true,
-                       streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep).save()
-        WidgetCenter.shared.reloadAllTimelines()
-    }
-
-    private var weekCard: some View {
-        card {
-            HStack {
-                ForEach(weekDays, id: \.self) { day in
-                    let perfect = DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits,
-                                                   target: profile.proteinTarget,
-                                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
-                    VStack(spacing: 5) {
-                        Text(day.formatted(.dateTime.weekday(.narrow)))
-                            .font(.caption2)
-                            .foregroundStyle(cal.isDateInToday(day) ? .primary : .secondary)
-                        ZStack {
-                            Circle()
-                                .fill(perfect ? Color.green : Color(.tertiarySystemFill))
-                                .frame(width: 34, height: 34)
-                            if perfect {
-                                Image(systemName: "checkmark")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.white)
-                            } else if cal.isDateInToday(day) {
-                                Circle()
-                                    .strokeBorder(.green, lineWidth: 2)
-                                    .frame(width: 34, height: 34)
-                            }
-                        }
-                        Text(day.formatted(.dateTime.day()))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            Divider()
-            HStack {
-                Text("Je ligt \(onSchedulePct)% op schema")
-                Spacer()
-                Text("Dag \(profile.daysIn + 1)")
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private var scoreCard: some View {
-        card {
-            HStack(spacing: 20) {
-                ZStack {
+            NavigationLink {
+                ProfileView(profile: profile)
+            } label: {
+                ZStack(alignment: .topTrailing) {
                     Circle()
-                        .stroke(Color(.tertiarySystemFill), lineWidth: 12)
-                    Circle()
-                        .trim(from: 0, to: Double(score) / 100)
-                        .stroke(
-                            AngularGradient(colors: [.green, .mint, .green], center: .center),
-                            style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
-                    VStack(spacing: 0) {
-                        Text("\(score)")
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .fill(Color.cleanCard)
+                        .frame(width: 36, height: 36)
+                        .overlay {
+                            Text(profile.name.prefix(1).uppercased())
+                                .font(.footnote.bold())
+                                .foregroundStyle(.primary)
+                        }
+                    if syncStatus.lastError != nil {
+                        Circle().fill(.orange).frame(width: 9, height: 9)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.top, 12)
+    }
+
+    // MARK: - Hero: de belangrijkste open actie
+
+    private var heroContent: (value: String, unit: String, sub: String) {
+        if proteinRemaining > 0 {
+            return ("\(proteinRemaining)", " g", "eiwit te gaan · dan is je dag perfect")
+        }
+        var open: [String] = []
+        if profile.tracksCreatine, todayHabits?.creatine != true { open.append("creatine") }
+        if !weightLoggedToday { open.append("wegen") }
+        if profile.tracksSleep, todayHabits?.sleptEnough != true { open.append("slaap") }
+        if !trainedToday { open.append("training") }
+        if open.isEmpty {
+            return ("✓", "", "perfecte dag — alles binnen")
+        }
+        return ("\(open.count)", "", "nog te gaan: \(open.joined(separator: ", "))")
+    }
+
+    private var hero: some View {
+        Button {
+            showProteinSheet = true
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top) {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(heroContent.value)
+                            .font(.system(size: 64, weight: .heavy))
+                            .tracking(-2)
                             .monospacedDigit()
                             .contentTransition(.numericText())
-                        Text("/100")
-                            .font(.caption2)
+                            .animation(.snappy(duration: 0.3), value: heroContent.value)
+                        Text(heroContent.unit)
+                            .font(.title3.weight(.semibold))
                             .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    scoreRing
                 }
-                .frame(width: 96, height: 96)
-                .animation(.snappy, value: score)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("🔥 Groei Score")
-                        .font(.headline)
-                    Text(score == 100 ? "Perfecte dag! 🏆" : "Nog \(100 - score) punten te pakken")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    ProgressView(value: goalProgress)
-                        .tint(.green)
-                    Text("\(currentWeight.kgText) → \(profile.goalWeight.kgText) kg")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(heroContent.sub)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(PressableStyle(scale: 0.985))
+    }
+
+    private var scoreRing: some View {
+        ZStack {
+            Circle().stroke(Color(.systemFill), lineWidth: 4)
+            Circle()
+                .trim(from: 0, to: Double(score) / 100)
+                .stroke(Color.primary, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(score)")
+                .font(.caption.bold().monospacedDigit())
+                .contentTransition(.numericText())
+        }
+        .frame(width: 44, height: 44)
+        .animation(.snappy(duration: 0.3), value: score)
+        .accessibilityLabel("Groei Score \(score) van 100")
+    }
+
+    // MARK: - Pills
+
+    private var scoreParts: [(name: String, earned: Int, max: Int)] {
+        var parts: [(String, Int, Int)] = [
+            ("Eiwit", min(30, Int(30.0 * Double(todayProtein) / Double(max(profile.proteinTarget, 1)))), 30),
+            ("Training", trainedToday ? 25 : 0, 25),
+            ("Gewicht", weightLoggedToday ? 15 : 0, 15),
+        ]
+        if profile.tracksCreatine { parts.append(("Creatine", todayHabits?.creatine == true ? 15 : 0, 15)) }
+        if profile.tracksSleep { parts.append(("Slaap", todayHabits?.sleptEnough == true ? 15 : 0, 15)) }
+        return parts
+    }
+
+    private var pillsRow: some View {
+        HStack(spacing: 10) {
+            pill(value: "\(score)", label: "score") { showScoreSheet = true }
+            pill(value: currentWeight.kgText, label: trendLabel) { showWeightSheet = true }
+            pill(value: streak > 0 ? "🔥 \(streak)" : "—", label: "streak") { selectedTab = 3 }
         }
     }
 
-    private var proteinCard: some View {
-        Button { showProteinSheet = true } label: {
-            card {
-                HStack(spacing: 16) {
-                    proteinRing
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(proteinRemaining > 0 ? "Nog \(proteinRemaining) g te gaan" : "Eiwitdoel gehaald 🎯")
-                            .font(.headline)
-                        if todayKcal > 0 {
-                            Text("\(todayKcal) kcal gegeten")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        Text("Tik om te loggen")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(.tertiary)
-                }
+    private func pill(value: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.title3.bold())
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .background(Color.cleanCard, in: RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(PressableStyle())
+        .foregroundStyle(.primary)
     }
 
-    private var checklistCard: some View {
-        card {
-            checkRow(icon: "dumbbell.fill", color: .orange, title: "Training",
-                     done: trainedToday) { selectedTab = 1 }
+    // MARK: - Checklist
+
+    private var checklist: some View {
+        VStack(spacing: 0) {
+            cleanRow(done: trainedToday, title: "Training",
+                     detail: trainedToday ? "\(todayVolume) kg volume" : nil) { selectedTab = 1 }
             if profile.tracksCreatine {
-                Divider()
-                checkRow(icon: "pills.fill", color: .teal, title: "Creatine",
-                         done: todayHabits?.creatine == true) { toggleHabit(\.creatine) }
+                rowDivider
+                cleanRow(done: todayHabits?.creatine == true, title: "Creatine") { toggleHabit(\.creatine) }
             }
-            Divider()
-            checkRow(icon: "scalemass.fill", color: .purple, title: weightRowTitle,
-                     done: weightLoggedToday) { showWeightSheet = true }
+            rowDivider
+            cleanRow(done: weightLoggedToday, title: "Gewicht",
+                     detail: weightLoggedToday ? "\(weights.last { cal.isDateInToday($0.date) }?.kg.kgText ?? "") kg" : nil) {
+                showWeightSheet = true
+            }
             if profile.tracksSleep {
-                Divider()
-                checkRow(icon: "moon.fill", color: .indigo, title: sleepText,
-                         done: todayHabits?.sleptEnough == true) { toggleHabit(\.sleptEnough) }
+                rowDivider
+                cleanRow(done: todayHabits?.sleptEnough == true, title: "8 uur slaap",
+                         detail: todayHabits?.sleepHours.map { "\($0.kgText) u" }) { toggleHabit(\.sleptEnough) }
+                    .contextMenu {
+                        Button("Slaaptijden & kwaliteit…", systemImage: "moon.zzz") {
+                            showSleepDetail = true
+                        }
+                    }
             }
-            Divider()
-            checkRow(icon: "pencil", color: .gray, title: "Notitie",
-                     done: !(todayHabits?.note.isEmpty ?? true)) {
+            rowDivider
+            cleanRow(done: !(todayHabits?.note.isEmpty ?? true), title: "Notitie",
+                     detail: (todayHabits?.note.isEmpty ?? true) ? nil : todayHabits?.note) {
                 noteInput = todayHabits?.note ?? ""
                 showNoteAlert = true
             }
             ForEach(customHabits) { habit in
-                Divider()
-                checkRow(icon: "star.fill", color: .mint, title: habit.name,
-                         done: customDone(habit.name)) { toggleCustom(habit.name) }
+                rowDivider
+                cleanRow(done: customDone(habit.name), title: habit.name) { toggleCustom(habit.name) }
             }
-            Text("Slaaptijden, kwaliteit en langere notities: Logboek → Vandaag.")
-                .font(.caption2)
+        }
+        .background(Color.cleanCard, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    private var rowDivider: some View {
+        Divider().padding(.leading, 46)
+    }
+
+    private func cleanRow(done: Bool, title: String, detail: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .strokeBorder(done ? Color.primary : Color(.separator), lineWidth: 1.5)
+                        .background(Circle().fill(done ? Color.primary : .clear))
+                    if done {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Color(.systemBackground))
+                    }
+                }
+                .frame(width: 21, height: 21)
+                .animation(.snappy(duration: 0.2), value: done)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(done ? .secondary : .primary)
+                Spacer()
+                if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 13)
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    // MARK: - Week-voetnoot
+
+    private var weekFooter: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                ForEach(weekDays, id: \.self) { day in
+                    let perfect = DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits,
+                                                   target: profile.proteinTarget,
+                                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep)
+                    Circle()
+                        .fill(perfect ? Color.primary : Color(.systemFill))
+                        .frame(width: 8, height: 8)
+                        .overlay {
+                            if cal.isDateInToday(day) {
+                                Circle().strokeBorder(Color.primary, lineWidth: 1.5).frame(width: 15, height: 15)
+                            }
+                        }
+                        .accessibilityLabel("\(day.formatted(.dateTime.weekday(.wide))): \(perfect ? "perfect" : "niet perfect")")
+                }
+            }
+            Text("Je ligt \(onSchedulePct)% op schema · dag \(profile.daysIn + 1)")
+                .font(.caption)
                 .foregroundStyle(.tertiary)
         }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 4)
     }
+
+    // MARK: - Acties
 
     private func customDone(_ name: String) -> Bool {
         habitLogs.contains { $0.name == name && cal.isDateInToday($0.date) }
@@ -350,70 +410,6 @@ struct DashboardView: View {
         }
     }
 
-    private func checkRow(icon: String, color: Color, title: String, done: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(color.opacity(0.18))
-                    .frame(width: 34, height: 34)
-                    .overlay {
-                        Image(systemName: icon)
-                            .font(.subheadline)
-                            .foregroundStyle(color)
-                    }
-                Text(title)
-                    .foregroundStyle(done ? .secondary : .primary)
-                    .strikethrough(done, color: .secondary)
-                Spacer()
-                Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(done ? .green : .secondary)
-                    .contentTransition(.symbolEffect(.replace))
-                    .animation(.snappy(duration: 0.2), value: done)
-            }
-        }
-        .buttonStyle(PressableStyle())
-    }
-
-    private var weightRowTitle: String {
-        if let w = weights.last(where: { cal.isDateInToday($0.date) }) {
-            return "Gewicht: \(w.kg.kgText) kg"
-        }
-        return "Gewicht invullen"
-    }
-
-    private var proteinRing: some View {
-        ZStack {
-            Circle().stroke(Color(.tertiarySystemFill), lineWidth: 10)
-            Circle()
-                .trim(from: 0, to: min(1, Double(todayProtein) / Double(max(profile.proteinTarget, 1))))
-                .stroke(.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
-                Text("\(todayProtein)")
-                    .font(.title2.bold())
-                    .contentTransition(.numericText())
-                Text("van \(profile.proteinTarget) g")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: 80, height: 80)
-        .animation(.snappy, value: todayProtein)
-    }
-
-    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12, content: content)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
-    }
-
-    private var sleepText: String {
-        if let h = todayHabits?.sleepHours { return "\(h.kgText) uur geslapen" }
-        return "8 uur slaap"
-    }
-
     private func todayHabitsOrCreate() -> DayHabits {
         if let h = todayHabits { return h }
         let h = DayHabits()
@@ -424,5 +420,58 @@ struct DashboardView: View {
     private func toggleHabit(_ keyPath: ReferenceWritableKeyPath<DayHabits, Bool>) {
         let h = todayHabitsOrCreate()
         h[keyPath: keyPath].toggle()
+    }
+
+    fileprivate struct ScoreBreakdownSheet: View {
+        let score: Int
+        let parts: [(name: String, earned: Int, max: Int)]
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            VStack(spacing: 18) {
+                VStack(spacing: 2) {
+                    Text("\(score)")
+                        .font(.system(size: 44, weight: .heavy))
+                        .monospacedDigit()
+                    Text("Groei Score")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(spacing: 0) {
+                    ForEach(parts, id: \.name) { part in
+                        HStack {
+                            Image(systemName: part.earned == part.max ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(part.earned == part.max ? .primary : .tertiary)
+                            Text(part.name)
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text("\(part.earned) / \(part.max)")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 15)
+                        .padding(.vertical, 11)
+                        if part.name != parts.last?.name {
+                            Divider().padding(.leading, 44)
+                        }
+                    }
+                }
+                .background(Color.cleanCard, in: RoundedRectangle(cornerRadius: 16))
+                Text("Genormaliseerd naar 100 op basis van de habits die je bijhoudt.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .presentationDetents([.height(120 + CGFloat(parts.count) * 46 + 120)])
+        }
+    }
+
+    private func writeSnapshot() {
+        WidgetSnapshot(score: score, protein: todayProtein, proteinTarget: profile.proteinTarget,
+                       trained: trainedToday, creatine: todayHabits?.creatine == true,
+                       weighed: weightLoggedToday, slept: todayHabits?.sleptEnough == true,
+                       streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep).save()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }
