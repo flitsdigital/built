@@ -272,6 +272,9 @@ final class FoodProduct {
     var fat100: Double = 0
     var favorite: Bool = false
     var imageURL: String = ""
+    /// Eigen eenheid: "1 ei" = servingName "ei", servingGrams 60. 0 = alleen gram.
+    var servingGrams: Double = 0
+    var servingName: String = ""
     var createdAt: Date = Date.now
     var lastUsed: Date = Date.now
 

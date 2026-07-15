@@ -15,6 +15,8 @@ enum OFF {
         var carbs100: Double
         var fat100: Double
         var imageURL: String
+        var servingGrams: Double
+        var packageGrams: Double
     }
 
     private struct LookupResponse: Decodable { var product: RawProduct? }
@@ -25,7 +27,18 @@ enum OFF {
         var product_name: String?
         var brands: String?
         var image_front_small_url: String?
+        var serving_quantity: FlexibleDouble?
+        var product_quantity: FlexibleDouble?
         var nutriments: Nutriments?
+    }
+
+    /// OFF levert hoeveelheden soms als getal, soms als string ("250").
+    struct FlexibleDouble: Decodable {
+        let value: Double?
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            value = (try? c.decode(Double.self)) ?? (try? c.decode(String.self)).flatMap(Double.init)
+        }
     }
     private struct Nutriments: Decodable {
         var proteins: Double?
@@ -61,11 +74,13 @@ enum OFF {
         return Product(name: name, brand: raw.brands ?? "", barcode: raw.code ?? "",
                        protein100: n.proteins ?? 0, kcal100: n.kcal ?? 0,
                        carbs100: n.carbs ?? 0, fat100: n.fat ?? 0,
-                       imageURL: raw.image_front_small_url ?? "")
+                       imageURL: raw.image_front_small_url ?? "",
+                       servingGrams: raw.serving_quantity?.value ?? 0,
+                       packageGrams: raw.product_quantity?.value ?? 0)
     }
 
     static func lookup(barcode: String) async -> Product? {
-        guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json?fields=code,product_name,brands,nutriments,image_front_small_url"),
+        guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json?fields=code,product_name,brands,nutriments,image_front_small_url,serving_quantity,product_quantity"),
               let (data, _) = try? await URLSession.shared.data(from: url),
               let response = try? JSONDecoder().decode(LookupResponse.self, from: data),
               let raw = response.product else { return nil }
@@ -79,7 +94,7 @@ enum OFF {
             .init(name: "q", value: query),
             .init(name: "langs", value: "nl,en"),
             .init(name: "page_size", value: "20"),
-            .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url"),
+            .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url,serving_quantity,product_quantity"),
         ]
         if let url = comps.url,
            let (data, _) = try? await URLSession.shared.data(from: url),
@@ -100,7 +115,7 @@ enum OFF {
             .init(name: "action", value: "process"),
             .init(name: "json", value: "1"),
             .init(name: "page_size", value: "20"),
-            .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url"),
+            .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url,serving_quantity,product_quantity"),
         ]
         guard let url = comps.url,
               let (data, _) = try? await URLSession.shared.data(from: url),
@@ -398,6 +413,9 @@ struct FoodLogSheet: View {
         var carbs100: Double = 0
         var fat100: Double = 0
         var imageURL = ""
+        var servingGrams: Double = 0
+        var servingName = ""
+        var packageGrams: Double = 0
         var editable = false
     }
 
@@ -457,7 +475,8 @@ struct FoodLogSheet: View {
                             pending = PendingFood(name: product.name, brand: product.brand, barcode: product.barcode,
                                                   protein100: product.protein100, kcal100: product.kcal100,
                                                   carbs100: product.carbs100, fat100: product.fat100,
-                                                  imageURL: product.imageURL)
+                                                  imageURL: product.imageURL,
+                                                  servingGrams: product.servingGrams, servingName: product.servingName)
                         } label: {
                             productRow(product.name, product.brand, product.protein100, product.kcal100,
                                        favorite: product.favorite, imageURL: product.imageURL)
@@ -485,7 +504,8 @@ struct FoodLogSheet: View {
                             pending = PendingFood(name: product.name, brand: product.brand, barcode: product.barcode,
                                                   protein100: product.protein100, kcal100: product.kcal100,
                                                   carbs100: product.carbs100, fat100: product.fat100,
-                                                  imageURL: product.imageURL)
+                                                  imageURL: product.imageURL,
+                                                  servingGrams: product.servingGrams, packageGrams: product.packageGrams)
                         } label: {
                             productRow(product.name, product.brand, product.protein100, product.kcal100,
                                        favorite: false, imageURL: product.imageURL)
@@ -585,7 +605,8 @@ struct FoodLogSheet: View {
             pending = PendingFood(name: known.name, brand: known.brand, barcode: known.barcode,
                                   protein100: known.protein100, kcal100: known.kcal100,
                                   carbs100: known.carbs100, fat100: known.fat100,
-                                  imageURL: known.imageURL)
+                                  imageURL: known.imageURL,
+                                  servingGrams: known.servingGrams, servingName: known.servingName)
             return
         }
         lookingUp = true
@@ -596,7 +617,8 @@ struct FoodLogSheet: View {
                 pending = PendingFood(name: found.name, brand: found.brand, barcode: found.barcode,
                                       protein100: found.protein100, kcal100: found.kcal100,
                                       carbs100: found.carbs100, fat100: found.fat100,
-                                      imageURL: found.imageURL)
+                                      imageURL: found.imageURL,
+                                      servingGrams: found.servingGrams, packageGrams: found.packageGrams)
             } else {
                 // Niet in de database → één keer zelf invullen, blijft aan de barcode hangen
                 pending = PendingFood(name: "", barcode: code, protein100: 0, kcal100: 0, editable: true)
@@ -702,8 +724,28 @@ struct FoodPortionSheet: View {
     @State private var grams: Int = 100
     @State private var favorite = false
     @State private var mealChoice = ""
+    @State private var unit: Unit = .gram
+    @State private var count: Double = 1
+    @State private var showOwnPortion = false
+    @State private var portionNameInput = ""
+    @State private var portionGramsInput = ""
 
-    private func scaled(_ per100: Double) -> Int { Int((per100 * Double(grams) / 100).rounded()) }
+    enum Unit { case gram, serving, package }
+
+    private var unitName: String {
+        food.servingName.isEmpty ? "portie" : food.servingName
+    }
+
+    /// Wat er echt gelogd wordt, ongeacht de gekozen eenheid.
+    private var effectiveGrams: Int {
+        switch unit {
+        case .gram: grams
+        case .serving: Int((count * food.servingGrams).rounded())
+        case .package: Int((count * food.packageGrams).rounded())
+        }
+    }
+
+    private func scaled(_ per100: Double) -> Int { Int((per100 * Double(effectiveGrams) / 100).rounded()) }
 
     var body: some View {
         NavigationStack {
@@ -747,19 +789,39 @@ struct FoodPortionSheet: View {
                 }
 
                 Section("Portie") {
-                    HStack {
-                        TextField("100", value: $grams, format: .number)
-                            .keyboardType(.numberPad)
-                            .font(.title3.bold().monospacedDigit())
-                            .frame(width: 80)
-                        Text("gram").foregroundStyle(.secondary)
-                        Spacer()
-                        ForEach([50, 100, 250], id: \.self) { preset in
-                            Button("\(preset)") { grams = preset }
-                                .buttonStyle(.bordered)
-                                .buttonBorderShape(.capsule)
-                                .controlSize(.small)
-                                .tint(grams == preset ? .green : .secondary)
+                    if food.servingGrams > 0 || food.packageGrams > 0 {
+                        Picker("Eenheid", selection: $unit) {
+                            Text("gram").tag(Unit.gram)
+                            if food.servingGrams > 0 {
+                                Text(unitName).tag(Unit.serving)
+                            }
+                            if food.packageGrams > 0 {
+                                Text("heel pak").tag(Unit.package)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    switch unit {
+                    case .gram:
+                        HStack {
+                            TextField("100", value: $grams, format: .number)
+                                .keyboardType(.numberPad)
+                                .font(.title3.bold().monospacedDigit())
+                                .frame(width: 80)
+                            Text("gram").foregroundStyle(.secondary)
+                            Spacer()
+                            ForEach([50, 100, 250], id: \.self) { preset in
+                                Button("\(preset)") { grams = preset }
+                                    .buttonStyle(.bordered)
+                                    .buttonBorderShape(.capsule)
+                                    .controlSize(.small)
+                                    .tint(grams == preset ? .green : .secondary)
+                            }
+                        }
+                    case .serving, .package:
+                        Stepper(value: $count, in: 0.5...20, step: 0.5) {
+                            Text("\(count.formatted()) × \(unit == .package ? "pak" : unitName)")
+                            + Text("  \(effectiveGrams) g").foregroundStyle(.secondary)
                         }
                     }
                     Picker("Maaltijd", selection: $mealChoice) {
@@ -768,6 +830,15 @@ struct FoodPortionSheet: View {
                         }
                     }
                     Toggle("Favoriet", isOn: $favorite)
+                    Button {
+                        portionNameInput = food.servingName
+                        portionGramsInput = food.servingGrams > 0 ? "\(Int(food.servingGrams))" : ""
+                        showOwnPortion = true
+                    } label: {
+                        Label(food.servingGrams > 0 ? "Portie aanpassen (\(Int(food.servingGrams)) g)" : "Eigen portie instellen…",
+                              systemImage: "scalemass")
+                            .font(.footnote)
+                    }
                 }
 
                 Section {
@@ -779,7 +850,7 @@ struct FoodPortionSheet: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(grams <= 0 || (food.editable && food.name.trimmingCharacters(in: .whitespaces).isEmpty))
+                    .disabled(effectiveGrams <= 0 || (food.editable && food.name.trimmingCharacters(in: .whitespaces).isEmpty))
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     .listRowBackground(Color.clear)
                 } footer: {
@@ -799,6 +870,23 @@ struct FoodPortionSheet: View {
                 if mealChoice.isEmpty { mealChoice = meal }
                 let existing = products.first { !food.barcode.isEmpty && $0.barcode == food.barcode }
                 favorite = existing?.favorite ?? false
+                if food.servingGrams > 0 { unit = .serving } // "1 ei" is de logische default
+            }
+            .alert("Eigen portie", isPresented: $showOwnPortion) {
+                TextField("Naam (bijv. ei, bakje)", text: $portionNameInput)
+                TextField("Gram per stuk", text: $portionGramsInput)
+                    .keyboardType(.numberPad)
+                Button("Opslaan") {
+                    if let g = Double(portionGramsInput.replacingOccurrences(of: ",", with: ".")), g > 0 {
+                        food.servingGrams = g
+                        food.servingName = portionNameInput.trimmingCharacters(in: .whitespaces)
+                        unit = .serving
+                        count = 1
+                    }
+                }
+                Button("Annuleer", role: .cancel) {}
+            } message: {
+                Text("Wordt op het product bewaard — volgende keer log je gewoon \"1 \(portionNameInput.isEmpty ? "portie" : portionNameInput)\".")
             }
         }
         .presentationDetents([.medium, .large])
@@ -823,6 +911,10 @@ struct FoodPortionSheet: View {
             product.kcal100 = food.kcal100
             product.carbs100 = food.carbs100
             product.fat100 = food.fat100
+        }
+        if food.servingGrams > 0 {
+            product.servingGrams = food.servingGrams
+            product.servingName = food.servingName
         }
         product.favorite = favorite
         product.lastUsed = .now
