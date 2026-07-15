@@ -19,6 +19,7 @@ enum OFF {
 
     private struct LookupResponse: Decodable { var product: RawProduct? }
     private struct SearchResponse: Decodable { var products: [RawProduct] }
+    private struct SaLResponse: Decodable { var hits: [RawProduct] }
     private struct RawProduct: Decodable {
         var code: String?
         var product_name: String?
@@ -71,7 +72,27 @@ enum OFF {
         return product(from: raw)
     }
 
-    static func search(_ query: String) async -> [Product] {
+    static func search(_ query: String) async -> [Product]? {
+        // search-a-licious: veel sneller dan de oude cgi-zoeker, zeker bij de eerste zoekopdracht
+        var comps = URLComponents(string: "https://search.openfoodfacts.org/search")!
+        comps.queryItems = [
+            .init(name: "q", value: query),
+            .init(name: "langs", value: "nl,en"),
+            .init(name: "page_size", value: "20"),
+            .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url"),
+        ]
+        if let url = comps.url,
+           let (data, _) = try? await URLSession.shared.data(from: url),
+           let response = try? JSONDecoder().decode(SaLResponse.self, from: data) {
+            let found = response.hits.compactMap(product(from:))
+            if !found.isEmpty { return found }
+        }
+        return await legacySearch(query)
+    }
+
+    /// nil = OpenFoodFacts niet bereikbaar; [] = echt geen resultaten.
+
+    private static func legacySearch(_ query: String) async -> [Product]? {
         var comps = URLComponents(string: "https://world.openfoodfacts.org/cgi/search.pl")!
         comps.queryItems = [
             .init(name: "search_terms", value: query),
@@ -83,7 +104,7 @@ enum OFF {
         ]
         guard let url = comps.url,
               let (data, _) = try? await URLSession.shared.data(from: url),
-              let response = try? JSONDecoder().decode(SearchResponse.self, from: data) else { return [] }
+              let response = try? JSONDecoder().decode(SearchResponse.self, from: data) else { return nil }
         return response.products.compactMap(product(from:))
     }
 }
@@ -330,6 +351,8 @@ struct FoodLogSheet: View {
     @State private var query = ""
     @State private var results: [OFF.Product] = []
     @State private var searching = false
+    @State private var searchFailed = false
+    @State private var retryToken = 0
     @State private var pending: PendingFood?
     @State private var scanError: String?
     @State private var manualBarcode = ""
@@ -423,6 +446,11 @@ struct FoodLogSheet: View {
                 Section("OpenFoodFacts") {
                     if searching {
                         HStack { ProgressView(); Text("Zoeken…").foregroundStyle(.secondary) }
+                    } else if searchFailed {
+                        Label("OpenFoodFacts is even niet bereikbaar.", systemImage: "wifi.exclamationmark")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        Button("Opnieuw proberen") { retryToken += 1 }
                     } else if results.isEmpty {
                         Text("Niets gevonden. Probeer de scanner of voeg zelf toe via Snel.")
                             .font(.footnote)
@@ -443,12 +471,17 @@ struct FoodLogSheet: View {
                 }
             }
         }
-        .task(id: query) {
-            guard query.count >= 3 else { results = []; return }
+        .task(id: "\(query)#\(retryToken)") {
+            let q = query
+            guard q.count >= 3 else { results = []; searching = false; searchFailed = false; return }
             searching = true
             try? await Task.sleep(for: .milliseconds(400)) // debounce
             guard !Task.isCancelled else { return }
-            results = await OFF.search(query)
+            let found = await OFF.search(q)
+            // Geannuleerde oudere zoektaak mag nieuwere resultaten niet overschrijven
+            guard !Task.isCancelled, q == query else { return }
+            results = found ?? []
+            searchFailed = found == nil
             searching = false
         }
     }
