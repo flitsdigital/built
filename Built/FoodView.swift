@@ -176,6 +176,7 @@ struct FoodView: View {
                 dayHeader
                 summaryRow
             }
+            .listRowSeparator(.hidden)
 
             ForEach(mealOrder, id: \.self) { meal in
                 mealSection(meal)
@@ -189,6 +190,7 @@ struct FoodView: View {
                 }
             }
         }
+        .listSectionSpacing(14)
         .navigationTitle("Eten")
         .sheet(item: $logMeal) { meal in
             FoodLogSheet(profile: profile, meal: meal, day: day)
@@ -201,13 +203,9 @@ struct FoodView: View {
 
     private var dayHeader: some View {
         HStack {
-            Button {
-                withAnimation(.snappy(duration: 0.2)) { day = cal.date(byAdding: .day, value: -1, to: day)! }
-            } label: {
-                Image(systemName: "chevron.left").font(.subheadline.bold())
+            dayChevron("chevron.left", enabled: true) {
+                day = cal.date(byAdding: .day, value: -1, to: day)!
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.green)
             Spacer()
             VStack(spacing: 1) {
                 Text(isToday ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
@@ -222,81 +220,123 @@ struct FoodView: View {
                 }
             }
             Spacer()
-            Button {
-                withAnimation(.snappy(duration: 0.2)) { day = cal.date(byAdding: .day, value: 1, to: day)! }
-            } label: {
-                Image(systemName: "chevron.right").font(.subheadline.bold())
+            dayChevron("chevron.right", enabled: !isToday) {
+                day = cal.date(byAdding: .day, value: 1, to: day)!
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(isToday ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.green))
-            .disabled(isToday)
         }
-        .padding(.vertical, 2)
+    }
+
+    private func dayChevron(_ icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) { action() }
+        } label: {
+            Image(systemName: icon)
+                .font(.footnote.bold())
+                .foregroundStyle(enabled ? AnyShapeStyle(.green) : AnyShapeStyle(.tertiary))
+                .frame(width: 30, height: 30)
+                .background(Color(.tertiarySystemFill), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     private var summaryRow: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 18) {
             ZStack {
                 Circle()
-                    .stroke(Color(.systemFill), lineWidth: 9)
+                    .stroke(Color(.systemFill), lineWidth: 10)
                 Circle()
                     .trim(from: 0, to: min(Double(totalProtein) / Double(max(profile.proteinTarget, 1)), 1))
-                    .stroke(.green, style: StrokeStyle(lineWidth: 9, lineCap: .round))
+                    .stroke(.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .animation(.smooth(duration: 0.5), value: totalProtein)
                 VStack(spacing: 0) {
                     Text("\(totalProtein)")
-                        .font(.title3.bold().monospacedDigit())
+                        .font(.title2.bold().monospacedDigit())
                     Text("van \(profile.proteinTarget) g")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 84, height: 84)
-            VStack(alignment: .leading, spacing: 6) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(totalKcal) / \(kcalTarget) kcal")
-                        .font(.subheadline.bold().monospacedDigit())
+            .frame(width: 96, height: 96)
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text("\(totalKcal)")
+                            .font(.headline.monospacedDigit())
+                        Text("/ \(kcalTarget) kcal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     ProgressView(value: min(Double(totalKcal) / Double(max(kcalTarget, 1)), 1))
                         .tint(totalKcal > kcalTarget ? .orange : .green)
                 }
-                HStack(spacing: 12) {
-                    macroStat("Koolh.", totalCarbs)
-                    macroStat("Vet", totalFat)
+                HStack(spacing: 0) {
+                    macroStat("Eiwit", "\(totalProtein) g")
+                    macroStat("Koolh.", "\(totalCarbs) g")
+                    macroStat("Vet", "\(totalFat) g")
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
-    private func macroStat(_ label: String, _ grams: Int) -> some View {
-        HStack(spacing: 4) {
+    private func macroStat(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.footnote.bold().monospacedDigit())
             Text(label)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text("\(grams) g")
-                .font(.caption.bold().monospacedDigit())
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private static let mealEmoji = ["breakfast": "🍳", "lunch": "🥪", "dinner": "🍽️", "snack": "🍎"]
 
     private func mealSection(_ meal: String) -> some View {
         let list = entries(for: meal)
         let protein = list.map(\.grams).reduce(0, +)
         let kcal = list.map(\.kcal).reduce(0, +)
         return Section {
+            // Kaartkop: hele rij tikbaar om te loggen (Yazio-patroon)
+            Button {
+                logMeal = meal
+            } label: {
+                HStack(spacing: 12) {
+                    Text(Self.mealEmoji[meal] ?? "🍽️")
+                        .font(.title3)
+                        .frame(width: 40, height: 40)
+                        .background(Color(.tertiarySystemFill), in: Circle())
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(mealNames[meal] ?? meal)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(list.isEmpty ? "Nog niets gelogd" : "\(protein) g eiwit · \(kcal) kcal")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.green)
+                }
+            }
+            .buttonStyle(.plain)
+
             ForEach(list) { entry in
                 Button {
                     editingEntry = entry
                 } label: {
                     HStack(spacing: 10) {
-                        if let image = products.first(where: { $0.name == entry.label && !$0.imageURL.isEmpty }) {
-                            FoodThumb(url: image.imageURL, size: 36)
-                        }
+                        FoodThumb(url: products.first(where: { $0.name == entry.label })?.imageURL ?? "", size: 34)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(entry.label)
+                                .font(.subheadline)
                                 .foregroundStyle(.primary)
-                            if entry.kcal > 0 || entry.carbs > 0 || entry.fat > 0 {
-                                Text("\(entry.kcal) kcal\(entry.carbs > 0 ? " · \(entry.carbs) K" : "")\(entry.fat > 0 ? " · \(entry.fat) V" : "")")
+                                .lineLimit(1)
+                            if entry.kcal > 0 {
+                                Text("\(entry.kcal) kcal")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -311,22 +351,6 @@ struct FoodView: View {
             }
             .onDelete { offsets in
                 for i in offsets { context.delete(list[i]) }
-            }
-            Button {
-                logMeal = meal
-            } label: {
-                Label("Toevoegen", systemImage: "plus.circle.fill")
-                    .foregroundStyle(.green)
-            }
-        } header: {
-            HStack {
-                Text(mealNames[meal] ?? meal)
-                Spacer()
-                if protein > 0 {
-                    Text("\(protein) g · \(kcal) kcal")
-                        .textCase(nil)
-                        .font(.caption.monospacedDigit())
-                }
             }
         }
     }
