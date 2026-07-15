@@ -841,23 +841,30 @@ struct FoodPortionSheet: View {
                     }
                 }
 
-                Section {
+            }
+            .safeAreaInset(edge: .bottom) {
+                // Logknop altijd in beeld, ook op de halve sheet-hoogte
+                VStack(spacing: 6) {
                     Button {
                         log()
                     } label: {
                         Text("Log \(scaled(food.protein100)) g eiwit · \(scaled(food.kcal100)) kcal")
                             .font(.headline)
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(effectiveGrams <= 0 || (food.editable && food.name.trimmingCharacters(in: .whitespaces).isEmpty))
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                    .listRowBackground(Color.clear)
-                } footer: {
                     if food.carbs100 > 0 || food.fat100 > 0 {
                         Text("Ook: \(scaled(food.carbs100)) g koolhydraten · \(scaled(food.fat100)) g vet")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
+                .padding(.horizontal)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+                .background(.regularMaterial)
             }
             .navigationTitle("Portie")
             .navigationBarTitleDisplayMode(.inline)
