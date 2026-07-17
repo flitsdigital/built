@@ -160,6 +160,19 @@ struct WorkoutLiveActivity: Widget {
                     ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
                                  countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
                         .tint(.green)
+                    HStack(spacing: 8) {
+                        Button(intent: RestControlIntent(action: "extend")) {
+                            Text("+15s").font(.caption.bold()).frame(maxWidth: .infinity)
+                        }
+                        .tint(.green)
+                        Button(intent: RestControlIntent(action: "skip")) {
+                            Text("Skip").font(.caption.bold()).frame(maxWidth: .infinity)
+                        }
+                        .tint(.secondary)
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
                 }
                 if let tip = context.state.tip {
                     Label(tip, systemImage: "lightbulb.fill")
@@ -213,6 +226,19 @@ struct WorkoutLiveActivity: Widget {
                             ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
                                          countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
                                 .tint(.green)
+                            HStack(spacing: 8) {
+                                Button(intent: RestControlIntent(action: "extend")) {
+                                    Text("+15s").font(.caption.bold()).frame(maxWidth: .infinity)
+                                }
+                                .tint(.green)
+                                Button(intent: RestControlIntent(action: "skip")) {
+                                    Text("Skip").font(.caption.bold()).frame(maxWidth: .infinity)
+                                }
+                                .tint(.secondary)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.small)
                         }
                         if let tip = context.state.tip {
                             Label(tip, systemImage: "lightbulb.fill")

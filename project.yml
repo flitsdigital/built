@@ -43,6 +43,7 @@ targets:
       - BuiltWidget
       - Built/WidgetSnapshot.swift
       - Built/WorkoutActivity.swift
+      - Built/RestControlIntent.swift
     entitlements:
       path: BuiltWidget/BuiltWidget.entitlements
       properties:

@@ -68,6 +68,9 @@ struct RootView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 Sync.appActive = phase == .active
+                if phase == .active {
+                    workoutStatus.reconcileRestOverride() // +15s/Skip vanaf het lockscreen overnemen
+                }
                 if phase == .background {
                     Notifier.shared.refresh() // meldingen herplannen op actuele staat
                     Task { await Sync.pushIfChanged(context) }

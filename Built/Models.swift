@@ -110,6 +110,20 @@ final class WorkoutStatus {
         Notifier.shared.cancelRest()
         pushActivity()
     }
+
+    /// Neemt een +15s/Skip over die via de Live Activity-knop is gedaan terwijl de app sliep.
+    func reconcileRestOverride() {
+        let defaults = UserDefaults(suiteName: "group.com.jordiklavers.Built")
+        guard let defaults, defaults.object(forKey: "restOverride") != nil else { return }
+        let value = defaults.double(forKey: "restOverride")
+        defaults.removeObject(forKey: "restOverride")
+        if value == 0 {
+            stopRest()
+        } else {
+            let end = Date(timeIntervalSinceReferenceDate: value)
+            if end > .now { schedule(end: end) } else { stopRest() }
+        }
+    }
 }
 
 @Model
