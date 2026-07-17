@@ -10,6 +10,7 @@ struct InsightsView: View {
     @Query private var habits: [DayHabits]
     @Query(sort: \CustomHabit.createdAt) private var customHabits: [CustomHabit]
     @Query private var habitLogs: [HabitLog]
+    @Query private var exercises: [Exercise]
 
     private var cal: Calendar { .current }
 
@@ -88,11 +89,8 @@ struct InsightsView: View {
         if let d = weekDelta, profile.weeklyRate > 0, d < 0.05 {
             out.append(("Gewicht staat stil. Voeg ±250 kcal per dag toe.", true))
         }
-        for name in topExercises {
-            let tops = sessionTops(name)
-            if tops.count >= 4, Set(tops.suffix(4).map(\.kg)).count == 1 {
-                out.append(("\(name) staat al \(tops.suffix(4).count) sessies op \(tops.last!.kg.kgText) kg — probeer een deload (-10%) of een variatie.", true))
-            }
+        for lift in plateauedLifts.prefix(2) {
+            out.append(("\(lift.name) staat al \(lift.sessions) sessies vast — probeer een deload (-10%) of een variatie.", true))
         }
         let recentProteins = proteins.filter { inLastWeek($0.date) }
         let totalGrams = recentProteins.map(\.grams).reduce(0, +)
@@ -142,6 +140,43 @@ struct InsightsView: View {
     private func delta(_ tops: [(day: Date, kg: Double)]) -> Int? {
         guard tops.count >= 2, let first = tops.first?.kg, let last = tops.last?.kg, first > 0 else { return nil }
         return Int(((last - first) / first * 100).rounded())
+    }
+
+    // MARK: - Plateaus (geschat 1RM per sessie)
+
+    private func sessionE1RMs(_ name: String) -> [Double] {
+        Dictionary(grouping: sets.filter { $0.exercise == name }) { cal.startOfDay(for: $0.date) }
+            .sorted { $0.key < $1.key }
+            .map { _, daySets in daySets.map { epley($0.weightKg, $0.reps) }.max() ?? 0 }
+    }
+
+    /// Lifts zonder nieuw 1RM-record in de laatste 3 sessies (min. 5 sessies).
+    private var plateauedLifts: [(name: String, sessions: Int, kg: Double)] {
+        var out: [(String, Int, Double)] = []
+        for name in Set(sets.map(\.exercise)) {
+            let e = sessionE1RMs(name)
+            guard e.count >= 5 else { continue }
+            let priorBest = e.dropLast(3).max() ?? 0
+            let recentBest = e.suffix(3).max() ?? 0
+            if recentBest <= priorBest * 1.005 {
+                let topKg = sets.filter { $0.exercise == name }.map(\.weightKg).max() ?? 0
+                out.append((name, e.count, topKg))
+            }
+        }
+        return out.sorted { $0.1 > $1.1 }
+    }
+
+    // MARK: - Volume per spiergroep (laatste 28 dagen)
+
+    private var muscleVolume: [(muscle: String, volume: Double)] {
+        let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
+        let since = cal.startOfDay(for: .now).addingTimeInterval(-27 * 86_400)
+        var totals: [String: Double] = [:]
+        for s in sets where s.date >= since {
+            let m = muscleOf[s.exercise] ?? "Overig"
+            totals[m, default: 0] += s.weightKg * Double(s.reps)
+        }
+        return totals.filter { $0.value > 0 }.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
     }
 
     // MARK: - Body
@@ -225,6 +260,52 @@ struct InsightsView: View {
                 }
             }
 
+            if !muscleVolume.isEmpty {
+                Section {
+                    ForEach(muscleVolume, id: \.muscle) { row in
+                        HStack {
+                            Text(row.muscle)
+                            Spacer()
+                            Text("\(Int(row.volume)) kg")
+                                .font(.subheadline.bold().monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .listRowSeparator(.hidden)
+                        muscleBar(row.volume, max: muscleVolume.first?.volume ?? 1)
+                    }
+                } header: {
+                    Text("Volume per spiergroep")
+                } footer: {
+                    Text("Laatste 28 dagen. Zie je een spiergroep achterblijven, voeg er een oefening voor toe.")
+                }
+            }
+
+            if !plateauedLifts.isEmpty {
+                Section {
+                    ForEach(plateauedLifts, id: \.name) { lift in
+                        NavigationLink {
+                            ExerciseDetailView(exercise: lift.name)
+                        } label: {
+                            Label {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(lift.name)
+                                    Text("\(lift.sessions) sessies zonder nieuw record")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "chart.line.flattrend.xyaxis")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Plateaus")
+                } footer: {
+                    Text("Deload-tip: doe één week op ~90% met dezelfde reps, bouw daarna weer op. Vaak breek je er zo doorheen.")
+                }
+            }
+
             Section {
                 if topExercises.isEmpty {
                     Text("Na 2+ sessies per oefening verschijnt hier je krachtcurve.")
@@ -251,6 +332,16 @@ struct InsightsView: View {
         .navigationDestination(item: $selectedDayBox) { box in
             DayDetailView(day: box.day, profile: profile)
         }
+    }
+
+    private func muscleBar(_ value: Double, max: Double) -> some View {
+        GeometryReader { geo in
+            RoundedRectangle(cornerRadius: 3)
+                .fill(.green.opacity(0.25))
+                .frame(width: geo.size.width * (max > 0 ? value / max : 0), height: 6)
+        }
+        .frame(height: 6)
+        .listRowSeparator(.hidden)
     }
 
     /// 5 weken × 7 dagen; gevuld = perfecte dag, tik = logboek.

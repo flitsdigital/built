@@ -210,6 +210,11 @@ struct ProfileView: View {
                         Label("Meldingen", systemImage: "bell.badge")
                     }
                 }
+                NavigationLink {
+                    ExerciseLibraryView()
+                } label: {
+                    Label("Oefeningen", systemImage: "dumbbell")
+                }
                 Picker(selection: $restSeconds) {
                     Text("Uit").tag(0)
                     Text("1:00").tag(60)

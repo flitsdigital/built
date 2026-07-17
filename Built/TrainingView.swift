@@ -63,8 +63,7 @@ struct TrainingView: View {
     @State private var startedAt = Date.now
     @State private var summary: WorkoutSummary?
     @State private var editingRoutine: Routine?
-    @State private var showNewExercise = false
-    @State private var newExerciseName = ""
+    @State private var showExercisePicker = false
     @State private var showNewRoutine = false
     @State private var newRoutineName = ""
     @State private var confirmDiscard = false
@@ -392,14 +391,10 @@ struct TrainingView: View {
         .navigationDestination(item: $editingRoutine) { routine in
             RoutineEditorView(routine: routine)
         }
-        .alert("Nieuwe oefening", isPresented: $showNewExercise) {
-            TextField("bijv. Bench Press", text: $newExerciseName)
-            Button("Toevoegen") {
-                let name = newExerciseName.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty { addExercise(name) }
-                newExerciseName = ""
+        .sheet(isPresented: $showExercisePicker) {
+            ExercisePickerSheet(exclude: Set(workout.map(\.name))) { name in
+                addExercise(name)
             }
-            Button("Annuleer", role: .cancel) { newExerciseName = "" }
         }
         .alert("Nieuwe routine", isPresented: $showNewRoutine) {
             TextField("bijv. Push, Pull of Upper A", text: $newRoutineName)
@@ -785,11 +780,8 @@ struct TrainingView: View {
         }
 
         Section {
-            Menu {
-                ForEach(recentExercises.filter { name in !workout.contains { $0.name == name } }, id: \.self) { name in
-                    Button(name) { addExercise(name) }
-                }
-                Button("Nieuwe oefening…") { showNewExercise = true }
+            Button {
+                showExercisePicker = true
             } label: {
                 Label("Oefening toevoegen", systemImage: "plus")
                     .font(.subheadline.bold())
@@ -959,16 +951,7 @@ struct RoutineEditorView: View {
     @Bindable var routine: Routine
     @Environment(\.modelContext) private var context
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
-    @State private var showNewExercise = false
-    @State private var newExerciseName = ""
-
-    private var recentExercises: [String] {
-        var names: [String] = []
-        for s in sets where !names.contains(s.exercise) {
-            names.append(s.exercise)
-        }
-        return names.filter { !routine.exercises.contains($0) }
-    }
+    @State private var showPicker = false
 
     private func subtitle(for name: String) -> String {
         var parts: [String] = []
@@ -1011,11 +994,8 @@ struct RoutineEditorView: View {
                     }
                     routine.exercises.remove(atOffsets: offsets)
                 }
-                Menu {
-                    ForEach(recentExercises, id: \.self) { name in
-                        Button(name) { routine.exercises.append(name) }
-                    }
-                    Button("Nieuwe oefening…") { showNewExercise = true }
+                Button {
+                    showPicker = true
                 } label: {
                     Label("Oefening toevoegen", systemImage: "plus")
                 }
@@ -1029,16 +1009,10 @@ struct RoutineEditorView: View {
         .navigationTitle($routine.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { EditButton() }
-        .alert("Nieuwe oefening", isPresented: $showNewExercise) {
-            TextField("bijv. Bench Press", text: $newExerciseName)
-            Button("Toevoegen") {
-                let name = newExerciseName.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty, !routine.exercises.contains(name) {
-                    routine.exercises.append(name)
-                }
-                newExerciseName = ""
+        .sheet(isPresented: $showPicker) {
+            ExercisePickerSheet(exclude: Set(routine.exercises)) { name in
+                if !routine.exercises.contains(name) { routine.exercises.append(name) }
             }
-            Button("Annuleer", role: .cancel) { newExerciseName = "" }
         }
     }
 }
@@ -1048,18 +1022,10 @@ struct RoutineExerciseEditor: View {
     @Bindable var routine: Routine
     let exercise: String
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
-    @State private var showNewAlt = false
-    @State private var newAltName = ""
+    @State private var showAltPicker = false
 
     private var target: [Int] { routine.targets[exercise] ?? [3, 8] }
     private func setTarget(sets s: Int, reps r: Int) { routine.targets[exercise] = [s, r] }
-
-    private var altCandidates: [String] {
-        var names: [String] = []
-        for s in sets where !names.contains(s.exercise) { names.append(s.exercise) }
-        let taken = Set([exercise] + (routine.alternatives[exercise] ?? []))
-        return names.filter { !taken.contains($0) }
-    }
 
     var body: some View {
         List {
@@ -1087,11 +1053,8 @@ struct RoutineExerciseEditor: View {
                     alts.remove(atOffsets: offsets)
                     routine.alternatives[exercise] = alts.isEmpty ? nil : alts
                 }
-                Menu {
-                    ForEach(altCandidates, id: \.self) { candidate in
-                        Button(candidate) { routine.alternatives[exercise, default: []].append(candidate) }
-                    }
-                    Button("Nieuwe oefening…", systemImage: "plus") { showNewAlt = true }
+                Button {
+                    showAltPicker = true
                 } label: {
                     Label("Alternatief toevoegen", systemImage: "plus")
                 }
@@ -1103,14 +1066,10 @@ struct RoutineExerciseEditor: View {
         }
         .navigationTitle(exercise)
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Nieuw alternatief", isPresented: $showNewAlt) {
-            TextField("bijv. Machine Press", text: $newAltName)
-            Button("Toevoegen") {
-                let name = newAltName.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty { routine.alternatives[exercise, default: []].append(name) }
-                newAltName = ""
+        .sheet(isPresented: $showAltPicker) {
+            ExercisePickerSheet(exclude: Set([exercise] + (routine.alternatives[exercise] ?? []))) { name in
+                routine.alternatives[exercise, default: []].append(name)
             }
-            Button("Annuleer", role: .cancel) { newAltName = "" }
         }
     }
 }

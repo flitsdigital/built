@@ -13,7 +13,7 @@ struct BuiltApp: App {
                 .tint(.green) // ponytail: één accentkleur voor de hele app
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
-        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self])
+        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self, Exercise.self])
     }
 }
 
@@ -51,6 +51,7 @@ struct RootView: View {
                     workoutStatus.resumeWorkout(at: saved.startedAt)
                 }
                 workoutStatus.cleanupStaleActivities() // na herstart hangt er anders een oude activity
+                Exercise.bootstrap(context) // catalogus vullen + vrije-tekst-namen inhalen
                 Notifier.shared.context = context
                 guard Sync.isConfigured else { return }
                 // Bepaal veilig of auto-push mag; haalt bij een lege install eerst alles op

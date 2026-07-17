@@ -70,6 +70,7 @@ enum Sync {
     }
     private struct ScaleRow: Codable { var user_id: UUID; var name: String; var correction: Double }
     private struct CustomHabitRow: Codable { var user_id: UUID; var name: String; var created_at: Date }
+    private struct ExerciseRow: Codable { var user_id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date }
     private struct HabitLogRow: Codable { var user_id: UUID; var name: String; var date: Date }
 
     private struct Payload: Codable {
@@ -81,6 +82,7 @@ enum Sync {
         var routines: [RoutineRow] = []
         var meals: [MealRow] = []
         var foods: [FoodRow] = []
+        var exercises: [ExerciseRow] = []
         var scales: [ScaleRow] = []
         var customHabits: [CustomHabitRow] = []
         var habitLogs: [HabitLogRow] = []
@@ -146,6 +148,8 @@ enum Sync {
                            favorite: $0.favorite, image_url: $0.imageURL,
                            serving_grams: $0.servingGrams, serving_name: $0.servingName,
                            created_at: $0.createdAt) }
+        p.exercises = try context.fetch(FetchDescriptor<Exercise>(sortBy: [.init(\.name)]))
+            .map { ExerciseRow(user_id: uid, name: $0.name, muscle: $0.muscle, type: $0.type, created_at: $0.createdAt) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
             .map { ScaleRow(user_id: uid, name: $0.name, correction: $0.offset) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
@@ -194,6 +198,7 @@ enum Sync {
         let routineRows: [RoutineRow] = try await db.from("routines").select().eq("user_id", value: uid).execute().value
         let mealRows: [MealRow] = try await db.from("meals").select().eq("user_id", value: uid).execute().value
         let foodRows: [FoodRow] = try await db.from("food_products").select().eq("user_id", value: uid).execute().value
+        let exerciseRows: [ExerciseRow] = try await db.from("exercises").select().eq("user_id", value: uid).execute().value
         let scaleRows: [ScaleRow] = try await db.from("scales").select().eq("user_id", value: uid).execute().value
         let customRows: [CustomHabitRow] = try await db.from("custom_habits").select().eq("user_id", value: uid).execute().value
         let logRows: [HabitLogRow] = try await db.from("habit_logs").select().eq("user_id", value: uid).execute().value
@@ -251,6 +256,11 @@ enum Sync {
             f.createdAt = r.created_at
             context.insert(f)
         }
+        for r in exerciseRows {
+            let ex = Exercise(name: r.name, muscle: r.muscle, type: r.type)
+            ex.createdAt = r.created_at
+            context.insert(ex)
+        }
         for r in scaleRows {
             let scale = Scale(name: r.name)
             scale.offset = r.correction
@@ -279,6 +289,7 @@ enum Sync {
         try context.delete(model: Routine.self)
         try context.delete(model: Meal.self)
         try context.delete(model: FoodProduct.self)
+        try context.delete(model: Exercise.self)
         try context.delete(model: Scale.self)
         try context.delete(model: CustomHabit.self)
         try context.delete(model: HabitLog.self)
