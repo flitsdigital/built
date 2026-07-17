@@ -1067,41 +1067,47 @@ struct WorkoutSummarySheet: View {
     @State private var bounced = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.green)
-                .symbolEffect(.bounce, value: bounced)
-            Text("Sterk werk, \(name)! 💪")
-                .font(.title2.bold())
-            HStack {
-                statTile("\(summary.minutes)", "minuten")
-                statTile("\(summary.volume)", "kg volume")
-                statTile("\(summary.sets)", "sets")
-            }
-            if let prev = summary.previousVolume, prev > 0 {
-                let delta = summary.volume - prev
-                Text("\(delta >= 0 ? "+" : "")\(delta) kg volume t.o.v. je vorige training")
-                    .font(.footnote)
-                    .foregroundStyle(delta >= 0 ? .green : .secondary)
-            }
-            if !summary.prs.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(summary.prs, id: \.exercise) { pr in
-                        Text("🏆 \(pr.exercise): e1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
-                            .font(.subheadline.bold())
+        ScrollView {
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.green)
+                    .symbolEffect(.bounce, value: bounced)
+                Text("Sterk werk, \(name)! 💪")
+                    .font(.title2.bold())
+                HStack {
+                    statTile("\(summary.minutes)", "minuten")
+                    statTile("\(summary.volume)", "kg volume")
+                    statTile("\(summary.sets)", "sets")
+                }
+                if let prev = summary.previousVolume, prev > 0 {
+                    let delta = summary.volume - prev
+                    Text("\(delta >= 0 ? "+" : "")\(delta) kg volume t.o.v. je vorige training")
+                        .font(.footnote)
+                        .foregroundStyle(delta >= 0 ? .green : .secondary)
+                }
+                if !summary.prs.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(summary.prs, id: \.exercise) { pr in
+                            Text("🏆 \(pr.exercise): e1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
+                                .font(.subheadline.bold())
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                }
+                if !summary.muscles.isEmpty {
+                    VStack(spacing: 6) {
+                        Text("Vandaag geraakt").font(.caption).foregroundStyle(.secondary)
+                        BodyMapView(values: summary.muscles, figureHeight: 180)
                     }
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             }
-            if !summary.muscles.isEmpty {
-                VStack(spacing: 6) {
-                    Text("Vandaag geraakt").font(.caption).foregroundStyle(.secondary)
-                    BodyMapView(values: summary.muscles)
-                }
-            }
+            .padding(24)
+            .padding(.bottom, 8)
+        }
+        .safeAreaInset(edge: .bottom) {
             Button {
                 dismiss()
             } label: {
@@ -1110,9 +1116,12 @@ struct WorkoutSummarySheet: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
-        .padding(24)
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         .onAppear { bounced = true }
         .sensoryFeedback(.success, trigger: bounced)
     }

@@ -5,6 +5,7 @@ import SwiftUI
 struct BodyMapView: View {
     /// Spiergroep → intensiteit 0…1.
     var values: [String: Double]
+    var figureHeight: CGFloat = 250
     var onTap: (String) -> Void = { _ in }
 
     var body: some View {
@@ -25,7 +26,7 @@ struct BodyMapView: View {
                 }
                 .animation(.smooth(duration: 0.4), value: values)
             }
-            .frame(width: 120, height: 250)
+            .frame(width: figureHeight * 0.48, height: figureHeight)
             Text(caption).font(.caption2).foregroundStyle(.secondary)
         }
     }
