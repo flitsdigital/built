@@ -265,55 +265,27 @@ struct FoodView: View {
     }
 
     private var summaryRow: some View {
-        HStack(spacing: 18) {
-            ZStack {
-                Circle()
-                    .stroke(Color(.systemFill), lineWidth: 10)
-                Circle()
-                    .trim(from: 0, to: min(Double(totalProtein) / Double(max(profile.proteinTarget, 1)), 1))
-                    .stroke(.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.smooth(duration: 0.5), value: totalProtein)
-                VStack(spacing: 0) {
-                    Text("\(totalProtein)")
-                        .font(.title2.bold().monospacedDigit())
-                    Text("van \(profile.proteinTarget) g")
-                        .font(.caption2)
+        VStack(spacing: 12) {
+            MacroRings(protein: totalProtein, proteinTarget: profile.proteinTarget,
+                       carbs: totalCarbs, fat: totalFat)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text("\(totalKcal)")
+                        .font(.subheadline.bold().monospacedDigit())
+                    Text("/ \(kcalTarget) kcal")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(kcalTarget - totalKcal >= 0 ? "\(kcalTarget - totalKcal) over" : "\(totalKcal - kcalTarget) te veel")
+                        .font(.caption)
+                        .foregroundStyle(totalKcal > kcalTarget ? .orange : .secondary)
                 }
-            }
-            .frame(width: 96, height: 96)
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text("\(totalKcal)")
-                            .font(.headline.monospacedDigit())
-                        Text("/ \(kcalTarget) kcal")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: min(Double(totalKcal) / Double(max(kcalTarget, 1)), 1))
-                        .tint(totalKcal > kcalTarget ? .orange : .green)
-                }
-                HStack(spacing: 0) {
-                    macroStat("Eiwit", "\(totalProtein) g")
-                    macroStat("Koolh.", "\(totalCarbs) g")
-                    macroStat("Vet", "\(totalFat) g")
-                }
+                ProgressView(value: min(Double(totalKcal) / Double(max(kcalTarget, 1)), 1))
+                    .tint(totalKcal > kcalTarget ? .orange : .green)
             }
         }
         .padding(.vertical, 8)
-    }
-
-    private func macroStat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value)
-                .font(.footnote.bold().monospacedDigit())
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static let mealEmoji = ["breakfast": "🍳", "lunch": "🥪", "dinner": "🍽️", "snack": "🍎"]

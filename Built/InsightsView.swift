@@ -168,6 +168,16 @@ struct InsightsView: View {
 
     // MARK: - Volume per spiergroep (laatste 28 dagen)
 
+    private var muscleIntensity: [String: Double] {
+        let mv = muscleVolume
+        guard let maxV = mv.map(\.volume).max(), maxV > 0 else { return [:] }
+        return Dictionary(mv.map { ($0.muscle, $0.volume / maxV) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private func volumeFor(_ muscle: String) -> Int {
+        Int(muscleVolume.first { $0.muscle == muscle }?.volume ?? 0)
+    }
+
     private var muscleVolume: [(muscle: String, volume: Double)] {
         let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
         let since = cal.startOfDay(for: .now).addingTimeInterval(-27 * 86_400)
@@ -189,6 +199,7 @@ struct InsightsView: View {
     @State private var showReview = false
     @State private var volumeWeeks = 8
     @State private var selectedDayBox: DayBox?
+    @State private var selectedMuscle: String?
 
     private var perfectLast7: Int { daysBack(7).filter(perfectDay).count }
 
@@ -212,6 +223,28 @@ struct InsightsView: View {
                     Label("Bekijk week review", systemImage: "chart.bar.doc.horizontal")
                 }
             }
+
+            Section {
+                    BodyMapView(values: muscleIntensity) { muscle in
+                        withAnimation(.snappy) { selectedMuscle = muscle }
+                    }
+                    .padding(.vertical, 4)
+                    .listRowSeparator(.hidden)
+                    if let m = selectedMuscle {
+                        HStack {
+                            Circle().fill(Color.muscleTint(muscleIntensity[m] ?? 0)).frame(width: 10, height: 10)
+                            Text(m).font(.subheadline.bold())
+                            Spacer()
+                            Text("\(volumeFor(m)) kg")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Volume per spiergroep")
+                } footer: {
+                    Text("Laatste 28 dagen — voller groen = meer volume. Tik op een spiergroep. Zie je er een achterblijven, voeg er een oefening voor toe.")
+                }
 
             Section {
                 NavigationLink {
@@ -269,25 +302,6 @@ struct InsightsView: View {
                 }
             }
 
-            if !muscleVolume.isEmpty {
-                Section {
-                    ForEach(muscleVolume, id: \.muscle) { row in
-                        HStack {
-                            Text(row.muscle)
-                            Spacer()
-                            Text("\(Int(row.volume)) kg")
-                                .font(.subheadline.bold().monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        .listRowSeparator(.hidden)
-                        muscleBar(row.volume, max: muscleVolume.first?.volume ?? 1)
-                    }
-                } header: {
-                    Text("Volume per spiergroep")
-                } footer: {
-                    Text("Laatste 28 dagen. Zie je een spiergroep achterblijven, voeg er een oefening voor toe.")
-                }
-            }
 
             if !plateauedLifts.isEmpty {
                 Section {
