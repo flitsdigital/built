@@ -251,7 +251,7 @@ struct DashboardView: View {
             }
             Divider()
             HStack {
-                Text("Je ligt \(onSchedulePct)% op schema")
+                Text(weights.count < 2 ? "Log een paar metingen voor je schema-status" : "Je ligt \(onSchedulePct)% op schema")
                 Spacer()
                 Text("Dag \(profile.daysIn + 1)")
             }
@@ -285,6 +285,9 @@ struct DashboardView: View {
                 }
                 .frame(width: 96, height: 96)
                 .animation(.snappy, value: score)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Groei Score")
+                .accessibilityValue("\(score) van 100")
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("🔥 Groei Score")
@@ -432,6 +435,9 @@ struct DashboardView: View {
         }
         .frame(width: 80, height: 80)
         .animation(.snappy, value: todayProtein)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Eiwit")
+        .accessibilityValue("\(todayProtein) van \(profile.proteinTarget) gram")
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {

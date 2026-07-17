@@ -56,6 +56,8 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         var trainingsTarget = 3
         var trainingDays: [Int] = []
         var plannedToday = false
+        var schedule: [String: String] = [:]
+        var plannedRoutineToday: String?
     }
 
     private func computeState() -> DayState? {
@@ -80,6 +82,8 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         s.trainingsTarget = profile.trainingsPerWeek
         s.trainingDays = profile.trainingDays
         s.plannedToday = profile.trainingDays.contains(cal.component(.weekday, from: .now))
+        s.schedule = profile.schedule
+        s.plannedRoutineToday = profile.plannedRoutine(weekday: cal.component(.weekday, from: .now))
         s.streak = DayCheck.streak(proteins: proteins, weights: weights, habits: habits,
                                    target: profile.proteinTarget,
                                    requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
@@ -97,7 +101,9 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if s.creatineOpen { items.append("creatine") }
         if !s.weighedToday { items.append("wegen") }
         if s.sleepOpen { items.append("slaap afvinken") }
-        if s.plannedToday, !s.trainedToday { items.append("trainen") }
+        if s.plannedToday, !s.trainedToday {
+            items.append(s.plannedRoutineToday.map { "\($0) trainen" } ?? "trainen")
+        }
         return items
     }
 
@@ -166,8 +172,11 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
                 guard let fire = cal.nextDate(after: .now, matching: comps, matchingPolicy: .nextTime),
                       cal.isDate(fire, equalTo: .now, toGranularity: .weekOfYear) else { continue }
                 if s.trainedToday, cal.isDateInToday(fire) { continue }
+                let planned = s.schedule[String(weekday)]
+                let body = planned.map { "Vandaag staat \($0) gepland — nog \(remaining) van \(s.trainingsTarget) deze week." }
+                    ?? "Nog \(remaining) van je \(s.trainingsTarget) trainingen deze week — vanavond eentje?"
                 oneShot(id: "week-\(weekday)", title: "Trainingsweek 🏋️",
-                        body: "Nog \(remaining) van je \(s.trainingsTarget) trainingen deze week — vanavond eentje?",
+                        body: body,
                         at: fire, action: "training")
             }
         }

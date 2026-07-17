@@ -156,6 +156,7 @@ struct FoodView: View {
     @State private var day = Calendar.current.startOfDay(for: .now)
     @State private var logMeal: String?
     @State private var editingEntry: ProteinEntry?
+    @State private var showReport = false
 
     private var cal: Calendar { .current }
     private var isToday: Bool { cal.isDateInToday(day) }
@@ -207,6 +208,14 @@ struct FoodView: View {
         }
         .listSectionSpacing(14)
         .navigationTitle("Eten")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showReport = true } label: { Image(systemName: "chart.bar.doc.horizontal") }
+            }
+        }
+        .sheet(isPresented: $showReport) {
+            NutritionReportSheet(profile: profile, kcalTarget: kcalTarget)
+        }
         .sheet(item: $logMeal) { meal in
             FoodLogSheet(profile: profile, meal: meal, day: day)
         }
@@ -964,5 +973,88 @@ struct BarcodeScanner: UIViewControllerRepresentable {
                 onScan(code)
             }
         }
+    }
+}
+
+
+/// Weekrapport: gemiddeld eiwit/kcal, adherence en beste/slechtste dag (7 dagen).
+struct NutritionReportSheet: View {
+    let profile: Profile
+    let kcalTarget: Int
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+    @Query private var proteins: [ProteinEntry]
+
+    private var cal: Calendar { .current }
+
+    private struct DayTotal { let day: Date; let protein: Int; let kcal: Int }
+
+    private var last7: [DayTotal] {
+        (0..<7).reversed().compactMap { offset -> DayTotal? in
+            guard let day = cal.date(byAdding: .day, value: -offset, to: cal.startOfDay(for: .now)) else { return nil }
+            let entries = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }
+            return DayTotal(day: day, protein: entries.map(\.grams).reduce(0, +), kcal: entries.map(\.kcal).reduce(0, +))
+        }
+    }
+
+    private var loggedDays: [DayTotal] { last7.filter { $0.protein > 0 || $0.kcal > 0 } }
+    private var avgProtein: Int { loggedDays.isEmpty ? 0 : loggedDays.map(\.protein).reduce(0, +) / loggedDays.count }
+    private var avgKcal: Int { loggedDays.isEmpty ? 0 : loggedDays.map(\.kcal).reduce(0, +) / loggedDays.count }
+    private var adherence: Int {
+        let hit = last7.filter { $0.protein >= profile.proteinTarget }.count
+        return Int((Double(hit) / 7 * 100).rounded())
+    }
+    private var best: DayTotal? { loggedDays.max { $0.protein < $1.protein } }
+    private var worst: DayTotal? { loggedDays.min { $0.protein < $1.protein } }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 0) {
+                        stat("\(avgProtein) g", "eiwit/dag")
+                        Divider()
+                        stat("\(avgKcal)", "kcal/dag")
+                        Divider()
+                        stat("\(adherence)%", "eiwitdoel gehaald")
+                    }
+                } header: {
+                    Text("Gemiddelde — laatste 7 dagen")
+                }
+
+                Section("Per dag") {
+                    ForEach(last7, id: \.day) { d in
+                        HStack {
+                            Text(d.day.formatted(.dateTime.weekday(.wide)))
+                            Spacer()
+                            Text(d.protein >= profile.proteinTarget ? "\(d.protein) g ✓" : "\(d.protein) g")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(d.protein >= profile.proteinTarget ? .green : .secondary)
+                        }
+                    }
+                }
+
+                if let best, let worst {
+                    Section("Uitschieters") {
+                        LabeledContent("Beste dag", value: "\(best.day.formatted(.dateTime.weekday(.abbreviated))) · \(best.protein) g")
+                        LabeledContent("Zwakste dag", value: "\(worst.day.formatted(.dateTime.weekday(.abbreviated))) · \(worst.protein) g")
+                    }
+                }
+            }
+            .navigationTitle("Weekrapport")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Klaar") { dismiss() } }
+            }
+        }
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.headline.monospacedDigit())
+            Text(label).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
     }
 }
