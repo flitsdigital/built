@@ -82,6 +82,14 @@ struct RootView: View {
         "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 
+    /// Eén tab-pagina; alleen de geselecteerde is zichtbaar en tikbaar (staat blijft behouden).
+    @ViewBuilder private func tabPage(_ index: Int, @ViewBuilder _ page: () -> some View) -> some View {
+        page()
+            .opacity(tab == index ? 1 : 0)
+            .allowsHitTesting(tab == index)
+            .accessibilityHidden(tab != index)
+    }
+
     /// Rusttimer als brede balk: leeglopende progressielijn (Hevy) + duurmenu, +15s en Skip.
     private func restBar(end: Date) -> some View {
         let start = workoutStatus.restStartedAt ?? end.addingTimeInterval(-Double(max(restSeconds, 30)))
@@ -192,19 +200,15 @@ struct RootView: View {
                     .foregroundStyle(.secondary)
             }
         } else if let profile = profiles.first {
-            TabView(selection: $tab) {
-                NavigationStack { DashboardView(profile: profile, selectedTab: $tab).tabBarClearance() }
-                    .tag(0)
-                NavigationStack { TrainingView(profile: profile).tabBarClearance() }
-                    .tag(1)
-                NavigationStack { FoodView(profile: profile).tabBarClearance() }
-                    .tag(2)
-                NavigationStack { WeightView(profile: profile).tabBarClearance() }
-                    .tag(3)
-                NavigationStack { InsightsView(profile: profile).tabBarClearance() }
-                    .tag(4)
-                NavigationStack { JournalView(profile: profile).tabBarClearance() }
-                    .tag(5)
+            // Eigen container i.p.v. TabView: die maakt bij >5 tabs een systeem-"Meer"-tab.
+            // Alle stacks blijven leven zodat navigatie-/scrollstaat per tab behouden blijft.
+            ZStack {
+                tabPage(0) { NavigationStack { DashboardView(profile: profile, selectedTab: $tab).tabBarClearance() } }
+                tabPage(1) { NavigationStack { TrainingView(profile: profile).tabBarClearance() } }
+                tabPage(2) { NavigationStack { FoodView(profile: profile).tabBarClearance() } }
+                tabPage(3) { NavigationStack { WeightView(profile: profile).tabBarClearance() } }
+                tabPage(4) { NavigationStack { InsightsView(profile: profile).tabBarClearance() } }
+                tabPage(5) { NavigationStack { JournalView(profile: profile).tabBarClearance() } }
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
