@@ -213,6 +213,15 @@ struct InsightsView: View {
                 }
             }
 
+            Section {
+                NavigationLink {
+                    RecordsView()
+                } label: {
+                    Label("Records", systemImage: "trophy.fill")
+                        .foregroundStyle(.primary)
+                }
+            }
+
             Section("Coach") {
                 ForEach(advices, id: \.text) { advice in
                     Label {
@@ -607,6 +616,33 @@ struct ExerciseDetailView: View {
             .sorted { $0.0 < $1.0 }
     }
 
+    /// Geschat 1RM (beste) per sessie.
+    private var e1rmSessions: [(day: Date, kg: Double)] {
+        Dictionary(grouping: sets) { cal.startOfDay(for: $0.date) }
+            .map { ($0.key, $0.value.map { epley($0.weightKg, $0.reps) }.max() ?? 0) }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    /// Lineaire trend op e1RM → kg/dag en de geprojecteerde waarde over 4 weken.
+    private var projection: (slopePerWeek: Double, in4Weeks: Double, current: Double)? {
+        let pts = e1rmSessions
+        guard pts.count >= 3, let first = pts.first?.day else { return nil }
+        let xs = pts.map { $0.day.timeIntervalSince(first) / 86_400 } // dagen
+        let ys = pts.map(\.kg)
+        let n = Double(xs.count)
+        let sx = xs.reduce(0, +), sy = ys.reduce(0, +)
+        let sxy = zip(xs, ys).map(*).reduce(0, +)
+        let sxx = xs.map { $0 * $0 }.reduce(0, +)
+        let denom = n * sxx - sx * sx
+        guard abs(denom) > 0.0001 else { return nil }
+        let slope = (n * sxy - sx * sy) / denom          // kg per dag
+        let intercept = (sy - slope * sx) / n
+        let lastX = xs.last ?? 0
+        let current = slope * lastX + intercept
+        let in4 = slope * (lastX + 28) + intercept
+        return (slope * 7, in4, current)
+    }
+
     private func isRecordDay(_ day: Date) -> Bool {
         let dayBest = sets.filter { cal.isDate($0.date, inSameDayAs: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
         let before = sets.filter { $0.date < cal.startOfDay(for: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
@@ -636,6 +672,33 @@ struct ExerciseDetailView: View {
                     .padding(.vertical, 8)
                 }
             }
+            if let p = projection, p.slopePerWeek > 0.05 {
+                Section {
+                    LabeledContent("Tempo", value: "+\(p.slopePerWeek.formatted(.number.precision(.fractionLength(1)))) kg/week (1RM)")
+                    LabeledContent("Over 4 weken", value: "≈ \(p.in4Weeks.kgText) kg")
+                    Chart {
+                        ForEach(e1rmSessions, id: \.day) { item in
+                            PointMark(x: .value("Dag", item.day), y: .value("1RM", item.kg))
+                                .foregroundStyle(.green.opacity(0.5))
+                        }
+                        if let last = e1rmSessions.last,
+                           let end = cal.date(byAdding: .day, value: 28, to: last.day) {
+                            LineMark(x: .value("Dag", last.day), y: .value("1RM", p.current), series: .value("s", "proj"))
+                            LineMark(x: .value("Dag", end), y: .value("1RM", p.in4Weeks), series: .value("s", "proj"))
+                                .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                        }
+                    }
+                    .foregroundStyle(.green)
+                    .chartYScale(domain: .automatic(includesZero: false))
+                    .frame(height: 160)
+                    .padding(.vertical, 8)
+                } header: {
+                    Text("Krachtprojectie")
+                } footer: {
+                    Text("Lineaire trend op je geschatte 1RM. Een schatting, geen belofte — blijf progressief overladen.")
+                }
+            }
+
             Section("Historie") {
                 ForEach(days, id: \.self) { day in
                     let daySets = sets.filter { cal.isDate($0.date, inSameDayAs: day) }

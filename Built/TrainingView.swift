@@ -8,6 +8,9 @@ struct DraftSet: Identifiable {
     var done = false
     var previous: String?
     var savedEntry: SetEntry?
+    var warmup = false
+    var dropset = false
+    var failure = false
 }
 
 struct DraftExercise: Identifiable {
@@ -18,6 +21,10 @@ struct DraftExercise: Identifiable {
     var note = ""
     /// Routine-oefening waar deze voor invalt (voor terugwisselen).
     var originalName: String?
+    /// Superset-groep ("A"/"B"/…); zelfde groep = weinig rust ertussen.
+    var superset: String?
+    /// Rusttijd-override voor deze oefening (seconden); nil = globaal.
+    var restSeconds: Int?
 }
 
 /// Lopende training op schijf, zodat een force-quit hem niet weggooit.
@@ -27,6 +34,9 @@ struct SavedWorkout: Codable, Equatable {
         var reps: Int
         var done: Bool
         var previous: String?
+        var warmup: Bool?
+        var dropset: Bool?
+        var failure: Bool?
     }
     struct SavedExercise: Codable, Equatable {
         var name: String
@@ -34,6 +44,8 @@ struct SavedWorkout: Codable, Equatable {
         var note: String
         var sets: [SavedSet]
         var originalName: String?
+        var superset: String?
+        var restSeconds: Int?
     }
     var startedAt: Date
     var exercises: [SavedExercise]
@@ -68,6 +80,7 @@ struct TrainingView: View {
     @State private var newRoutineName = ""
     @State private var confirmDiscard = false
     @State private var dayToDelete: Date?
+    @State private var prToast: String?
     @FocusState private var focusedSet: UUID?
     private let workoutStatus = WorkoutStatus.shared
 
@@ -212,6 +225,44 @@ struct TrainingView: View {
         return nil
     }
 
+    /// Effectieve rusttijd voor een oefening (per-oefening override of globaal).
+    private func restFor(_ name: String) -> Int {
+        workout.first { $0.name == name }?.restSeconds ?? restSeconds
+    }
+
+    /// Volledige vorige sessie van deze oefening, bijv. "40×8  40×8  37,5×7".
+    private func lastSessionSummary(_ name: String) -> String? {
+        let last = lastSession(for: name)
+        guard !last.isEmpty else { return nil }
+        return last.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  ")
+    }
+
+    private func restLabel(_ seconds: Int) -> String {
+        seconds <= 0 ? "uit" : "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    }
+
+    private func setRest(_ id: UUID, _ seconds: Int?) {
+        guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
+        workout[i].restSeconds = seconds
+    }
+
+    private func moveExercise(_ id: UUID, by offset: Int) {
+        guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
+        let j = i + offset
+        guard workout.indices.contains(j) else { return }
+        withAnimation(.snappy(duration: 0.25)) { workout.swapAt(i, j) }
+    }
+
+    /// Nieuw geschat 1RM-record t.o.v. je historie én eerdere sets deze sessie?
+    private func isNewPR(exercise name: String, kg: Double, reps: Int) -> Bool {
+        let now = epley(kg, reps)
+        let historical = sets.filter { $0.exercise == name && $0.date < startedAt }
+            .map { epley($0.weightKg, $0.reps) }.max() ?? 0
+        let sessionBest = workout.first { $0.name == name }?.sets
+            .filter { $0.done && !$0.warmup }.map { epley($0.kg, $0.reps) }.max() ?? 0
+        return now > max(historical, sessionBest) + 0.1 && historical > 0
+    }
+
     private func prInfo(_ ex: DraftExercise) -> (new: Double, old: Double)? {
         guard let doneMax = ex.sets.filter(\.done).map({ epley($0.kg, $0.reps) }).max() else { return nil }
         guard let prev = sets.filter({ $0.exercise == ex.name && $0.date < startedAt })
@@ -232,8 +283,8 @@ struct TrainingView: View {
         guard active else { return nil }
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
             .init(name: ex.name, tip: ex.tip, note: ex.note,
-                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) },
-                  originalName: ex.originalName)
+                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure) },
+                  originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }, alternatives: alternatives.isEmpty ? nil : alternatives)
     }
 
@@ -245,8 +296,8 @@ struct TrainingView: View {
         startedAt = saved.startedAt
         workout = saved.exercises.map { ex in
             DraftExercise(name: ex.name, tip: ex.tip,
-                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) },
-                          note: ex.note, originalName: ex.originalName)
+                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false) },
+                          note: ex.note, originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }
         alternatives = saved.alternatives ?? [:]
         active = true
@@ -261,6 +312,32 @@ struct TrainingView: View {
         return ([original] + alts).filter { $0 != ex.name }
     }
 
+    /// Warming-up-sets vóór de werksets: ramp naar het eerste werkgewicht.
+    private func addWarmup(_ id: UUID) {
+        guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
+        let work = workout[i].sets.first { !$0.warmup }
+        let topKg = work?.kg ?? 20
+        let reps = work?.reps ?? 8
+        let ramp: [(Double, Int)] = [(0.4, min(reps + 4, 10)), (0.6, max(reps - 2, 3)), (0.8, max(reps - 4, 2))]
+        let warmups = ramp.map { pct, r in
+            DraftSet(kg: (topKg * pct / 2.5).rounded() * 2.5, reps: r, warmup: true)
+        }
+        withAnimation(.snappy(duration: 0.25)) { workout[i].sets.insert(contentsOf: warmups, at: 0) }
+    }
+
+    private func removeWarmup(_ id: UUID) {
+        guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
+        withAnimation(.snappy(duration: 0.25)) { workout[i].sets.removeAll(where: \.warmup) }
+    }
+
+    /// Na een superset-set (niet de laatste van de groep in de volgorde) sla je de rust over.
+    private func shouldRest(after name: String) -> Bool {
+        guard let i = workout.firstIndex(where: { $0.name == name }),
+              let group = workout[i].superset else { return true }
+        let next = workout.indices.contains(i + 1) ? workout[i + 1].superset : nil
+        return next != group
+    }
+
     private func swapExercise(_ id: UUID, to newName: String) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
         let original = workout[i].originalName ?? workout[i].name
@@ -270,9 +347,15 @@ struct TrainingView: View {
     }
 
     private func startWorkout(with names: [String], alternatives alts: [String: [String]] = [:],
-                             targets: [String: [Int]] = [:]) {
+                             targets: [String: [Int]] = [:], supersets: [String: String] = [:],
+                             restByExercise: [String: Int] = [:]) {
         startedAt = .now
-        workout = names.map { draft(for: $0, target: targets[$0]) }
+        workout = names.map { name in
+            var d = draft(for: name, target: targets[name])
+            d.superset = supersets[name]
+            d.restSeconds = restByExercise[name]
+            return d
+        }
         alternatives = alts
         WorkoutStatus.shared.startWorkout(at: startedAt)
         withAnimation(.snappy(duration: 0.3)) { active = true }
@@ -334,8 +417,8 @@ struct TrainingView: View {
         }
     }
 
-    private var doneCount: Int { workout.flatMap(\.sets).filter(\.done).count }
-    private var volume: Int { Int(workout.flatMap(\.sets).filter(\.done).map { $0.kg * Double($0.reps) }.reduce(0, +)) }
+    private var doneCount: Int { workout.flatMap(\.sets).filter { $0.done && !$0.warmup }.count }
+    private var volume: Int { Int(workout.flatMap(\.sets).filter { $0.done && !$0.warmup }.map { $0.kg * Double($0.reps) }.reduce(0, +)) }
 
     // MARK: - Body
 
@@ -373,6 +456,24 @@ struct TrainingView: View {
         }
         .sensoryFeedback(.impact, trigger: doneCount)
         .sensoryFeedback(.success, trigger: prCount) { old, new in new > old }
+        .overlay(alignment: .top) {
+            if let prToast {
+                Text(prToast)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.green, in: Capsule())
+                    .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task {
+                        try? await Task.sleep(for: .seconds(2.2))
+                        withAnimation(.snappy) { self.prToast = nil }
+                    }
+            }
+        }
+        .animation(.snappy(duration: 0.3), value: prToast)
+        .sensoryFeedback(.success, trigger: prToast) { _, new in new != nil }
         .confirmationDialog("Trainingsdag verwijderen?",
                             isPresented: Binding(get: { dayToDelete != nil },
                                                  set: { if !$0 { dayToDelete = nil } }),
@@ -503,7 +604,7 @@ struct TrainingView: View {
 
     private func plannedCard(_ planned: Routine) -> some View {
         Button {
-            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets)
+            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets, supersets: planned.supersets, restByExercise: planned.restByExercise)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "calendar.badge.clock")
@@ -565,7 +666,7 @@ struct TrainingView: View {
                     if routine.exercises.isEmpty {
                         editingRoutine = routine
                     } else {
-                        startWorkout(with: routine.exercises, alternatives: routine.alternatives, targets: routine.targets)
+                        startWorkout(with: routine.exercises, alternatives: routine.alternatives, targets: routine.targets, supersets: routine.supersets, restByExercise: routine.restByExercise)
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -715,7 +816,8 @@ struct TrainingView: View {
                 .listRowSeparator(.hidden)
 
                 ForEach($ex.sets) { $set in
-                    setRow($set, number: (ex.sets.firstIndex { $0.id == set.id } ?? 0) + 1, exercise: ex.name)
+                    let idx = ex.sets.firstIndex { $0.id == set.id } ?? 0
+                    setRow($set, number: ex.sets[...idx].filter { !$0.warmup }.count, exercise: ex.name)
                 }
                 .onDelete { offsets in
                     for i in offsets {
@@ -738,9 +840,18 @@ struct TrainingView: View {
             } header: {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(ex.name)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
+                        HStack(spacing: 6) {
+                            if let group = ex.superset {
+                                Text("Superset \(group)")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(.green.opacity(0.18), in: Capsule())
+                                    .foregroundStyle(.green)
+                            }
+                            Text(ex.name)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                        }
                         if let pr = prInfo(ex) {
                             Text("🏆 Nieuw record — geschat 1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
                                 .font(.caption.bold())
@@ -748,6 +859,12 @@ struct TrainingView: View {
                                 .transition(.scale(scale: 0.9).combined(with: .opacity))
                         } else if let tip = ex.tip {
                             Text(tip).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let prev = lastSessionSummary(ex.name) {
+                            Label(prev, systemImage: "clock.arrow.circlepath")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
                         }
                     }
                     Spacer()
@@ -766,6 +883,20 @@ struct TrainingView: View {
                                 }
                             }
                         }
+                        if ex.sets.contains(where: \.warmup) {
+                            Button("Warming-up weghalen", systemImage: "flame") { removeWarmup(ex.id) }
+                        } else {
+                            Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
+                        }
+                        Menu("Rust: \(restLabel(ex.restSeconds ?? restSeconds))", systemImage: "timer") {
+                            Button("Standaard (\(restLabel(restSeconds)))") { setRest(ex.id, nil) }
+                            ForEach([60, 90, 120, 180], id: \.self) { sec in
+                                Button(restLabel(sec)) { setRest(ex.id, sec) }
+                            }
+                        }
+                        Divider()
+                        Button("Verplaats omhoog", systemImage: "arrow.up") { moveExercise(ex.id, by: -1) }
+                        Button("Verplaats omlaag", systemImage: "arrow.down") { moveExercise(ex.id, by: 1) }
                         Button("Oefening verwijderen", systemImage: "trash", role: .destructive) {
                             removeExercise(ex.id)
                         }
@@ -825,13 +956,30 @@ struct TrainingView: View {
         return prevText
     }
 
+    private func setLabel(_ set: DraftSet, number: Int) -> String {
+        if set.warmup { return "W" }
+        var s = "\(number)"
+        if set.dropset { s += " D" }
+        if set.failure { s += " F" }
+        return s
+    }
+
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String) -> some View {
         HStack(spacing: 12) {
-            Text("\(number)")
+            Text(setLabel(set.wrappedValue, number: number))
                 .font(.subheadline.monospacedDigit().bold())
-                .foregroundStyle(.secondary)
-                .frame(width: 24, alignment: .leading)
+                .foregroundStyle(set.wrappedValue.warmup || set.wrappedValue.dropset || set.wrappedValue.failure
+                                 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .frame(width: 34, alignment: .leading)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
+                .contextMenu {
+                    Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
+                        set.wrappedValue.dropset.toggle()
+                    }
+                    Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
+                        set.wrappedValue.failure.toggle()
+                    }
+                }
             Text(set.wrappedValue.previous ?? "—")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
@@ -858,10 +1006,19 @@ struct TrainingView: View {
                 withAnimation(.snappy(duration: 0.25)) {
                     set.wrappedValue.done.toggle()
                     if set.wrappedValue.done {
-                        let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps)
-                        context.insert(e)
-                        set.wrappedValue.savedEntry = e
-                        WorkoutStatus.shared.startRest(seconds: restSeconds)
+                        if !set.wrappedValue.warmup {
+                            let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps)
+                            context.insert(e)
+                            set.wrappedValue.savedEntry = e
+                        }
+                        // Warming-up en tussen-superset-sets: geen (of minimale) rust
+                        if !set.wrappedValue.warmup, shouldRest(after: exercise) {
+                            WorkoutStatus.shared.startRest(seconds: restFor(exercise))
+                        }
+                        if !set.wrappedValue.warmup,
+                           isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps) {
+                            prToast = "🏆 Record — \(exercise)!"
+                        }
                     } else {
                         // Na een herstelde training is savedEntry weg — zoek 'm terug
                         let e = set.wrappedValue.savedEntry ?? sets.first {
@@ -1042,6 +1199,33 @@ struct RoutineExerciseEditor: View {
                 Text("Doel")
             } footer: {
                 Text("Bij het starten van de routine krijg je \(target[0]) sets van \(target[1]) reps voorgezet.")
+            }
+
+            Section {
+                Picker("Superset", selection: Binding(
+                    get: { routine.supersets[exercise] ?? "" },
+                    set: { routine.supersets[exercise] = $0.isEmpty ? nil : $0 }
+                )) {
+                    Text("Geen").tag("")
+                    ForEach(["A", "B", "C", "D"], id: \.self) { Text("Groep \($0)").tag($0) }
+                }
+            } footer: {
+                Text("Oefeningen in dezelfde groep doe je achter elkaar met weinig rust ertussen; de rusttimer start pas na de laatste van de groep.")
+            }
+
+            Section {
+                Picker("Rusttijd", selection: Binding(
+                    get: { routine.restByExercise[exercise] ?? 0 },
+                    set: { routine.restByExercise[exercise] = $0 == 0 ? nil : $0 }
+                )) {
+                    Text("Standaard").tag(0)
+                    Text("1:00").tag(60)
+                    Text("1:30").tag(90)
+                    Text("2:00").tag(120)
+                    Text("3:00").tag(180)
+                }
+            } footer: {
+                Text("Rust ná een set van deze oefening. \u{201C}Standaard\u{201D} volgt de instelling in je profiel.")
             }
 
             Section {

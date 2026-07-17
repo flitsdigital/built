@@ -365,6 +365,10 @@ final class Routine {
     var alternatives: [String: [String]] = [:]
     /// Doel per oefening als [sets, reps], bijv. "3× dumbbell press" = [3, 10].
     var targets: [String: [Int]] = [:]
+    /// Superset-groep per oefening (naam → "A"/"B"/…). Zelfde groep = weinig rust ertussen.
+    var supersets: [String: String] = [:]
+    /// Rusttijd per oefening in seconden; ontbreekt = de globale instelling.
+    var restByExercise: [String: Int] = [:]
     init(name: String, exercises: [String] = []) {
         self.name = name
         self.exercises = exercises
