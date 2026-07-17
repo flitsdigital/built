@@ -29,6 +29,8 @@ struct ProfileView: View {
     @State private var confirmLogout = false
     @State private var habitToDelete: CustomHabit?
     @State private var scaleToDelete: Scale?
+    @State private var calMessage: String?
+    @State private var calBusy = false
     private let syncStatus = SyncStatus.shared
 
     private let weekdayOptions: [(day: Int, label: String)] = [
@@ -301,6 +303,31 @@ struct ProfileView: View {
                 }
             }
 
+            Section {
+                Button {
+                    syncCalendar()
+                } label: {
+                    if calBusy { ProgressView() }
+                    else { Label("Zet weekplanning in agenda", systemImage: "calendar.badge.plus") }
+                }
+                .disabled(calBusy)
+                if CalendarSync.hasCreatedEvents {
+                    Button(role: .destructive) {
+                        CalendarSync.removeCreated()
+                        calMessage = "Built-events verwijderd."
+                    } label: {
+                        Label("Verwijder Built-events", systemImage: "calendar.badge.minus")
+                    }
+                }
+                if let calMessage {
+                    Text(calMessage).font(.footnote).foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Agenda")
+            } footer: {
+                Text("Zet je weekplanning (komende 4 weken) in je iOS-agenda. Staat je Google-account onder Instellingen → Agenda, dan verschijnt het in Google Calendar en synct het twee kanten op.")
+            }
+
             Section("Over") {
                 LabeledContent("Versie", value: appVersion)
                 if !weights.isEmpty {
@@ -370,6 +397,25 @@ struct ProfileView: View {
             Button("Annuleer", role: .cancel) {}
         } message: {
             Text("Je data blijft altijd op je account staan. \"Toestel leegmaken\" verwijdert alleen de lokale kopie.")
+        }
+    }
+
+    private func syncCalendar() {
+        calBusy = true
+        calMessage = nil
+        Task {
+            guard await CalendarSync.requestAccess() else {
+                calMessage = "Geen agenda-toegang. Zet 'm aan via Instellingen → Built."
+                calBusy = false
+                return
+            }
+            do {
+                let n = try CalendarSync.sync(profile: profile)
+                calMessage = n > 0 ? "\(n) trainingen in je agenda gezet ✓" : "Nog geen weekplanning ingesteld (Training-tab)."
+            } catch {
+                calMessage = "Mislukt: \(error.localizedDescription)"
+            }
+            calBusy = false
         }
     }
 

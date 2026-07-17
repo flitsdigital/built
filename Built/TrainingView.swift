@@ -126,6 +126,26 @@ struct TrainingView: View {
         (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: cal.startOfDay(for: .now)) }
     }
 
+    private let planDays: [(day: Int, label: String)] = [
+        (2, "Maandag"), (3, "Dinsdag"), (4, "Woensdag"), (5, "Donderdag"),
+        (6, "Vrijdag"), (7, "Zaterdag"), (1, "Zondag"),
+    ]
+
+    private var todayPlanned: Routine? {
+        guard let name = profile.plannedRoutine(weekday: cal.component(.weekday, from: .now)) else { return nil }
+        return routines.first { $0.name == name }
+    }
+
+    private func assignRoutine(_ name: String?, to weekday: Int) {
+        if let name {
+            profile.schedule[String(weekday)] = name
+            if !profile.trainingDays.contains(weekday) { profile.trainingDays.append(weekday) }
+        } else {
+            profile.schedule[String(weekday)] = nil
+            profile.trainingDays.removeAll { $0 == weekday }
+        }
+    }
+
     private func trained(on day: Date) -> Bool {
         sets.contains { cal.isDate($0.date, inSameDayAs: day) }
     }
@@ -153,21 +173,28 @@ struct TrainingView: View {
 
     // MARK: - Doelgerichte voorstellen (dubbele progressie)
 
-    private func draft(for name: String) -> DraftExercise {
+    private func draft(for name: String, target: [Int]? = nil) -> DraftExercise {
         let last = lastSession(for: name)
+        let goalSets = target.map { max($0.first ?? 3, 1) }
+        let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
         guard !last.isEmpty else {
-            return DraftExercise(name: name, tip: "Eerste keer — kies een gewicht dat je 8 reps aankan.",
-                                 sets: (0..<3).map { _ in DraftSet(kg: 20, reps: 8) })
+            let n = goalSets ?? 3
+            let reps = goalReps ?? 8
+            return DraftExercise(name: name, tip: "Eerste keer — kies een gewicht dat je \(reps) reps aankan.",
+                                 sets: (0..<n).map { _ in DraftSet(kg: 20, reps: reps) })
         }
         let top = last.map(\.weightKg).max() ?? 20
-        let allEight = last.allSatisfy { $0.reps >= 8 }
-        let tip = allEight
-            ? "Vorige keer alles ≥ 8 reps → vandaag \((top + 2.5).kgText) kg"
+        let allEnough = last.allSatisfy { $0.reps >= (goalReps ?? 8) }
+        let tip = allEnough
+            ? "Vorige keer alles gehaald → vandaag \((top + 2.5).kgText) kg"
             : "Zelfde gewicht, probeer 1 rep meer per set."
-        return DraftExercise(name: name, tip: tip, sets: last.map { s in
-            DraftSet(kg: allEight ? top + 2.5 : top,
-                     reps: allEight ? 8 : min(s.reps + 1, 12),
-                     previous: "\(s.weightKg.kgText)×\(s.reps)")
+        // Aantal sets uit het target (of het aantal van vorige keer), reps uit het target
+        let count = goalSets ?? last.count
+        return DraftExercise(name: name, tip: tip, sets: (0..<count).map { i in
+            let prev = i < last.count ? last[i] : last.last
+            return DraftSet(kg: allEnough ? top + 2.5 : top,
+                            reps: goalReps ?? (allEnough ? 8 : min((prev?.reps ?? 8) + 1, 12)),
+                            previous: prev.map { "\($0.weightKg.kgText)×\($0.reps)" })
         })
     }
 
@@ -243,9 +270,10 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.25)) { workout[i] = replacement }
     }
 
-    private func startWorkout(with names: [String], alternatives alts: [String: [String]] = [:]) {
+    private func startWorkout(with names: [String], alternatives alts: [String: [String]] = [:],
+                             targets: [String: [Int]] = [:]) {
         startedAt = .now
-        workout = names.map(draft(for:))
+        workout = names.map { draft(for: $0, target: targets[$0]) }
         alternatives = alts
         WorkoutStatus.shared.startWorkout(at: startedAt)
         withAnimation(.snappy(duration: 0.3)) { active = true }
@@ -393,8 +421,7 @@ struct TrainingView: View {
     }
 
     // MARK: - Idle (Hevy Workout-tab)
-
-    @ViewBuilder private var idleSections: some View {
+    private var thisWeekSection: some View {
         Section {
             VStack(spacing: 10) {
                 HStack {
@@ -406,30 +433,113 @@ struct TrainingView: View {
                 }
                 HStack(spacing: 8) {
                     ForEach(weekDays, id: \.self) { day in
-                        let did = trained(on: day)
-                        VStack(spacing: 4) {
-                            Text(day.formatted(.dateTime.weekday(.narrow)))
-                                .font(.caption2)
-                                .foregroundStyle(cal.isDateInToday(day) ? .primary : .secondary)
-                            ZStack {
-                                Circle()
-                                    .fill(did ? Color.green : Color(.tertiarySystemFill))
-                                    .frame(width: 30, height: 30)
-                                if did {
-                                    Image(systemName: "dumbbell.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.white)
-                                } else if cal.isDateInToday(day) {
-                                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: 30, height: 30)
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
+                        weekDot(day)
                     }
                 }
             }
             .padding(.vertical, 4)
         }
+    }
+
+    private func weekDot(_ day: Date) -> some View {
+        let did = trained(on: day)
+        return VStack(spacing: 4) {
+            Text(day.formatted(.dateTime.weekday(.narrow)))
+                .font(.caption2)
+                .foregroundStyle(cal.isDateInToday(day) ? .primary : .secondary)
+            ZStack {
+                Circle()
+                    .fill(did ? Color.green : Color(.tertiarySystemFill))
+                    .frame(width: 30, height: 30)
+                if did {
+                    Image(systemName: "dumbbell.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white)
+                } else if cal.isDateInToday(day) {
+                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: 30, height: 30)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var planningSection: some View {
+        if !routines.isEmpty {
+            Section {
+                ForEach(planDays, id: \.day) { entry in
+                    planningRow(entry.day, entry.label)
+                }
+            } header: {
+                Text("Weekplanning")
+            } footer: {
+                Text("Koppel een routine aan een dag. Op die dag zie je bovenaan \u{201C}Vandaag gepland\u{201D} en tellen meldingen mee.")
+            }
+        }
+    }
+
+    private func planningRow(_ weekday: Int, _ label: String) -> some View {
+        let assigned = profile.plannedRoutine(weekday: weekday)
+        return Menu {
+            Button("Rustdag") { assignRoutine(nil, to: weekday) }
+            Divider()
+            ForEach(routines) { routine in
+                Button {
+                    assignRoutine(routine.name, to: weekday)
+                } label: {
+                    if assigned == routine.name {
+                        Label(routine.name, systemImage: "checkmark")
+                    } else {
+                        Text(routine.name)
+                    }
+                }
+            }
+        } label: {
+            HStack {
+                Text(label).foregroundStyle(.primary)
+                Spacer()
+                Text(assigned ?? "Rustdag")
+                    .foregroundStyle(assigned == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.green))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func plannedCard(_ planned: Routine) -> some View {
+        Button {
+            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.title)
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Vandaag gepland").font(.caption).foregroundStyle(.secondary)
+                    Text(planned.name).font(.headline).foregroundStyle(.primary)
+                }
+                Spacer()
+                Text("Start")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.green, in: Capsule())
+            }
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+
+    @ViewBuilder private var idleSections: some View {
+        if let planned = todayPlanned, !trained(on: cal.startOfDay(for: .now)) {
+            Section { plannedCard(planned) }
+        }
+
+        thisWeekSection
+
+        planningSection
 
         Section("Snel starten") {
             Button {
@@ -460,7 +570,7 @@ struct TrainingView: View {
                     if routine.exercises.isEmpty {
                         editingRoutine = routine
                     } else {
-                        startWorkout(with: routine.exercises, alternatives: routine.alternatives)
+                        startWorkout(with: routine.exercises, alternatives: routine.alternatives, targets: routine.targets)
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -735,28 +845,21 @@ struct TrainingView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 64, alignment: .leading)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
-            TextField("kg", value: set.kg, format: .number)
-                .keyboardType(.decimalPad)
-                .multilineTextAlignment(.center)
-                .font(.subheadline.bold().monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+            NumericField(value: set.kg, decimal: true, placeholder: "kg",
+                         focus: $focusedSet, id: set.wrappedValue.id,
+                         disabled: set.wrappedValue.done)
                 .frame(width: 56)
                 .padding(.vertical, 6)
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                .focused($focusedSet, equals: set.wrappedValue.id)
-                .disabled(set.wrappedValue.done)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
-            TextField("reps", value: set.reps, format: .number)
-                .keyboardType(.numberPad)
-                .multilineTextAlignment(.center)
-                .font(.subheadline.bold().monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+            NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
+                                        set: { set.wrappedValue.reps = Int($0) }),
+                         decimal: false, placeholder: "reps",
+                         focus: $focusedSet, id: nil,
+                         disabled: set.wrappedValue.done)
                 .frame(width: 48)
                 .padding(.vertical, 6)
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                .disabled(set.wrappedValue.done)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
             Spacer()
             Button {
@@ -858,8 +961,6 @@ struct RoutineEditorView: View {
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @State private var showNewExercise = false
     @State private var newExerciseName = ""
-    @State private var altTarget: String?
-    @State private var newAltName = ""
 
     private var recentExercises: [String] {
         var names: [String] = []
@@ -869,68 +970,45 @@ struct RoutineEditorView: View {
         return names.filter { !routine.exercises.contains($0) }
     }
 
-    private func altCandidates(for name: String) -> [String] {
-        var names: [String] = []
-        for s in sets where !names.contains(s.exercise) {
-            names.append(s.exercise)
+    private func subtitle(for name: String) -> String {
+        var parts: [String] = []
+        if let t = routine.targets[name], t.count > 1 {
+            parts.append("\(t[0]) × \(t[1])")
         }
-        let taken = Set([name] + (routine.alternatives[name] ?? []))
-        return names.filter { !taken.contains($0) }
+        let alts = routine.alternatives[name] ?? []
+        if !alts.isEmpty { parts.append("Alt: \(alts.joined(separator: ", "))") }
+        return parts.joined(separator: "  ·  ")
     }
 
     var body: some View {
         List {
             Section {
                 ForEach(routine.exercises, id: \.self) { name in
-                    Menu {
-                        let alts = routine.alternatives[name] ?? []
-                        if !alts.isEmpty {
-                            Section("Alternatieven — tik om te verwijderen") {
-                                ForEach(alts, id: \.self) { alt in
-                                    Button(alt, systemImage: "minus.circle", role: .destructive) {
-                                        routine.alternatives[name]?.removeAll { $0 == alt }
-                                        if routine.alternatives[name]?.isEmpty == true {
-                                            routine.alternatives[name] = nil
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Menu("Alternatief toevoegen") {
-                            ForEach(altCandidates(for: name), id: \.self) { candidate in
-                                Button(candidate) {
-                                    routine.alternatives[name, default: []].append(candidate)
-                                }
-                            }
-                            Button("Nieuwe oefening…", systemImage: "plus") {
-                                altTarget = name
-                            }
-                        }
+                    NavigationLink {
+                        RoutineExerciseEditor(routine: routine, exercise: name)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "line.3.horizontal")
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(name)
-                                    .foregroundStyle(.primary)
-                                let alts = routine.alternatives[name] ?? []
-                                if !alts.isEmpty {
-                                    Text("Alt: \(alts.joined(separator: ", "))")
+                                Text(name).foregroundStyle(.primary)
+                                let sub = subtitle(for: name)
+                                if !sub.isEmpty {
+                                    Text(sub)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
                             }
-                            Spacer()
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
                         }
                     }
                 }
                 .onMove { routine.exercises.move(fromOffsets: $0, toOffset: $1) }
                 .onDelete { offsets in
-                    for i in offsets { routine.alternatives[routine.exercises[i]] = nil }
+                    for i in offsets {
+                        routine.alternatives[routine.exercises[i]] = nil
+                        routine.targets[routine.exercises[i]] = nil
+                    }
                     routine.exercises.remove(atOffsets: offsets)
                 }
                 Menu {
@@ -944,7 +1022,7 @@ struct RoutineEditorView: View {
             } header: {
                 Text("Oefeningen — sleep om de volgorde te bepalen")
             } footer: {
-                Text("Tik op een oefening om alternatieven in te stellen. Tijdens de training wissel je via het ⋯-menu als een toestel bezet is.")
+                Text("Tik op een oefening voor sets × reps en alternatieven. Tijdens de training wissel je via het ⋯-menu als een toestel bezet is.")
             }
         }
         .tabBarClearance()
@@ -962,23 +1040,150 @@ struct RoutineEditorView: View {
             }
             Button("Annuleer", role: .cancel) { newExerciseName = "" }
         }
-        .alert("Alternatief voor \(altTarget ?? "")", isPresented: Binding(
-            get: { altTarget != nil },
-            set: { if !$0 { altTarget = nil } }
-        )) {
+    }
+}
+
+/// Per oefening: doel (sets × reps) en alternatieven.
+struct RoutineExerciseEditor: View {
+    @Bindable var routine: Routine
+    let exercise: String
+    @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
+    @State private var showNewAlt = false
+    @State private var newAltName = ""
+
+    private var target: [Int] { routine.targets[exercise] ?? [3, 8] }
+    private func setTarget(sets s: Int, reps r: Int) { routine.targets[exercise] = [s, r] }
+
+    private var altCandidates: [String] {
+        var names: [String] = []
+        for s in sets where !names.contains(s.exercise) { names.append(s.exercise) }
+        let taken = Set([exercise] + (routine.alternatives[exercise] ?? []))
+        return names.filter { !taken.contains($0) }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Stepper("Sets: \(target[0])", value: Binding(
+                    get: { target[0] },
+                    set: { setTarget(sets: $0, reps: target[1]) }
+                ), in: 1...10)
+                Stepper("Reps: \(target[1])", value: Binding(
+                    get: { target[1] },
+                    set: { setTarget(sets: target[0], reps: $0) }
+                ), in: 1...30)
+            } header: {
+                Text("Doel")
+            } footer: {
+                Text("Bij het starten van de routine krijg je \(target[0]) sets van \(target[1]) reps voorgezet.")
+            }
+
+            Section {
+                ForEach(routine.alternatives[exercise] ?? [], id: \.self) { alt in
+                    Text(alt)
+                }
+                .onDelete { offsets in
+                    var alts = routine.alternatives[exercise] ?? []
+                    alts.remove(atOffsets: offsets)
+                    routine.alternatives[exercise] = alts.isEmpty ? nil : alts
+                }
+                Menu {
+                    ForEach(altCandidates, id: \.self) { candidate in
+                        Button(candidate) { routine.alternatives[exercise, default: []].append(candidate) }
+                    }
+                    Button("Nieuwe oefening…", systemImage: "plus") { showNewAlt = true }
+                } label: {
+                    Label("Alternatief toevoegen", systemImage: "plus")
+                }
+            } header: {
+                Text("Alternatieven")
+            } footer: {
+                Text("Vervangers als dit toestel bezet of stuk is — kies je tijdens de training via het ⋯-menu.")
+            }
+        }
+        .navigationTitle(exercise)
+        .navigationBarTitleDisplayMode(.inline)
+        .alert("Nieuw alternatief", isPresented: $showNewAlt) {
             TextField("bijv. Machine Press", text: $newAltName)
             Button("Toevoegen") {
                 let name = newAltName.trimmingCharacters(in: .whitespaces)
-                if let target = altTarget, !name.isEmpty {
-                    routine.alternatives[target, default: []].append(name)
-                }
+                if !name.isEmpty { routine.alternatives[exercise, default: []].append(name) }
                 newAltName = ""
-                altTarget = nil
             }
-            Button("Annuleer", role: .cancel) {
-                newAltName = ""
-                altTarget = nil
+            Button("Annuleer", role: .cancel) { newAltName = "" }
+        }
+    }
+}
+
+// MARK: - Numeriek invoerveld met cursor altijd achteraan
+
+/// UITextField-wrapper: reformat gebeurt niet tijdens het typen (geen cursor-sprong)
+/// en bij focus staat de cursor achteraan. Ondersteunt de autofocus-op-volgende-set.
+struct NumericField: UIViewRepresentable {
+    @Binding var value: Double
+    var decimal: Bool
+    var placeholder: String
+    var focus: FocusState<UUID?>.Binding
+    var id: UUID?
+    var disabled: Bool
+
+    func makeUIView(context: Context) -> UITextField {
+        let tf = UITextField()
+        tf.delegate = context.coordinator
+        tf.keyboardType = decimal ? .decimalPad : .numberPad
+        tf.textAlignment = .center
+        tf.font = .monospacedDigitSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize, weight: .semibold)
+        tf.adjustsFontSizeToFitWidth = true
+        tf.minimumFontSize = 11
+        tf.placeholder = placeholder
+        tf.text = context.coordinator.string(from: value)
+        tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        return tf
+    }
+
+    func updateUIView(_ tf: UITextField, context: Context) {
+        context.coordinator.parent = self
+        tf.isEnabled = !disabled
+        // Alleen overschrijven als de gebruiker hier niet typt → geen cursor-sprong
+        if !tf.isFirstResponder {
+            let formatted = context.coordinator.string(from: value)
+            if tf.text != formatted { tf.text = formatted }
+        }
+        if let id, focus.wrappedValue == id, !tf.isFirstResponder, !disabled {
+            DispatchQueue.main.async { tf.becomeFirstResponder() }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var parent: NumericField
+        init(_ parent: NumericField) { self.parent = parent }
+
+        func string(from value: Double) -> String {
+            if parent.decimal {
+                return value == value.rounded()
+                    ? String(Int(value))
+                    : String(value).replacingOccurrences(of: ".", with: ",")
             }
+            return String(Int(value))
+        }
+
+        @objc func editingChanged(_ tf: UITextField) {
+            let raw = (tf.text ?? "").replacingOccurrences(of: ",", with: ".")
+            if let v = Double(raw) { parent.value = v }
+            else if raw.isEmpty { parent.value = 0 }
+        }
+
+        func textFieldDidBeginEditing(_ tf: UITextField) {
+            if let id = parent.id { parent.focus.wrappedValue = id }
+            let end = tf.endOfDocument
+            tf.selectedTextRange = tf.textRange(from: end, to: end) // cursor achteraan
+        }
+
+        func textFieldDidEndEditing(_ tf: UITextField) {
+            if let id = parent.id, parent.focus.wrappedValue == id { parent.focus.wrappedValue = nil }
+            tf.text = string(from: parent.value)
         }
     }
 }

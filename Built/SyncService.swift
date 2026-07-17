@@ -41,6 +41,7 @@ enum Sync {
         var tracks_sleep: Bool
         var training_days: [Int]
         var kcal_target: Int
+        var schedule: [String: String]
     }
     private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
     private struct ProteinRow: Codable {
@@ -60,7 +61,7 @@ enum Sync {
     }
     private struct RoutineRow: Codable {
         var user_id: UUID; var name: String; var exercises: [String]
-        var alternatives: [String: [String]]; var created_at: Date
+        var alternatives: [String: [String]]; var targets: [String: [Int]]; var created_at: Date
     }
     private struct MealRow: Codable {
         var user_id: UUID; var name: String; var protein: Int; var kcal: Int
@@ -118,7 +119,8 @@ enum Sync {
                                    start_date: profile.startDate, goal_date: profile.goalDate,
                                    trainings_per_week: profile.trainingsPerWeek,
                                    tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep,
-                                   training_days: profile.trainingDays, kcal_target: profile.kcalTarget)
+                                   training_days: profile.trainingDays, kcal_target: profile.kcalTarget,
+                                   schedule: profile.schedule)
         }
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
@@ -132,7 +134,7 @@ enum Sync {
                              note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
             .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises,
-                              alternatives: $0.alternatives, created_at: $0.createdAt) }
+                              alternatives: $0.alternatives, targets: $0.targets, created_at: $0.createdAt) }
         p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)]))
             .map { MealRow(user_id: uid, name: $0.name, protein: $0.protein, kcal: $0.kcal,
                            created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients,
@@ -206,6 +208,7 @@ enum Sync {
         profile.tracksSleep = profileRow.tracks_sleep
         profile.trainingDays = profileRow.training_days
         profile.kcalTarget = profileRow.kcal_target
+        profile.schedule = profileRow.schedule
         context.insert(profile)
 
         for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
@@ -225,6 +228,7 @@ enum Sync {
         for r in routineRows {
             let routine = Routine(name: r.name, exercises: r.exercises)
             routine.alternatives = r.alternatives
+            routine.targets = r.targets
             routine.createdAt = r.created_at
             context.insert(routine)
         }

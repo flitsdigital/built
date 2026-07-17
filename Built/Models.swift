@@ -128,6 +128,8 @@ final class Profile {
     var kcalTarget: Int = 0
     /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
     var trainingDays: [Int] = []
+    /// Weekplanning: weekday-string ("2"=ma) → routine-naam. Bepaalt welke routine welke dag.
+    var schedule: [String: String] = [:]
 
     init(name: String, age: Int, heightCm: Int, startWeight: Double, goalWeight: Double, goalDate: Date, trainingsPerWeek: Int) {
         self.name = name
@@ -158,6 +160,12 @@ final class Profile {
 
     func kcalTargetEffective(currentWeight: Double) -> Int {
         kcalTarget > 0 ? kcalTarget : autoKcalTarget(currentWeight: currentWeight)
+    }
+
+    /// Geplande routine voor een weekdag (1=zo…7=za), nil = geen.
+    func plannedRoutine(weekday: Int) -> String? {
+        let name = schedule[String(weekday)]
+        return (name?.isEmpty ?? true) ? nil : name
     }
 }
 
@@ -341,6 +349,8 @@ final class Routine {
     var createdAt: Date
     /// Vervangers per oefening, voor als een toestel bezet of stuk is.
     var alternatives: [String: [String]] = [:]
+    /// Doel per oefening als [sets, reps], bijv. "3× dumbbell press" = [3, 10].
+    var targets: [String: [Int]] = [:]
     init(name: String, exercises: [String] = []) {
         self.name = name
         self.exercises = exercises
