@@ -59,6 +59,7 @@ struct WorkoutSummary: Identifiable {
     let sets: Int
     let prs: [(exercise: String, new: Double, old: Double)]
     var previousVolume: Int?
+    var muscles: [String: Double] = [:]
 }
 
 struct TrainingView: View {
@@ -67,6 +68,7 @@ struct TrainingView: View {
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @Query(sort: \Routine.createdAt) private var routines: [Routine]
     @Query private var habits: [DayHabits]
+    @Query private var exercises: [Exercise]
     @AppStorage("restSeconds") private var restSeconds = 120
 
     @State private var active = false
@@ -386,6 +388,19 @@ struct TrainingView: View {
         record.note = ([record.note] + notes).filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
+    /// Spiergroep-intensiteit van de zojuist afgeronde training (0…1, genormaliseerd op volume).
+    private func sessionMuscles() -> [String: Double] {
+        let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
+        var totals: [String: Double] = [:]
+        for ex in workout {
+            let m = muscleOf[ex.originalName ?? ex.name] ?? muscleOf[ex.name] ?? "Overig"
+            let vol = ex.sets.filter { $0.done && !$0.warmup }.map { $0.kg * Double($0.reps) }.reduce(0, +)
+            if vol > 0 { totals[m, default: 0] += vol }
+        }
+        guard let maxV = totals.values.max(), maxV > 0 else { return [:] }
+        return totals.mapValues { $0 / maxV }
+    }
+
     private func finishWorkout() {
         saveExerciseNotes()
         WorkoutStatus.shared.endWorkout()
@@ -398,7 +413,8 @@ struct TrainingView: View {
             volume: volume,
             sets: doneCount,
             prs: workout.compactMap { ex in prInfo(ex).map { (ex.name, $0.new, $0.old) } },
-            previousVolume: previousVolume
+            previousVolume: previousVolume,
+            muscles: sessionMuscles()
         )
         withAnimation(.snappy(duration: 0.3)) {
             active = false
@@ -1079,6 +1095,12 @@ struct WorkoutSummarySheet: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            }
+            if !summary.muscles.isEmpty {
+                VStack(spacing: 6) {
+                    Text("Vandaag geraakt").font(.caption).foregroundStyle(.secondary)
+                    BodyMapView(values: summary.muscles)
+                }
             }
             Button {
                 dismiss()
