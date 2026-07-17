@@ -25,12 +25,12 @@ final class Exercise {
     static let typeIcon = [
         "Barbell": "figure.strengthtraining.traditional",
         "Dumbbell": "dumbbell.fill",
-        "Machine": "gearshape.fill",
-        "Kabel": "cablecar.fill",
-        "Bodyweight": "figure.cooldown",
-        "Kettlebell": "figure.strengthtraining.functional",
+        "Machine": "figure.strengthtraining.functional",
+        "Kabel": "figure.rower",
+        "Bodyweight": "figure.core.training",
+        "Kettlebell": "figure.cross.training",
         "Band": "figure.flexibility",
-        "Overig": "questionmark.circle",
+        "Overig": "dumbbell",
     ]
 
     /// Standaardcatalogus + inhalen van namen die al in de historie/routines staan.
