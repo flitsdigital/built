@@ -339,6 +339,8 @@ final class Routine {
     var name: String
     var exercises: [String]
     var createdAt: Date
+    /// Vervangers per oefening, voor als een toestel bezet of stuk is.
+    var alternatives: [String: [String]] = [:]
     init(name: String, exercises: [String] = []) {
         self.name = name
         self.exercises = exercises

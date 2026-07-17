@@ -58,7 +58,10 @@ enum Sync {
         var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
         var note: String; var bed_time: Date?; var wake_time: Date?; var sleep_quality: Int
     }
-    private struct RoutineRow: Codable { var user_id: UUID; var name: String; var exercises: [String]; var created_at: Date }
+    private struct RoutineRow: Codable {
+        var user_id: UUID; var name: String; var exercises: [String]
+        var alternatives: [String: [String]]; var created_at: Date
+    }
     private struct MealRow: Codable {
         var user_id: UUID; var name: String; var protein: Int; var kcal: Int
         var created_at: Date; var servings: Double; var ingredients: [Ingredient]
@@ -128,7 +131,8 @@ enum Sync {
             .map { HabitsRow(user_id: uid, date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
                              note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
-            .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises, created_at: $0.createdAt) }
+            .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises,
+                              alternatives: $0.alternatives, created_at: $0.createdAt) }
         p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)]))
             .map { MealRow(user_id: uid, name: $0.name, protein: $0.protein, kcal: $0.kcal,
                            created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients,
@@ -220,6 +224,7 @@ enum Sync {
         }
         for r in routineRows {
             let routine = Routine(name: r.name, exercises: r.exercises)
+            routine.alternatives = r.alternatives
             routine.createdAt = r.created_at
             context.insert(routine)
         }

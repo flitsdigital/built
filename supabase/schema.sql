@@ -36,6 +36,7 @@ create table if not exists public.food_products (
 );
 alter table public.food_products add column if not exists image_url text not null default '';
 alter table public.food_products add column if not exists serving_grams float8 not null default 0;
+alter table public.routines add column if not exists alternatives jsonb not null default '{}';
 alter table public.food_products add column if not exists serving_name text not null default '';
 
 create table if not exists public.weight_entries (
@@ -200,8 +201,9 @@ begin
     from jsonb_array_elements(coalesce(payload->'habits', '[]'::jsonb)) e;
 
   delete from public.routines where user_id = uid;
-  insert into public.routines (user_id, name, exercises, created_at)
-    select uid, e->>'name', coalesce(e->'exercises', '[]'::jsonb), (e->>'created_at')::timestamptz
+  insert into public.routines (user_id, name, exercises, alternatives, created_at)
+    select uid, e->>'name', coalesce(e->'exercises', '[]'::jsonb),
+           coalesce(e->'alternatives', '{}'::jsonb), (e->>'created_at')::timestamptz
     from jsonb_array_elements(coalesce(payload->'routines', '[]'::jsonb)) e;
 
   delete from public.meals where user_id = uid;

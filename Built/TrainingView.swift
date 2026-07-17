@@ -16,6 +16,8 @@ struct DraftExercise: Identifiable {
     var tip: String?
     var sets: [DraftSet]
     var note = ""
+    /// Routine-oefening waar deze voor invalt (voor terugwisselen).
+    var originalName: String?
 }
 
 /// Lopende training op schijf, zodat een force-quit hem niet weggooit.
@@ -31,9 +33,11 @@ struct SavedWorkout: Codable, Equatable {
         var tip: String?
         var note: String
         var sets: [SavedSet]
+        var originalName: String?
     }
     var startedAt: Date
     var exercises: [SavedExercise]
+    var alternatives: [String: [String]]?
 }
 
 struct WorkoutSummary: Identifiable {
@@ -55,6 +59,7 @@ struct TrainingView: View {
 
     @State private var active = false
     @State private var workout: [DraftExercise] = []
+    @State private var alternatives: [String: [String]] = [:]
     @State private var startedAt = Date.now
     @State private var summary: WorkoutSummary?
     @State private var editingRoutine: Routine?
@@ -201,8 +206,9 @@ struct TrainingView: View {
         guard active else { return nil }
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
             .init(name: ex.name, tip: ex.tip, note: ex.note,
-                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) })
-        })
+                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) },
+                  originalName: ex.originalName)
+        }, alternatives: alternatives.isEmpty ? nil : alternatives)
     }
 
     /// Na een force-quit: training terugzetten en de Live Activity weer adopteren.
@@ -214,15 +220,33 @@ struct TrainingView: View {
         workout = saved.exercises.map { ex in
             DraftExercise(name: ex.name, tip: ex.tip,
                           sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous) },
-                          note: ex.note)
+                          note: ex.note, originalName: ex.originalName)
         }
+        alternatives = saved.alternatives ?? [:]
         active = true
         if workoutStatus.startedAt == nil { workoutStatus.resumeWorkout(at: saved.startedAt) }
     }
 
-    private func startWorkout(with names: [String]) {
+    /// Vervangers voor deze oefening: de alternatieven uit de routine + de originele om terug te wisselen.
+    private func swapOptions(_ ex: DraftExercise) -> [String] {
+        let original = ex.originalName ?? ex.name
+        let alts = alternatives[original] ?? []
+        guard !alts.isEmpty else { return [] }
+        return ([original] + alts).filter { $0 != ex.name }
+    }
+
+    private func swapExercise(_ id: UUID, to newName: String) {
+        guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
+        let original = workout[i].originalName ?? workout[i].name
+        var replacement = draft(for: newName)
+        replacement.originalName = original
+        withAnimation(.snappy(duration: 0.25)) { workout[i] = replacement }
+    }
+
+    private func startWorkout(with names: [String], alternatives alts: [String: [String]] = [:]) {
         startedAt = .now
         workout = names.map(draft(for:))
+        alternatives = alts
         WorkoutStatus.shared.startWorkout(at: startedAt)
         withAnimation(.snappy(duration: 0.3)) { active = true }
     }
@@ -436,7 +460,7 @@ struct TrainingView: View {
                     if routine.exercises.isEmpty {
                         editingRoutine = routine
                     } else {
-                        startWorkout(with: routine.exercises)
+                        startWorkout(with: routine.exercises, alternatives: routine.alternatives)
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -623,6 +647,20 @@ struct TrainingView: View {
                     }
                     Spacer()
                     Menu {
+                        let options = swapOptions(ex)
+                        if !options.isEmpty {
+                            if ex.sets.contains(where: \.done) {
+                                Text("Vervangen kan alleen vóór je eerste set")
+                            } else {
+                                Section("Vervang door") {
+                                    ForEach(options, id: \.self) { alt in
+                                        Button(alt, systemImage: "arrow.triangle.2.circlepath") {
+                                            swapExercise(ex.id, to: alt)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Button("Oefening verwijderen", systemImage: "trash", role: .destructive) {
                             removeExercise(ex.id)
                         }
@@ -820,6 +858,8 @@ struct RoutineEditorView: View {
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @State private var showNewExercise = false
     @State private var newExerciseName = ""
+    @State private var altTarget: String?
+    @State private var newAltName = ""
 
     private var recentExercises: [String] {
         var names: [String] = []
@@ -829,14 +869,70 @@ struct RoutineEditorView: View {
         return names.filter { !routine.exercises.contains($0) }
     }
 
+    private func altCandidates(for name: String) -> [String] {
+        var names: [String] = []
+        for s in sets where !names.contains(s.exercise) {
+            names.append(s.exercise)
+        }
+        let taken = Set([name] + (routine.alternatives[name] ?? []))
+        return names.filter { !taken.contains($0) }
+    }
+
     var body: some View {
         List {
             Section {
                 ForEach(routine.exercises, id: \.self) { name in
-                    Label(name, systemImage: "line.3.horizontal")
+                    Menu {
+                        let alts = routine.alternatives[name] ?? []
+                        if !alts.isEmpty {
+                            Section("Alternatieven — tik om te verwijderen") {
+                                ForEach(alts, id: \.self) { alt in
+                                    Button(alt, systemImage: "minus.circle", role: .destructive) {
+                                        routine.alternatives[name]?.removeAll { $0 == alt }
+                                        if routine.alternatives[name]?.isEmpty == true {
+                                            routine.alternatives[name] = nil
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Menu("Alternatief toevoegen") {
+                            ForEach(altCandidates(for: name), id: \.self) { candidate in
+                                Button(candidate) {
+                                    routine.alternatives[name, default: []].append(candidate)
+                                }
+                            }
+                            Button("Nieuwe oefening…", systemImage: "plus") {
+                                altTarget = name
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "line.3.horizontal")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(name)
+                                    .foregroundStyle(.primary)
+                                let alts = routine.alternatives[name] ?? []
+                                if !alts.isEmpty {
+                                    Text("Alt: \(alts.joined(separator: ", "))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
                 }
                 .onMove { routine.exercises.move(fromOffsets: $0, toOffset: $1) }
-                .onDelete { routine.exercises.remove(atOffsets: $0) }
+                .onDelete { offsets in
+                    for i in offsets { routine.alternatives[routine.exercises[i]] = nil }
+                    routine.exercises.remove(atOffsets: offsets)
+                }
                 Menu {
                     ForEach(recentExercises, id: \.self) { name in
                         Button(name) { routine.exercises.append(name) }
@@ -847,6 +943,8 @@ struct RoutineEditorView: View {
                 }
             } header: {
                 Text("Oefeningen — sleep om de volgorde te bepalen")
+            } footer: {
+                Text("Tik op een oefening om alternatieven in te stellen. Tijdens de training wissel je via het ⋯-menu als een toestel bezet is.")
             }
         }
         .tabBarClearance()
@@ -863,6 +961,24 @@ struct RoutineEditorView: View {
                 newExerciseName = ""
             }
             Button("Annuleer", role: .cancel) { newExerciseName = "" }
+        }
+        .alert("Alternatief voor \(altTarget ?? "")", isPresented: Binding(
+            get: { altTarget != nil },
+            set: { if !$0 { altTarget = nil } }
+        )) {
+            TextField("bijv. Machine Press", text: $newAltName)
+            Button("Toevoegen") {
+                let name = newAltName.trimmingCharacters(in: .whitespaces)
+                if let target = altTarget, !name.isEmpty {
+                    routine.alternatives[target, default: []].append(name)
+                }
+                newAltName = ""
+                altTarget = nil
+            }
+            Button("Annuleer", role: .cancel) {
+                newAltName = ""
+                altTarget = nil
+            }
         }
     }
 }
