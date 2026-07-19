@@ -744,7 +744,7 @@ struct TrainingView: View {
                 let daySets = sets(on: day)
                 let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
                 NavigationLink {
-                    DayDetailView(day: day, profile: profile)
+                    SessionDetailView(day: day)
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -982,20 +982,29 @@ struct TrainingView: View {
 
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String) -> some View {
         HStack(spacing: 12) {
-            Text(setLabel(set.wrappedValue, number: number))
-                .font(.subheadline.monospacedDigit().bold())
-                .foregroundStyle(set.wrappedValue.warmup || set.wrappedValue.dropset || set.wrappedValue.failure
-                                 ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                .frame(width: 34, alignment: .leading)
-                .opacity(set.wrappedValue.done ? 0.55 : 1)
-                .contextMenu {
-                    Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
-                        set.wrappedValue.dropset.toggle()
-                    }
-                    Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
-                        set.wrappedValue.failure.toggle()
-                    }
+            Menu {
+                Button { set.wrappedValue.warmup = false } label: {
+                    Label("Normale set", systemImage: set.wrappedValue.warmup ? "circle" : "checkmark")
                 }
+                Button { set.wrappedValue.warmup = true } label: {
+                    Label("Warming-up", systemImage: set.wrappedValue.warmup ? "checkmark" : "flame")
+                }
+                Divider()
+                Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
+                    set.wrappedValue.dropset.toggle()
+                }
+                Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
+                    set.wrappedValue.failure.toggle()
+                }
+            } label: {
+                Text(setLabel(set.wrappedValue, number: number))
+                    .font(.subheadline.monospacedDigit().bold())
+                    .foregroundStyle(set.wrappedValue.warmup || set.wrappedValue.dropset || set.wrappedValue.failure
+                                     ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .frame(width: 34, alignment: .leading)
+                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+                    .contentShape(Rectangle())
+            }
             Text(set.wrappedValue.previous ?? "—")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
@@ -1124,6 +1133,143 @@ struct WorkoutSummarySheet: View {
         .presentationDragIndicator(.visible)
         .onAppear { bounced = true }
         .sensoryFeedback(.success, trigger: bounced)
+    }
+
+    private func statTile(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.title2.bold().monospacedDigit())
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Overzicht van één gedane training: duur, volume, verbeteringen — en bewerkbaar
+/// (kg/reps aanpassen, set of oefening verwijderen).
+struct SessionDetailView: View {
+    let day: Date
+    @Environment(\.modelContext) private var context
+    @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
+    @FocusState private var focused: UUID?
+
+    private var cal: Calendar { .current }
+    private var daySets: [SetEntry] {
+        allSets.filter { cal.isDate($0.date, inSameDayAs: day) }.sorted { $0.date < $1.date }
+    }
+
+    private var byExercise: [(name: String, sets: [SetEntry])] {
+        var names: [String] = []
+        for s in daySets where !names.contains(s.exercise) { names.append(s.exercise) }
+        return names.map { n in (n, daySets.filter { $0.exercise == n }) }
+    }
+
+    private var volume: Int { Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +)) }
+
+    private var durationText: String {
+        guard let first = daySets.first?.date, let last = daySets.last?.date, last > first else { return "—" }
+        let m = max(Int(last.timeIntervalSince(first) / 60), 1)
+        return m >= 60 ? "\(m / 60)u \(m % 60)m" : "\(m) min"
+    }
+
+    /// Vorige trainingsdag die minstens één oefening deelt — basis voor de vergelijking.
+    private var previousDay: Date? {
+        let names = Set(daySets.map(\.exercise))
+        let start = cal.startOfDay(for: day)
+        return allSets.filter { $0.date < start && names.contains($0.exercise) }
+            .map { cal.startOfDay(for: $0.date) }.max()
+    }
+
+    private var volumeDelta: Int? {
+        guard let prev = previousDay else { return nil }
+        let pv = Int(allSets.filter { cal.isDate($0.date, inSameDayAs: prev) }
+            .map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+        return pv > 0 ? volume - pv : nil
+    }
+
+    /// Oefeningen met een nieuw e1RM-record deze dag t.o.v. alles ervoor.
+    private var prs: [(exercise: String, new: Double, old: Double)] {
+        let start = cal.startOfDay(for: day)
+        return byExercise.compactMap { group in
+            let best = group.sets.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+            let before = allSets.filter { $0.exercise == group.name && $0.date < start }
+                .map { epley($0.weightKg, $0.reps) }.max() ?? 0
+            return best > before + 0.1 && before > 0 ? (group.name, best, before) : nil
+        }
+    }
+
+    private func kg(_ set: SetEntry) -> Binding<Double> {
+        Binding(get: { set.weightKg }, set: { set.weightKg = $0 })
+    }
+    private func reps(_ set: SetEntry) -> Binding<Double> {
+        Binding(get: { Double(set.reps) }, set: { set.reps = Int($0) })
+    }
+
+    var body: some View {
+        List {
+            Section {
+                HStack {
+                    statTile(durationText, "duur")
+                    statTile("\(volume)", "kg volume")
+                    statTile("\(daySets.count)", "sets")
+                }
+                if let d = volumeDelta {
+                    Text("\(d >= 0 ? "+" : "")\(d) kg volume t.o.v. je vorige training")
+                        .font(.footnote)
+                        .foregroundStyle(d >= 0 ? .green : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+            }
+
+            if !prs.isEmpty {
+                Section("Records") {
+                    ForEach(prs, id: \.exercise) { pr in
+                        Text("🏆 \(pr.exercise): e1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
+                            .font(.subheadline.bold())
+                    }
+                }
+            }
+
+            ForEach(byExercise, id: \.name) { group in
+                Section(group.name) {
+                    ForEach(Array(group.sets.enumerated()), id: \.element.persistentModelID) { i, set in
+                        HStack(spacing: 12) {
+                            Text("\(i + 1)")
+                                .font(.subheadline.monospacedDigit().bold())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, alignment: .leading)
+                            NumericField(value: kg(set), decimal: true, placeholder: "kg",
+                                         focus: $focused, id: nil, disabled: false)
+                                .frame(width: 64)
+                                .padding(.vertical, 6)
+                                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                            Text("kg").font(.footnote).foregroundStyle(.secondary)
+                            NumericField(value: reps(set), decimal: false, placeholder: "reps",
+                                         focus: $focused, id: nil, disabled: false)
+                                .frame(width: 52)
+                                .padding(.vertical, 6)
+                                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                            Text("reps").font(.footnote).foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                    }
+                    .onDelete { offsets in
+                        for i in offsets { context.delete(group.sets[i]) }
+                    }
+                    Button {
+                        if let last = group.sets.last {
+                            context.insert(SetEntry(date: last.date.addingTimeInterval(1),
+                                                    exercise: group.name, weightKg: last.weightKg, reps: last.reps))
+                        }
+                    } label: {
+                        Label("Set toevoegen", systemImage: "plus")
+                    }
+                }
+            }
+        }
+        .tabBarClearance()
+        .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { EditButton() }
     }
 
     private func statTile(_ value: String, _ label: String) -> some View {
