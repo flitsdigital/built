@@ -47,13 +47,28 @@ enum CalendarSync {
         return ids.count
     }
 
+    /// Notitie-stempel waaraan we onze eigen events herkennen — ook op een ander
+    /// toestel of na herinstallatie, wanneer de lokale ID-lijst leeg is.
+    private static let stamp = "Built training"
+
     static func removeCreated() {
+        // 1) Eerst via de lokaal bewaarde IDs (snel, exacte match).
         for id in UserDefaults.standard.stringArray(forKey: idKey) ?? [] {
             if let event = store.event(withIdentifier: id) {
                 try? store.remove(event, span: .thisEvent)
             }
         }
         UserDefaults.standard.removeObject(forKey: idKey)
+
+        // 2) Scan daarnaast een ruim venster op Built-events die we niet lokaal kennen
+        //    (na herinstallatie of vanaf een tweede toestel) → geen dubbelingen.
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        guard let end = cal.date(byAdding: .day, value: 366, to: today) else { return }
+        let predicate = store.predicateForEvents(withStart: today, end: end, calendars: nil)
+        for event in store.events(matching: predicate) where event.notes == stamp {
+            try? store.remove(event, span: .thisEvent)
+        }
     }
 
     static var hasCreatedEvents: Bool {

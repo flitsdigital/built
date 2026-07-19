@@ -3,6 +3,7 @@ import SwiftData
 import Supabase
 import Observation
 import AuthenticationServices
+import CryptoKit
 import UIKit
 
 /// Presentatie-anker voor de Google OAuth-websessie.
@@ -54,7 +55,11 @@ enum Sync {
         var favorite: Bool; var image_url: String
         var serving_grams: Double; var serving_name: String; var created_at: Date
     }
-    private struct SetRow: Codable { var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int }
+    private struct SetRow: Codable {
+        var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
+        // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
+        var dropset: Bool? = false; var failure: Bool? = false
+    }
     private struct HabitsRow: Codable {
         var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
         var note: String; var bed_time: Date?; var wake_time: Date?; var sleep_quality: Int
@@ -131,7 +136,8 @@ enum Sync {
             .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label,
                               kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
-            .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps) }
+            .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps,
+                          dropset: $0.dropset, failure: $0.failure) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
             .map { HabitsRow(user_id: uid, date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
                              note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality) }
@@ -224,7 +230,8 @@ enum Sync {
             context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label,
                                         kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal))
         }
-        for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps)) }
+        for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps,
+                                                    dropset: r.dropset ?? false, failure: r.failure ?? false)) }
         for r in habitRows {
             let h = DayHabits(date: r.date, creatine: r.creatine, sleptEnough: r.slept_enough)
             h.note = r.note
@@ -400,6 +407,60 @@ enum Sync {
         lastPushedHash = nil
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
+    }
+
+    // MARK: - Sign in with Apple (verplicht naast Google — App Store 4.8)
+
+    /// Verse rauwe nonce; bewaar 'm in de view en geef de gehashte versie aan Apple.
+    static func makeAppleNonce() -> String { randomNonce() }
+    static func hashNonce(_ raw: String) -> String { sha256(raw) }
+
+    /// Rondt de Sign in with Apple-flow af: ruilt Apple's identity-token in bij Supabase.
+    static func finishAppleSignIn(_ result: Result<ASAuthorization, Error>,
+                                  rawNonce: String, context: ModelContext) async throws {
+        guard let client else { throw notConfigured() }
+        let auth = try result.get()
+        guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+              let tokenData = cred.identityToken,
+              let idToken = String(data: tokenData, encoding: .utf8) else {
+            throw NSError(domain: "Sync", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Geen Apple-token ontvangen."])
+        }
+        try await client.auth.signInWithIdToken(
+            credentials: .init(provider: .apple, idToken: idToken, nonce: rawNonce))
+        pushAllowed = false
+        lastPushedHash = nil
+        SyncStatus.shared.lastError = nil
+        await bootstrap(context)
+    }
+
+    /// Verwijdert het account volledig: alle serverdata + de auth-user (via RPC met
+    /// verhoogde rechten), daarna het toestel leegmaken. Onomkeerbaar.
+    static func deleteAccount(context: ModelContext) async throws {
+        guard let client else { throw notConfigured() }
+        try await client.rpc("delete_account").execute()
+        // Server-account is weg; signOut ruimt de lokale sessie op, wist het toestel
+        // en start een verse anonieme lijn zodat de app bruikbaar blijft.
+        await signOut(context: context, keepLocalData: false)
+    }
+
+    private static func randomNonce(length: Int = 32) -> String {
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remaining = length
+        while remaining > 0 {
+            var byte: UInt8 = 0
+            _ = SecRandomCopyBytes(kSecRandomDefault, 1, &byte)
+            if Int(byte) < charset.count { // vermijd modulo-bias
+                result.append(charset[Int(byte)])
+                remaining -= 1
+            }
+        }
+        return result
+    }
+
+    private static func sha256(_ input: String) -> String {
+        SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Automatische sync-lus

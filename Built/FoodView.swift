@@ -8,7 +8,7 @@ enum OFF {
     // OFF throttelt zonder User-Agent → eigen sessie met UA, korte timeout en cache.
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.httpAdditionalHeaders = ["User-Agent": "Built/1.0 (iOS; flitsdigital1@gmail.com)"]
+        cfg.httpAdditionalHeaders = ["User-Agent": "Built/1.0 (iOS; support@builtapp.nl)"]
         cfg.timeoutIntervalForRequest = 10
         cfg.requestCachePolicy = .returnCacheDataElseLoad
         cfg.urlCache = URLCache(memoryCapacity: 8 << 20, diskCapacity: 40 << 20)

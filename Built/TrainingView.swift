@@ -50,6 +50,8 @@ struct SavedWorkout: Codable, Equatable {
     var startedAt: Date
     var exercises: [SavedExercise]
     var alternatives: [String: [String]]?
+    /// Lopende rust bij het opslaan, zodat de timer na een force-quit klopt i.p.v. blijft hangen.
+    var restEndsAt: Date?
 }
 
 struct WorkoutSummary: Identifiable {
@@ -266,7 +268,7 @@ struct TrainingView: View {
     }
 
     private func prInfo(_ ex: DraftExercise) -> (new: Double, old: Double)? {
-        guard let doneMax = ex.sets.filter(\.done).map({ epley($0.kg, $0.reps) }).max() else { return nil }
+        guard let doneMax = ex.sets.filter { $0.done && !$0.warmup }.map({ epley($0.kg, $0.reps) }).max() else { return nil }
         guard let prev = sets.filter({ $0.exercise == ex.name && $0.date < startedAt })
                 .map({ epley($0.weightKg, $0.reps) }).max(),
               doneMax > prev + 0.1 else { return nil }
@@ -287,7 +289,8 @@ struct TrainingView: View {
             .init(name: ex.name, tip: ex.tip, note: ex.note,
                   sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure) },
                   originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
-        }, alternatives: alternatives.isEmpty ? nil : alternatives)
+        }, alternatives: alternatives.isEmpty ? nil : alternatives,
+           restEndsAt: workoutStatus.restEndsAt)
     }
 
     /// Na een force-quit: training terugzetten en de Live Activity weer adopteren.
@@ -303,7 +306,15 @@ struct TrainingView: View {
         }
         alternatives = saved.alternatives ?? [:]
         active = true
-        if workoutStatus.startedAt == nil { workoutStatus.resumeWorkout(at: saved.startedAt) }
+        if workoutStatus.startedAt == nil {
+            workoutStatus.resumeWorkout(at: saved.startedAt)
+            // Rust herstellen als hij nog loopt, anders een stale timer op het lockscreen wissen.
+            if let end = saved.restEndsAt, end > .now {
+                workoutStatus.startRest(until: end)
+            } else {
+                workoutStatus.stopRest()
+            }
+        }
     }
 
     /// Vervangers voor deze oefening: de alternatieven uit de routine + de originele om terug te wisselen.
@@ -705,6 +716,11 @@ struct TrainingView: View {
                         Menu {
                             Button("Wijzig routine", systemImage: "pencil") { editingRoutine = routine }
                             Button("Verwijder routine", systemImage: "trash", role: .destructive) {
+                                // Ruim de weekplanning op zodat een dode naam niet in agenda/meldingen blijft spoken
+                                for (weekday, name) in profile.schedule where name == routine.name {
+                                    profile.schedule[weekday] = nil
+                                    if let day = Int(weekday) { profile.trainingDays.removeAll { $0 == day } }
+                                }
                                 context.delete(routine)
                             }
                         } label: {
@@ -1018,7 +1034,7 @@ struct TrainingView: View {
                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
             NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
-                                        set: { set.wrappedValue.reps = Int($0) }),
+                                        set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
                          decimal: false, placeholder: "reps",
                          focus: $focusedSet, id: nil,
                          disabled: set.wrappedValue.done)
@@ -1032,7 +1048,8 @@ struct TrainingView: View {
                     set.wrappedValue.done.toggle()
                     if set.wrappedValue.done {
                         if !set.wrappedValue.warmup {
-                            let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps)
+                            let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
+                                             dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure)
                             context.insert(e)
                             set.wrappedValue.savedEntry = e
                         }
@@ -1201,7 +1218,7 @@ struct SessionDetailView: View {
         Binding(get: { set.weightKg }, set: { set.weightKg = $0 })
     }
     private func reps(_ set: SetEntry) -> Binding<Double> {
-        Binding(get: { Double(set.reps) }, set: { set.reps = Int($0) })
+        Binding(get: { Double(set.reps) }, set: { set.reps = Int(min($0.rounded(), 9999)) })
     }
 
     var body: some View {
@@ -1233,10 +1250,10 @@ struct SessionDetailView: View {
                 Section(group.name) {
                     ForEach(Array(group.sets.enumerated()), id: \.element.persistentModelID) { i, set in
                         HStack(spacing: 12) {
-                            Text("\(i + 1)")
+                            Text("\(i + 1)\(set.dropset ? " D" : "")\(set.failure ? " F" : "")")
                                 .font(.subheadline.monospacedDigit().bold())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 24, alignment: .leading)
+                                .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                                .frame(width: 40, alignment: .leading)
                             NumericField(value: kg(set), decimal: true, placeholder: "kg",
                                          focus: $focused, id: nil, disabled: false)
                                 .frame(width: 64)

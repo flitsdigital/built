@@ -348,11 +348,16 @@ final class SetEntry {
     var exercise: String
     var weightKg: Double
     var reps: Int
-    init(date: Date = .now, exercise: String, weightKg: Double, reps: Int) {
+    var dropset: Bool = false
+    var failure: Bool = false
+    init(date: Date = .now, exercise: String, weightKg: Double, reps: Int,
+         dropset: Bool = false, failure: Bool = false) {
         self.date = date
         self.exercise = exercise
         self.weightKg = weightKg
         self.reps = reps
+        self.dropset = dropset
+        self.failure = failure
     }
 }
 

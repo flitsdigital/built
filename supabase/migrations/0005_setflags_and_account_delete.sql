@@ -1,152 +1,9 @@
--- Built — Supabase als single source of truth.
--- Idempotent: dit hele bestand mag je opnieuw draaien (SQL Editor → Run).
+-- Drop-set / naar-falen op sets bewaren, + in-app account-verwijdering (App Store 5.1.1(v)).
 
-create table if not exists public.profiles (
-  user_id uuid primary key references auth.users (id) on delete cascade,
-  name text not null,
-  age int not null,
-  height_cm int not null,
-  start_weight float8 not null,
-  goal_weight float8 not null,
-  start_date timestamptz not null,
-  goal_date timestamptz not null,
-  trainings_per_week int not null
-);
-alter table public.profiles add column if not exists tracks_creatine boolean not null default true;
-alter table public.profiles add column if not exists tracks_sleep boolean not null default true;
-alter table public.profiles add column if not exists training_days jsonb not null default '[]';
-alter table public.protein_entries add column if not exists meal text not null default '';
-alter table public.protein_entries add column if not exists carbs int not null default 0;
-alter table public.protein_entries add column if not exists fat int not null default 0;
-alter table public.profiles add column if not exists kcal_target int not null default 0;
-alter table public.meals add column if not exists favorite boolean not null default false;
-
-create table if not exists public.food_products (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  brand text not null default '',
-  barcode text not null default '',
-  protein100 float8 not null,
-  kcal100 float8 not null,
-  carbs100 float8 not null default 0,
-  fat100 float8 not null default 0,
-  favorite boolean not null default false,
-  created_at timestamptz not null
-);
-alter table public.food_products add column if not exists image_url text not null default '';
-alter table public.food_products add column if not exists serving_grams float8 not null default 0;
-alter table public.routines add column if not exists alternatives jsonb not null default '{}';
-alter table public.routines add column if not exists targets jsonb not null default '{}';
-alter table public.routines add column if not exists supersets jsonb not null default '{}';
-alter table public.routines add column if not exists rest_by_exercise jsonb not null default '{}';
-alter table public.profiles add column if not exists schedule jsonb not null default '{}';
-
-create table if not exists public.exercises (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  muscle text not null default 'Overig',
-  type text not null default 'Overig',
-  created_at timestamptz not null
-);
-alter table public.food_products add column if not exists serving_name text not null default '';
-
-create table if not exists public.weight_entries (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  date timestamptz not null,
-  kg float8 not null,
-  scale text not null default ''
-);
-
-create table if not exists public.protein_entries (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  date timestamptz not null,
-  grams int not null,
-  label text not null,
-  kcal int not null default 0
-);
-
-create table if not exists public.set_entries (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  date timestamptz not null,
-  exercise text not null,
-  weight_kg float8 not null,
-  reps int not null
-);
 alter table public.set_entries add column if not exists dropset boolean not null default false;
 alter table public.set_entries add column if not exists failure boolean not null default false;
 
-create table if not exists public.day_habits (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  date timestamptz not null,
-  creatine boolean not null default false,
-  slept_enough boolean not null default false,
-  note text not null default '',
-  bed_time timestamptz,
-  wake_time timestamptz,
-  sleep_quality int not null default 0
-);
-
-create table if not exists public.routines (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  exercises jsonb not null default '[]',
-  created_at timestamptz not null
-);
-
-create table if not exists public.meals (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  protein int not null,
-  kcal int not null default 0,
-  created_at timestamptz not null,
-  servings float8 not null default 1,
-  ingredients jsonb not null default '[]'
-);
-
-create table if not exists public.scales (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  correction float8 not null default 0
-);
-
-create table if not exists public.custom_habits (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  created_at timestamptz not null
-);
-
-create table if not exists public.habit_logs (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
-  name text not null,
-  date timestamptz not null
-);
-
--- Row level security: iedereen kan alleen zijn eigen rijen zien/schrijven.
-do $$
-declare t text;
-begin
-  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','day_habits','routines','meals','scales','custom_habits','habit_logs','food_products','exercises']
-  loop
-    execute format('alter table public.%I enable row level security', t);
-    execute format('drop policy if exists "own rows" on public.%I', t);
-    execute format('create policy "own rows" on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)', t);
-    execute format('create index if not exists %I on public.%I (user_id)', t || '_user_idx', t);
-  end loop;
-end $$;
-
--- Atomaire push: vervangt alle data van de ingelogde gebruiker in één transactie,
--- zodat netwerkuitval nooit een half-gewiste server achterlaat.
+-- sync_push bijgewerkt: neemt dropset/failure mee bij het herschrijven van de sets.
 create or replace function public.sync_push(payload jsonb)
 returns void
 language plpgsql
@@ -265,9 +122,8 @@ begin
 end;
 $$;
 
--- Account verwijderen vanuit de app (App Store 5.1.1(v)). security definer draait als
--- eigenaar (postgres), die auth.users mag wissen; de on-delete-cascade ruimt alle
--- public.* rijen van de gebruiker op.
+-- Account verwijderen vanuit de app. security definer draait als eigenaar (postgres),
+-- die auth.users mag wissen; de on-delete-cascade ruimt alle public.* rijen op.
 create or replace function public.delete_account()
 returns void
 language plpgsql

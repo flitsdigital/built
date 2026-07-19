@@ -16,7 +16,9 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var cal: Calendar { .current }
     private let managedIDs = ["morning-0", "morning-1", "morning-2",
                               "evening-0", "evening-1", "evening-2",
-                              "streak", "week-5", "week-6", "review"]
+                              "streak", "review",
+                              // elke weekdag kan een trainingsherinnering hebben (eigen trainingsdagen)
+                              "week-1", "week-2", "week-3", "week-4", "week-5", "week-6", "week-7"]
 
     // MARK: - Setup
 

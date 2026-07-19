@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AuthenticationServices
 
 struct ProfileView: View {
     @Bindable var profile: Profile
@@ -27,6 +28,7 @@ struct ProfileView: View {
     @State private var confirmRestore = false
     @State private var showLogin = false
     @State private var confirmLogout = false
+    @State private var confirmDelete = false
     @State private var habitToDelete: CustomHabit?
     @State private var scaleToDelete: Scale?
     @State private var calMessage: String?
@@ -262,6 +264,12 @@ struct ProfileView: View {
                         }
                         .disabled(busy)
                     }
+                    Button(role: .destructive) {
+                        confirmDelete = true
+                    } label: {
+                        Label("Account verwijderen", systemImage: "trash")
+                    }
+                    .disabled(busy)
                 } header: {
                     Text("Account")
                 } footer: {
@@ -403,6 +411,27 @@ struct ProfileView: View {
         } message: {
             Text("Je data blijft altijd op je account staan. \"Toestel leegmaken\" verwijdert alleen de lokale kopie.")
         }
+        .confirmationDialog("Account definitief verwijderen?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Account en alle data verwijderen", role: .destructive) {
+                deleteAccount()
+            }
+            Button("Annuleer", role: .cancel) {}
+        } message: {
+            Text("Dit wist je account én al je data (training, voeding, gewicht) permanent van de server en dit toestel. Dit kan niet ongedaan worden gemaakt.")
+        }
+    }
+
+    private func deleteAccount() {
+        busy = true
+        backupMessage = nil
+        Task {
+            do {
+                try await Sync.deleteAccount(context: context)
+            } catch {
+                backupMessage = "Verwijderen mislukt: \(error.localizedDescription)"
+            }
+            busy = false
+        }
     }
 
     private func syncCalendar() {
@@ -472,6 +501,7 @@ struct AccountLoginSheet: View {
     @State private var password = ""
     @State private var busy = false
     @State private var message: String?
+    @State private var appleNonce = ""
 
     private var formValid: Bool {
         email.contains("@") && password.count >= 6
@@ -516,6 +546,19 @@ struct AccountLoginSheet: View {
                 }
 
                 Section {
+                    SignInWithAppleButton(.continue) { request in
+                        appleNonce = Sync.makeAppleNonce()
+                        request.requestedScopes = [.fullName, .email]
+                        request.nonce = Sync.hashNonce(appleNonce)
+                    } onCompletion: { result in
+                        run { try await Sync.finishAppleSignIn(result, rawNonce: appleNonce, context: context) }
+                    }
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 48)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .disabled(busy)
+
                     Button {
                         google()
                     } label: {
