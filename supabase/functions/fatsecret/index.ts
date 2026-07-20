@@ -136,6 +136,7 @@ Deno.serve(async (req) => {
 
     if (action === "search") {
       const data = await fs({ method: "foods.search", search_expression: query ?? "", max_results: "20" });
+      if (data?.error) return json({ error: data.error }, 502); // bv. IP-restrictie (code 21)
       let foods = data?.foods?.food ?? [];
       if (!Array.isArray(foods)) foods = foods ? [foods] : [];
       const products = foods
@@ -146,6 +147,7 @@ Deno.serve(async (req) => {
 
     if (action === "barcode") {
       const idData = await fs({ method: "food.find_id_for_barcode", barcode: barcode ?? "" });
+      if (idData?.error) return json({ error: idData.error }, 502);
       const foodId = idData?.food_id?.value;
       if (!foodId || foodId === "0") return json({ product: null });
       const detail = await fs({ method: "food.get.v2", food_id: String(foodId) });
