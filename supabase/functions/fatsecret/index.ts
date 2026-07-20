@@ -134,6 +134,12 @@ Deno.serve(async (req) => {
   try {
     const { action, query, barcode } = await req.json();
 
+    // Debug: welk uitgaand IP heeft deze functie? (voor de FatSecret-whitelist)
+    if (action === "ip") {
+      const r = await fetch("https://api.ipify.org?format=json");
+      return json(await r.json());
+    }
+
     if (action === "search") {
       const data = await fs({ method: "foods.search", search_expression: query ?? "", max_results: "20" });
       if (data?.error) return json({ error: data.error }, 502); // bv. IP-restrictie (code 21)
