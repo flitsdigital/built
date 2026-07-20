@@ -9,7 +9,7 @@ enum OFF {
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
         cfg.httpAdditionalHeaders = ["User-Agent": "Built/1.0 (iOS; support@builtapp.nl)"]
-        cfg.timeoutIntervalForRequest = 10
+        cfg.timeoutIntervalForRequest = 12
         cfg.requestCachePolicy = .returnCacheDataElseLoad
         cfg.urlCache = URLCache(memoryCapacity: 8 << 20, diskCapacity: 40 << 20)
         return URLSession(configuration: cfg)
@@ -103,10 +103,28 @@ enum OFF {
         return product(from: raw)
     }
 
+    /// nil = OpenFoodFacts niet bereikbaar; [] = echt geen resultaten.
     static func search(_ query: String) async -> [Product]? {
         let key = query.lowercased()
         if let cached = queryCache[key] { return cached }   // eerder gezocht → instant
-        // search-a-licious, gesorteerd op populariteit → bekende (NL) producten bovenaan
+        // Beide endpoints tegelijk: de eerste met resultaten wint. Zo faalt zoeken
+        // alleen als béíde onbereikbaar zijn, i.p.v. te wachten op één trage endpoint.
+        let result: [Product]? = await withTaskGroup(of: [Product]?.self) { group in
+            group.addTask { await salSearch(query) }
+            group.addTask { await legacySearch(query) }
+            var reachable = false
+            for await r in group {
+                if let r, !r.isEmpty { group.cancelAll(); return r }
+                if r != nil { reachable = true } // [] = bereikbaar maar leeg
+            }
+            return reachable ? [] : nil
+        }
+        if let result, !result.isEmpty { queryCache[key] = result }
+        return result
+    }
+
+    /// search-a-licious: populariteit-gesorteerd, NL bovenaan. Snel maar wisselvallig.
+    private static func salSearch(_ query: String) async -> [Product]? {
         var comps = URLComponents(string: "https://search.openfoodfacts.org/search")!
         comps.queryItems = [
             .init(name: "q", value: query),
@@ -115,18 +133,11 @@ enum OFF {
             .init(name: "page_size", value: "20"),
             .init(name: "fields", value: "code,product_name,brands,nutriments,image_front_small_url,serving_quantity,serving_quantity_unit,product_quantity"),
         ]
-        if let url = comps.url,
-           let (data, _) = try? await session.data(from: url),
-           let response = try? JSONDecoder().decode(SaLResponse.self, from: data) {
-            let found = response.hits.compactMap(product(from:))
-            if !found.isEmpty { queryCache[key] = found; return found }
-        }
-        let fallback = await legacySearch(query)
-        if let fallback, !fallback.isEmpty { queryCache[key] = fallback }
-        return fallback
+        guard let url = comps.url,
+              let (data, _) = try? await session.data(from: url),
+              let response = try? JSONDecoder().decode(SaLResponse.self, from: data) else { return nil }
+        return response.hits.compactMap(product(from:))
     }
-
-    /// nil = OpenFoodFacts niet bereikbaar; [] = echt geen resultaten.
 
     private static func legacySearch(_ query: String) async -> [Product]? {
         var comps = URLComponents(string: "https://world.openfoodfacts.org/cgi/search.pl")!
