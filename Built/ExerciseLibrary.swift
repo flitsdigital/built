@@ -279,6 +279,12 @@ struct ExerciseLibraryView: View {
 
     var body: some View {
         List {
+            if byMuscle.isEmpty {
+                ContentUnavailableView(
+                    query.isEmpty ? "Nog geen oefeningen" : "Niets gevonden",
+                    systemImage: "dumbbell",
+                    description: Text(query.isEmpty ? "Voeg je eerste oefening toe met +." : "Geen oefening voor “\(query)”."))
+            }
             ForEach(byMuscle, id: \.muscle) { group in
                 Section(group.muscle) {
                     ForEach(group.items) { ex in
@@ -325,10 +331,15 @@ struct ExerciseLibraryView: View {
 
 struct ExerciseEditor: View {
     @Bindable var exercise: Exercise
+    @Environment(\.modelContext) private var context
+    @Query private var sets: [SetEntry]
+    @Query private var routines: [Routine]
+    @State private var name = ""
+    @State private var original = ""
 
     var body: some View {
         Form {
-            TextField("Naam", text: $exercise.name)
+            TextField("Naam", text: $name)
             Picker("Spiergroep", selection: $exercise.muscle) {
                 ForEach(Exercise.muscles, id: \.self) { Text($0) }
             }
@@ -336,7 +347,27 @@ struct ExerciseEditor: View {
                 ForEach(Exercise.types, id: \.self) { Text($0) }
             }
         }
-        .navigationTitle(exercise.name)
+        .navigationTitle(name.isEmpty ? exercise.name : name)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if original.isEmpty { name = exercise.name; original = exercise.name } }
+        .onDisappear(perform: commitRename)
+    }
+
+    /// Rename pas bij het verlaten (niet per toetsaanslag), en verhuis alle historie
+    /// mee — sets/routines koppelen op naam, dus anders raken records en grafieken los.
+    private func commitRename() {
+        let new = name.trimmingCharacters(in: .whitespaces)
+        guard !new.isEmpty, new != original else { return }
+        exercise.name = new
+        for s in sets where s.exercise == original { s.exercise = new }
+        for r in routines {
+            r.exercises = r.exercises.map { $0 == original ? new : $0 }
+            if let v = r.alternatives.removeValue(forKey: original) { r.alternatives[new] = v }
+            if let v = r.targets.removeValue(forKey: original) { r.targets[new] = v }
+            if let v = r.supersets.removeValue(forKey: original) { r.supersets[new] = v }
+            if let v = r.restByExercise.removeValue(forKey: original) { r.restByExercise[new] = v }
+            r.alternatives = r.alternatives.mapValues { list in list.map { $0 == original ? new : $0 } }
+        }
+        original = new
     }
 }

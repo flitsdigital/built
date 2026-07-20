@@ -268,6 +268,13 @@ struct OnboardingView: View {
                 context.insert(profile)
                 context.insert(WeightEntry(kg: weight))
             }
+            if Sync.isConfigured {
+                Text("Je gegevens staan op dit toestel. Koppel later een account via Profiel om ze veilig te stellen en tussen toestellen te synchroniseren.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
         }
         .onAppear {
             withAnimation(.snappy(duration: 0.4).delay(0.15)) { planRevealed = true }

@@ -292,6 +292,16 @@ enum Sync {
         UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
     }
 
+    /// Volledige data als JSON — back-up/portabiliteit los van de server.
+    static func exportJSON(_ context: ModelContext) -> String? {
+        guard let p = try? collect(context, uid: UUID()) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(p), let s = String(data: data, encoding: .utf8) else { return nil }
+        return s
+    }
+
     private static func wipeLocal(_ context: ModelContext) throws {
         try context.delete(model: Profile.self)
         try context.delete(model: WeightEntry.self)
@@ -358,6 +368,11 @@ enum Sync {
         client?.auth.currentSession?.user.isAnonymous ?? true
     }
 
+    /// Actieve sessie? Na registreren met e-mailbevestiging-aan is die er nog niet.
+    static var hasSession: Bool {
+        client?.auth.currentSession != nil
+    }
+
     private static func notConfigured() -> Error {
         NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])
     }
@@ -373,6 +388,12 @@ enum Sync {
         }
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
+    }
+
+    /// Stuurt een wachtwoord-reset-mail zodat een gebruiker niet buitengesloten raakt.
+    static func resetPassword(email: String) async throws {
+        guard let client else { throw notConfigured() }
+        try await client.auth.resetPasswordForEmail(email)
     }
 
     /// Inloggen op een bestaand account; haalt daarna veilig de serverstaat op.

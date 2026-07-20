@@ -200,7 +200,8 @@ struct FoodView: View {
     private var totalCarbs: Int { dayEntries.map(\.carbs).reduce(0, +) }
     private var totalFat: Int { dayEntries.map(\.fat).reduce(0, +) }
     private var kcalTarget: Int {
-        profile.kcalTargetEffective(currentWeight: weights.last?.kg ?? profile.startWeight)
+        // Zelfde "huidig gewicht" als het dashboard: 7-daags gemiddelde, niet één ruisige weging.
+        profile.kcalTargetEffective(currentWeight: weights.average(daysBack: 0..<7) ?? weights.last?.kg ?? profile.startWeight)
     }
 
     private func entries(for meal: String) -> [ProteinEntry] {
@@ -243,6 +244,7 @@ struct FoodView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showReport = true } label: { Image(systemName: "chart.bar.doc.horizontal") }
+                    .accessibilityLabel("Weekrapport")
             }
         }
         .sheet(isPresented: $showReport) {
@@ -294,6 +296,7 @@ struct FoodView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityLabel(icon.contains("left") ? "Vorige dag" : "Volgende dag")
     }
 
     private var summaryRow: some View {
@@ -496,6 +499,9 @@ struct FoodLogSheet: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    .onDelete { offsets in
+                        for i in offsets { context.delete(own[i]) }
+                    }
                 }
             }
             if query.count >= 3 {
@@ -528,6 +534,7 @@ struct FoodLogSheet: View {
                 }
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .task(id: "\(query)#\(retryToken)") {
             let q = query
             guard q.count >= 3 else { results = []; searching = false; searchFailed = false; return }

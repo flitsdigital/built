@@ -12,6 +12,8 @@ struct WeightView: View {
     @State private var showLogSheet = false
     @State private var periodDays = 90
     @State private var scrubDate: Date?
+    @State private var editEntry: WeightEntry?
+    @State private var editText = ""
 
     private var cal: Calendar { .current }
 
@@ -173,7 +175,8 @@ struct WeightView: View {
             ForEach(monthGroups, id: \.month) { group in
                 Section(group.month.formatted(.dateTime.month(.wide).year())) {
                     ForEach(group.entries) { entry in
-                        entryRow(entry)
+                        Button { editEntry = entry; editText = entry.kg.kgText } label: { entryRow(entry) }
+                            .buttonStyle(.plain)
                     }
                     .onDelete { offsets in
                         for i in offsets { context.delete(group.entries[i]) }
@@ -186,6 +189,14 @@ struct WeightView: View {
             Button("Wegen", systemImage: "plus") { showLogSheet = true }
         }
         .sheet(isPresented: $showLogSheet) { WeightLogSheet() }
+        .alert("Weging aanpassen", isPresented: Binding(get: { editEntry != nil }, set: { if !$0 { editEntry = nil } })) {
+            TextField("kg", text: $editText).keyboardType(.decimalPad)
+            Button("Opslaan") {
+                if let e = editEntry, let v = Double(editText.replacingOccurrences(of: ",", with: ".")), v > 0 { e.kg = v }
+                editEntry = nil
+            }
+            Button("Annuleer", role: .cancel) { editEntry = nil }
+        }
         .sensoryFeedback(.increase, trigger: weights.count) { old, new in new > old }
     }
 

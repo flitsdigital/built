@@ -15,7 +15,6 @@ struct DashboardView: View {
     @Query private var habitLogs: [HabitLog]
 
     @State private var showWeightSheet = false
-    @State private var showProteinSheet = false
     @State private var showNoteAlert = false
     @State private var showSleepSheet = false
     @State private var showWeeklyReview = false
@@ -144,7 +143,6 @@ struct DashboardView: View {
         .sensoryFeedback(.success, trigger: score) { _, new in new == 100 } // succes-haptic alleen op het zeldzame moment
         .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet() }
-        .sheet(isPresented: $showProteinSheet) { ProteinLogSheet(profile: profile) }
         .sheet(isPresented: $showSleepSheet) { SleepSheet() }
         .alert("Notitie voor vandaag", isPresented: $showNoteAlert) {
             TextField("bijv. Veel energie vandaag", text: $noteInput)
@@ -201,6 +199,7 @@ struct DashboardView: View {
                             Circle().fill(.orange).frame(width: 10, height: 10)
                         }
                     }
+                    .accessibilityLabel(syncStatus.lastError != nil ? "Profiel, synchronisatie-fout" : "Profiel")
                 }
             }
         }

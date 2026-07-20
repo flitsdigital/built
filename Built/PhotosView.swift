@@ -10,6 +10,7 @@ struct PhotosView: View {
 
     @State private var angle = "front"
     @State private var pickerItem: PhotosPickerItem?
+    @State private var saveError: String?
 
     private let angles = [("front", "Voor"), ("side", "Zij"), ("back", "Rug")]
     private var filtered: [PhotoEntry] { photos.filter { $0.angle == angle } }
@@ -63,8 +64,20 @@ struct PhotosView: View {
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Label("Foto toevoegen", systemImage: "plus")
                 }
+                if !photos.isEmpty {
+                    ShareLink(items: photos.map(\.fileURL)) {
+                        Label("Foto's exporteren", systemImage: "square.and.arrow.up")
+                    }
+                }
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
             } header: {
                 Text("Alle foto's")
+            } footer: {
+                Text("Foto's blijven alleen op dit toestel — ze worden niet naar de server gesynct. Maak een back-up via Foto's exporteren of iCloud-toestelback-up.")
             }
         }
         .tabBarClearance()
@@ -86,8 +99,9 @@ struct PhotosView: View {
         do {
             try data.write(to: PhotoEntry.directory.appendingPathComponent(name))
             context.insert(PhotoEntry(angle: angle, fileName: name))
+            saveError = nil
         } catch {
-            // schrijffout → geen entry zonder bestand
+            saveError = "Foto opslaan mislukt. Probeer het opnieuw."
         }
     }
 

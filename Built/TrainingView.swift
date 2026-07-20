@@ -84,6 +84,7 @@ struct TrainingView: View {
     @State private var newRoutineName = ""
     @State private var confirmDiscard = false
     @State private var dayToDelete: Date?
+    @State private var exerciseToRemove: DraftExercise.ID?
     @State private var prToast: String?
     @FocusState private var focusedSet: UUID?
     private let workoutStatus = WorkoutStatus.shared
@@ -415,7 +416,12 @@ struct TrainingView: View {
     private func finishWorkout() {
         saveExerciseNotes()
         WorkoutStatus.shared.endWorkout()
-        let previousDay = pastDays.first { !cal.isDateInToday($0) }
+        // Vergelijk met de vorige sessie die minstens één oefening deelt — niet met een
+        // willekeurige vorige dag (anders vergelijk je Legs met Push).
+        let names = Set(workout.map(\.name))
+        let previousDay = pastDays.first { day in
+            !cal.isDateInToday(day) && sets(on: day).contains { names.contains($0.exercise) }
+        }
         let previousVolume = previousDay.map { day in
             Int(sets(on: day).map { $0.weightKg * Double($0.reps) }.reduce(0, +))
         }
@@ -454,6 +460,7 @@ struct TrainingView: View {
             if active { activeSections } else { idleSections }
         }
         .navigationTitle("Training")
+        .scrollDismissesKeyboard(.interactively)
         .toolbar {
             if active {
                 ToolbarItem(placement: .principal) {
@@ -512,6 +519,18 @@ struct TrainingView: View {
                 dayToDelete = nil
             }
             Button("Annuleer", role: .cancel) { dayToDelete = nil }
+        }
+        .confirmationDialog("Oefening verwijderen?",
+                            isPresented: Binding(get: { exerciseToRemove != nil },
+                                                 set: { if !$0 { exerciseToRemove = nil } }),
+                            titleVisibility: .visible) {
+            Button("Verwijder oefening en sets", role: .destructive) {
+                if let id = exerciseToRemove { removeExercise(id) }
+                exerciseToRemove = nil
+            }
+            Button("Annuleer", role: .cancel) { exerciseToRemove = nil }
+        } message: {
+            Text("Je hebt al sets afgevinkt voor deze oefening. Die worden ook verwijderd.")
         }
         .sheet(item: $summary) { s in
             WorkoutSummarySheet(summary: s, name: profile.name)
@@ -767,7 +786,7 @@ struct TrainingView: View {
                             Text(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
                                 .font(.headline)
                             if isPRDay(day) {
-                                Text("🏆").font(.caption)
+                                Text("🏆").font(.caption).accessibilityLabel("Persoonlijk record")
                             }
                             Spacer()
                             Text("\(vol) kg")
@@ -843,6 +862,8 @@ struct TrainingView: View {
                     Text("REPS").frame(width: 48)
                     Spacer()
                 }
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.tertiary)
                 .listRowSeparator(.hidden)
@@ -930,7 +951,8 @@ struct TrainingView: View {
                         Button("Verplaats omhoog", systemImage: "arrow.up") { moveExercise(ex.id, by: -1) }
                         Button("Verplaats omlaag", systemImage: "arrow.down") { moveExercise(ex.id, by: 1) }
                         Button("Oefening verwijderen", systemImage: "trash", role: .destructive) {
-                            removeExercise(ex.id)
+                            if ex.sets.contains(where: { $0.done && !$0.warmup }) { exerciseToRemove = ex.id }
+                            else { removeExercise(ex.id) }
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -1079,6 +1101,7 @@ struct TrainingView: View {
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(set.wrappedValue.done ? "Set afgevinkt" : "Set afvinken")
         }
         .listRowBackground(set.wrappedValue.done ? Color.green.opacity(0.12) : nil)
     }

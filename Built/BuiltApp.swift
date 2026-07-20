@@ -277,6 +277,8 @@ struct FloatingTabBar: View {
                     .foregroundStyle(selected ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(items[i].label)
+                .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
             }
         }
         .padding(6)

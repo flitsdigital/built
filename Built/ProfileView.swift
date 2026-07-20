@@ -29,6 +29,9 @@ struct ProfileView: View {
     @State private var showLogin = false
     @State private var confirmLogout = false
     @State private var confirmDelete = false
+    @State private var confirmNewPhase = false
+    @State private var renameHabit: CustomHabit?
+    @State private var renameText = ""
     @State private var habitToDelete: CustomHabit?
     @State private var scaleToDelete: Scale?
     @State private var calMessage: String?
@@ -57,7 +60,7 @@ struct ProfileView: View {
     }
 
     private var autoKcal: Int {
-        profile.autoKcalTarget(currentWeight: weights.last?.kg ?? profile.startWeight)
+        profile.autoKcalTarget(currentWeight: weights.average(daysBack: 0..<7) ?? weights.last?.kg ?? profile.startWeight)
     }
 
     private var weightCSV: String {
@@ -119,8 +122,11 @@ struct ProfileView: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 64)
                 }
+                Button("Nieuwe fase starten") { confirmNewPhase = true }
             } header: {
                 Text("Jouw doel")
+            } footer: {
+                Text("\"Nieuwe fase starten\" herijkt je startpunt naar je huidige gewicht en vandaag — handig bij een nieuwe cut of bulk. Je historie blijft staan.")
             }
 
             Section {
@@ -192,7 +198,9 @@ struct ProfileView: View {
 
             Section("Eigen habits") {
                 ForEach(customHabits) { habit in
-                    Text(habit.name)
+                    Button { renameHabit = habit; renameText = habit.name } label: {
+                        Text(habit.name).foregroundStyle(.primary)
+                    }
                 }
                 .onDelete { offsets in
                     habitToDelete = offsets.first.map { customHabits[$0] }
@@ -348,6 +356,11 @@ struct ProfileView: View {
                         Label("Exporteer gewichtsdata", systemImage: "square.and.arrow.up")
                     }
                 }
+                if let json = Sync.exportJSON(context) {
+                    ShareLink(item: json, preview: SharePreview("Built-data (JSON)")) {
+                        Label("Exporteer alle data (JSON)", systemImage: "square.and.arrow.up.on.square")
+                    }
+                }
                 Link(destination: URL(string: "mailto:flitsdigital1@gmail.com?subject=Built%20feedback")!) {
                     Label("Feedback sturen", systemImage: "envelope")
                 }
@@ -355,6 +368,7 @@ struct ProfileView: View {
         }
         .tabBarClearance()
         .navigationTitle("Profiel")
+        .scrollDismissesKeyboard(.interactively)
         .alert("Nieuwe habit", isPresented: $showAddHabit) {
             TextField("bijv. Vitamine D", text: $habitName)
             Button("Toevoegen") {
@@ -419,6 +433,33 @@ struct ProfileView: View {
         } message: {
             Text("Dit wist je account én al je data (training, voeding, gewicht) permanent van de server en dit toestel. Dit kan niet ongedaan worden gemaakt.")
         }
+        .confirmationDialog("Nieuwe fase starten?", isPresented: $confirmNewPhase, titleVisibility: .visible) {
+            Button("Herijk startpunt naar nu") {
+                profile.startWeight = weights.average(daysBack: 0..<7) ?? weights.last?.kg ?? profile.startWeight
+                profile.startDate = .now
+            }
+            Button("Annuleer", role: .cancel) {}
+        } message: {
+            Text("Je startgewicht wordt je huidige gewicht en de startdatum wordt vandaag. Projecties beginnen opnieuw; je metingen en trainingen blijven staan.")
+        }
+        .alert("Habit hernoemen", isPresented: Binding(get: { renameHabit != nil }, set: { if !$0 { renameHabit = nil } })) {
+            TextField("Naam", text: $renameText)
+            Button("Opslaan") {
+                if let h = renameHabit { renameCustomHabit(h, to: renameText) }
+                renameHabit = nil
+            }
+            Button("Annuleer", role: .cancel) { renameHabit = nil }
+        }
+    }
+
+    private func renameCustomHabit(_ habit: CustomHabit, to newName: String) {
+        let new = newName.trimmingCharacters(in: .whitespaces)
+        guard !new.isEmpty, new != habit.name else { return }
+        let old = habit.name
+        habit.name = new
+        // HabitLog koppelt op naam → mee-updaten zodat de vinkjes niet losraken.
+        let logs = (try? context.fetch(FetchDescriptor<HabitLog>())) ?? []
+        for log in logs where log.name == old { log.name = new }
     }
 
     private func deleteAccount() {
@@ -539,6 +580,13 @@ struct AccountLoginSheet: View {
                     .disabled(busy || !formValid)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     .listRowBackground(Color.clear)
+                    if !registering {
+                        Button("Wachtwoord vergeten?") { resetPassword() }
+                            .font(.footnote)
+                            .disabled(busy || !email.contains("@"))
+                            .frame(maxWidth: .infinity)
+                            .listRowBackground(Color.clear)
+                    }
                 } footer: {
                     Text(registering
                          ? "Registreren op dit toestel koppelt je huidige data aan je account."
@@ -585,19 +633,45 @@ struct AccountLoginSheet: View {
     }
 
     private func submit() {
-        run {
-            let mail = email.trimmingCharacters(in: .whitespaces)
-            if registering {
+        let mail = email.trimmingCharacters(in: .whitespaces)
+        guard registering else {
+            run { try await Sync.signIn(email: mail, password: password, context: context) }
+            return
+        }
+        busy = true
+        message = nil
+        Task {
+            do {
                 try await Sync.register(email: mail, password: password, context: context)
-            } else {
-                try await Sync.signIn(email: mail, password: password, context: context)
+                if Sync.hasSession {
+                    dismiss() // meteen ingelogd (bevestiging staat uit)
+                } else {
+                    message = "Check je mail om je account te bevestigen, en log daarna in."
+                }
+            } catch {
+                message = "Mislukt: \(error.localizedDescription)"
             }
+            busy = false
         }
     }
 
     private func google() {
         run {
             try await Sync.signInWithGoogle(context: context)
+        }
+    }
+
+    private func resetPassword() {
+        busy = true
+        message = nil
+        Task {
+            do {
+                try await Sync.resetPassword(email: email.trimmingCharacters(in: .whitespaces))
+                message = "We hebben je een reset-link gemaild (check ook je spam)."
+            } catch {
+                message = "Mislukt: \(error.localizedDescription)"
+            }
+            busy = false
         }
     }
 

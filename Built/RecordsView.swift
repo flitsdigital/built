@@ -26,10 +26,11 @@ struct RecordsView: View {
             let topWeight = group.map(\.weightKg).max() ?? 0
             let byDay = Dictionary(grouping: group) { cal.startOfDay(for: $0.date) }
             let bestVolume = byDay.values.map { day in Int(day.map { $0.weightKg * Double($0.reps) }.reduce(0, +)) }.max() ?? 0
-            // PR van deze week? beste e1RM van de laatste sessie > alles ervoor
+            // Recente PR? beste e1RM van de laatste sessie > alles ervoor, en die
+            // sessie hoogstens 14 dagen oud (anders blijft de badge eeuwig staan).
             let days = byDay.keys.sorted()
             var recentPR = false
-            if let last = days.last, days.count >= 2 {
+            if let last = days.last, days.count >= 2, (cal.dateComponents([.day], from: last, to: .now).day ?? 99) <= 14 {
                 let lastBest = (byDay[last] ?? []).map { epley($0.weightKg, $0.reps) }.max() ?? 0
                 let before = group.filter { $0.date < last }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
                 recentPR = before > 0 && lastBest > before + 0.1

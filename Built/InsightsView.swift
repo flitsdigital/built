@@ -73,11 +73,6 @@ struct InsightsView: View {
 
     private var weekDelta: Double? { weights.trendPerWeek }
 
-    private var onTrack: Bool {
-        guard let d = weekDelta else { return true }
-        return trainingDays >= profile.trainingsPerWeek && abs(d - profile.weeklyRate) < 0.2
-    }
-
     private var advices: [(text: String, warning: Bool)] {
         var out: [(text: String, warning: Bool)] = []
         if trainingDays < profile.trainingsPerWeek {
@@ -213,7 +208,7 @@ struct InsightsView: View {
                 }
                 HStack {
                     statTile(value: weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—",
-                             label: "kg deze week")
+                             label: "trend/week")
                     Divider()
                     statTile(value: "\(perfectLast7)/7", label: "perfecte dagen")
                 }
@@ -355,16 +350,6 @@ struct InsightsView: View {
         .navigationDestination(item: $selectedDayBox) { box in
             DayDetailView(day: box.day, profile: profile)
         }
-    }
-
-    private func muscleBar(_ value: Double, max: Double) -> some View {
-        GeometryReader { geo in
-            RoundedRectangle(cornerRadius: 3)
-                .fill(.green.opacity(0.25))
-                .frame(width: geo.size.width * (max > 0 ? value / max : 0), height: 6)
-        }
-        .frame(height: 6)
-        .listRowSeparator(.hidden)
     }
 
     /// 5 weken × 7 dagen; gevuld = perfecte dag, tik = logboek.
@@ -574,7 +559,7 @@ struct WeeklyReviewSheet: View {
                 tile("\(proteinDays)/7", "eiwit-dagen")
             }
             HStack {
-                tile(weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—", "kg deze week")
+                tile(weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—", "trend/week")
                 tile("\(perfectDays)/7", "perfecte dagen")
             }
             if let bestLift {

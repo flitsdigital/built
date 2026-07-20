@@ -183,7 +183,8 @@ struct ProteinLogSheet: View {
 
     private func repeatYesterday() {
         for entry in yesterdayEntries {
-            let newDate = cal.date(byAdding: .day, value: 1, to: entry.date) ?? .now
+            // Niet in de toekomst plaatsen: een item van gisteravond wordt anders "vanavond".
+            let newDate = min(cal.date(byAdding: .day, value: 1, to: entry.date) ?? .now, .now)
             context.insert(ProteinEntry(date: newDate, grams: entry.grams, label: entry.label,
                                         kcal: entry.kcal, meal: entry.meal))
         }
@@ -304,6 +305,11 @@ struct MealsView: View {
     var body: some View {
         List {
             Section {
+                if meals.isEmpty {
+                    Text("Nog geen maaltijden. Voeg je vaste maaltijden of recepten toe voor snel loggen.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 ForEach(meals) { m in
                     NavigationLink {
                         MealEditorView(meal: m)

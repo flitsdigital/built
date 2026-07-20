@@ -77,7 +77,7 @@ struct MacroRings: View {
                          lineWidth: 10, tint: AnyShapeStyle(Color.macroProtein)) {
                 VStack(spacing: 0) {
                     Text("\(protein)").font(.title3.bold().monospacedDigit())
-                    Text("van \(proteinTarget)g").font(.caption2).foregroundStyle(.secondary)
+                    Text("van \(proteinTarget) g").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             .frame(width: 92, height: 92)
@@ -92,15 +92,19 @@ struct MacroRings: View {
         }
     }
 
+    // Koolhydraten/vet hebben geen doel → een gekleurde stip i.p.v. een (altijd volle,
+    // misleidende) ring. Geen valse "doel bereikt"-suggestie.
     private func macroMini(_ label: String, _ grams: Int, _ color: Color) -> some View {
         HStack(spacing: 8) {
-            ProgressRing(value: grams > 0 ? 1 : 0, lineWidth: 5, tint: AnyShapeStyle(color))
-                .frame(width: 26, height: 26)
+            Circle().fill(color).frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 0) {
                 Text("\(grams) g").font(.subheadline.bold().monospacedDigit())
                 Text(label).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue("\(grams) gram")
     }
 }
