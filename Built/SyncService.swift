@@ -107,27 +107,6 @@ enum Sync {
 
     static var isConfigured: Bool { client != nil }
 
-    // MARK: - Edge Functions (proxy voor o.a. FatSecret)
-
-    struct FunctionAuth: Sendable { let url: URL; let bearer: String; let apikey: String }
-
-    private static func secretsDict() -> [String: String]? {
-        guard let url = Bundle.main.url(forResource: "Secrets", withExtension: "plist"),
-              let dict = NSDictionary(contentsOf: url) as? [String: String] else { return nil }
-        return dict
-    }
-
-    /// URL + auth voor een Edge Function. Bearer = de Supabase-sessie (anoniem of
-    /// ingelogd), zodat de functie alleen door app-gebruikers aan te roepen is.
-    static func functionAuth(_ name: String) -> FunctionAuth? {
-        guard let dict = secretsDict(),
-              let urlStr = dict["SUPABASE_URL"], let key = dict["SUPABASE_ANON_KEY"],
-              !urlStr.isEmpty, !key.isEmpty,
-              let url = URL(string: urlStr + "/functions/v1/" + name) else { return nil }
-        let bearer = client?.auth.currentSession?.accessToken ?? key
-        return FunctionAuth(url: url, bearer: bearer, apikey: key)
-    }
-
     private static func userID() async throws -> UUID {
         guard let client else {
             throw NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])

@@ -2,20 +2,25 @@ import SwiftUI
 import SwiftData
 import VisionKit
 
-// MARK: - Voedingdata via FatSecret (achter een Supabase Edge Function-proxy)
+// MARK: - OpenFoodFacts (gratis, open, geen key)
 
-/// De app praat nooit rechtstreeks met FatSecret — de `fatsecret` Edge Function houdt
-/// de client-secret server-side, doet OAuth2 en normaliseert alles naar `Product`.
+/// Zoeken/opzoeken via OpenFoodFacts, robuust gemaakt: meerdere endpoints tegelijk
+/// (incl. de NL-mirror), één retry bij een storing, en een cache op schijf zodat
+/// eerdere resultaten instant én offline blijven werken.
 enum OFF {
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 15
+        cfg.httpAdditionalHeaders = ["User-Agent": "Built/1.0 (iOS)"] // OFF throttelt zonder UA
+        cfg.timeoutIntervalForRequest = 12
+        cfg.requestCachePolicy = .returnCacheDataElseLoad
+        cfg.urlCache = URLCache(memoryCapacity: 8 << 20, diskCapacity: 64 << 20)
         return URLSession(configuration: cfg)
     }()
-    private static var queryCache: [String: [Product]] = [:]
+
+    private static let fields = "code,product_name,brands,nutriments,image_front_small_url,serving_quantity,product_quantity"
 
     /// Voedingswaarden per 100 g/ml, plus optionele eigen portie/verpakking in gram.
-    struct Product: Identifiable, Decodable {
+    struct Product: Identifiable, Codable {
         var id: String { barcode.isEmpty ? name : barcode }
         var name: String
         var brand: String
@@ -29,37 +34,146 @@ enum OFF {
         var packageGrams: Double
     }
 
-    private struct SearchWrap: Decodable { var products: [Product] }
-    private struct LookupWrap: Decodable { var product: Product? }
+    // MARK: - Cache op schijf (eerder gevonden = instant + offline)
 
-    /// nil = proxy/FatSecret niet bereikbaar; [] = echt geen resultaten.
+    private static let cacheURL = URL.cachesDirectory.appendingPathComponent("off_query_cache.json")
+    private static var queryCache: [String: [Product]] =
+        (try? JSONDecoder().decode([String: [Product]].self, from: Data(contentsOf: cacheURL))) ?? [:]
+    private static func persistCache() { try? JSONEncoder().encode(queryCache).write(to: cacheURL) }
+
+    // MARK: - Zoeken
+
+    /// nil = OFF niet bereikbaar; [] = echt geen resultaten.
     static func search(_ query: String) async -> [Product]? {
         let key = query.lowercased()
-        if let cached = queryCache[key] { return cached }
-        guard let data = await call(["action": "search", "query": query]),
-              let decoded = try? JSONDecoder().decode(SearchWrap.self, from: data) else { return nil }
-        if !decoded.products.isEmpty { queryCache[key] = decoded.products }
-        return decoded.products
+        if let cached = queryCache[key] { return cached } // eerder gezocht → instant
+        var result = await raceSearch(query)
+        if result == nil { // storing → één korte retry voordat we opgeven
+            try? await Task.sleep(for: .milliseconds(600))
+            result = await raceSearch(query)
+        }
+        if let result, !result.isEmpty {
+            queryCache[key] = result
+            persistCache()
+        }
+        return result
     }
+
+    /// Drie endpoints tegelijk; de eerste met resultaten wint. Zo faalt zoeken alleen
+    /// als álle drie onbereikbaar zijn — één trage/platte server blokkeert niets.
+    private static func raceSearch(_ query: String) async -> [Product]? {
+        await withTaskGroup(of: [Product]?.self) { group in
+            group.addTask { await sal(query) }
+            group.addTask { await cgi("https://nl.openfoodfacts.org/cgi/search.pl", query) }
+            group.addTask { await cgi("https://world.openfoodfacts.org/cgi/search.pl", query) }
+            var reachable = false
+            for await r in group {
+                if let r, !r.isEmpty { group.cancelAll(); return r }
+                if r != nil { reachable = true } // [] = bereikbaar maar leeg
+            }
+            return reachable ? [] : nil
+        }
+    }
+
+    /// search-a-licious: populariteit-gesorteerd, NL bovenaan.
+    private static func sal(_ query: String) async -> [Product]? {
+        var c = URLComponents(string: "https://search.openfoodfacts.org/search")!
+        c.queryItems = [.init(name: "q", value: query), .init(name: "langs", value: "nl,en"),
+                        .init(name: "sort_by", value: "-popularity_key"), .init(name: "page_size", value: "20"),
+                        .init(name: "fields", value: fields)]
+        guard let url = c.url, let (data, resp) = try? await session.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let r = try? JSONDecoder().decode(SaLResponse.self, from: data) else { return nil }
+        return r.hits.compactMap(product(from:))
+    }
+
+    private static func cgi(_ base: String, _ query: String) async -> [Product]? {
+        var c = URLComponents(string: base)!
+        c.queryItems = [.init(name: "search_terms", value: query), .init(name: "search_simple", value: "1"),
+                        .init(name: "action", value: "process"), .init(name: "json", value: "1"),
+                        .init(name: "page_size", value: "20"), .init(name: "fields", value: fields)]
+        guard let url = c.url, let (data, resp) = try? await session.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let r = try? JSONDecoder().decode(SearchResponse.self, from: data) else { return nil }
+        return r.products.compactMap(product(from:))
+    }
+
+    // MARK: - Barcode (met retry)
 
     static func lookup(barcode: String) async -> Product? {
-        guard let data = await call(["action": "barcode", "barcode": barcode]),
-              let decoded = try? JSONDecoder().decode(LookupWrap.self, from: data) else { return nil }
-        return decoded.product
+        for attempt in 0..<2 {
+            if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
+            guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json?fields=\(fields)"),
+                  let (data, resp) = try? await session.data(from: url) else { continue }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code == 404 { return nil } // bestaat niet → niet retryen
+            if code == 200, let r = try? JSONDecoder().decode(LookupResponse.self, from: data), let raw = r.product {
+                return product(from: raw)
+            }
+        }
+        return nil
     }
 
-    /// POST naar de Edge Function met de Supabase-sessie als bearer (auth = app-gebruikers).
-    private static func call(_ body: [String: String]) async -> Data? {
-        guard let auth = await MainActor.run(body: { Sync.functionAuth("fatsecret") }) else { return nil }
-        var req = URLRequest(url: auth.url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(auth.bearer)", forHTTPHeaderField: "Authorization")
-        req.setValue(auth.apikey, forHTTPHeaderField: "apikey")
-        req.httpBody = try? JSONEncoder().encode(body)
-        guard let (data, resp) = try? await session.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        return data
+    // MARK: - Response-parsing
+
+    private struct LookupResponse: Decodable { var product: RawProduct? }
+    private struct SearchResponse: Decodable { var products: [RawProduct] }
+    private struct SaLResponse: Decodable { var hits: [RawProduct] }
+    private struct RawProduct: Decodable {
+        var code: String?
+        var product_name: String?
+        var brands: String?
+        var image_front_small_url: String?
+        var serving_quantity: FlexibleDouble?
+        var product_quantity: FlexibleDouble?
+        var nutriments: Nutriments?
+    }
+
+    /// OFF levert hoeveelheden soms als getal, soms als string ("250").
+    struct FlexibleDouble: Decodable {
+        let value: Double?
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            value = (try? c.decode(Double.self)) ?? (try? c.decode(String.self)).flatMap(Double.init)
+        }
+    }
+
+    private struct Nutriments: Decodable {
+        var proteins: Double?
+        var kcal: Double?
+        var carbs: Double?
+        var fat: Double?
+        enum CodingKeys: String, CodingKey {
+            case proteins = "proteins_100g"
+            case kcal = "energy-kcal_100g"
+            case carbs = "carbohydrates_100g"
+            case fat = "fat_100g"
+        }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            proteins = Self.number(c, .proteins)
+            kcal = Self.number(c, .kcal)
+            carbs = Self.number(c, .carbs)
+            fat = Self.number(c, .fat)
+        }
+        private static func number(_ c: KeyedDecodingContainer<CodingKeys>, _ k: CodingKeys) -> Double? {
+            (try? c.decode(Double.self, forKey: k)) ?? (try? c.decode(String.self, forKey: k)).flatMap(Double.init)
+        }
+    }
+
+    private static func product(from raw: RawProduct) -> Product? {
+        guard let name = raw.product_name, !name.isEmpty, let n = raw.nutriments,
+              n.proteins != nil || n.kcal != nil else { return nil }
+        func sane(_ v: Double?, _ upper: Double) -> Double {
+            guard let v, v >= 1, v <= upper else { return 0 }
+            return v
+        }
+        return Product(name: name, brand: raw.brands ?? "", barcode: raw.code ?? "",
+                       protein100: n.proteins ?? 0, kcal100: n.kcal ?? 0,
+                       carbs100: n.carbs ?? 0, fat100: n.fat ?? 0,
+                       imageURL: raw.image_front_small_url ?? "",
+                       servingGrams: sane(raw.serving_quantity?.value, 1500),
+                       packageGrams: sane(raw.product_quantity?.value, 5000))
     }
 }
 
@@ -412,11 +526,11 @@ struct FoodLogSheet: View {
                 }
             }
             if query.count >= 3 {
-                Section("FatSecret") {
+                Section("OpenFoodFacts") {
                     if searching {
                         HStack { ProgressView(); Text("Zoeken…").foregroundStyle(.secondary) }
                     } else if searchFailed {
-                        Label("FatSecret is even niet bereikbaar.", systemImage: "wifi.exclamationmark")
+                        Label("OpenFoodFacts is even niet bereikbaar.", systemImage: "wifi.exclamationmark")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                         Button("Opnieuw proberen") { retryToken += 1 }
@@ -503,7 +617,7 @@ struct FoodLogSheet: View {
                         .foregroundStyle(.secondary)
                 }
             } footer: {
-                Text("Richt op de streepjescode van het product. Gevonden via FatSecret.")
+                Text("Richt op de streepjescode van het product. Gevonden via OpenFoodFacts.")
             }
             Section {
                 HStack {
