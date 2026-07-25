@@ -73,7 +73,11 @@ struct TrainingView: View {
     @Query(sort: \Routine.createdAt) private var routines: [Routine]
     @Query private var habits: [DayHabits]
     @Query private var exercises: [Exercise]
+    @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
     @AppStorage("restSeconds") private var restSeconds = 120
+
+    /// Huidig lichaamsgewicht voor het meetellen van bodyweight-oefeningen in het volume.
+    private var bodyWeight: Double { weights.last?.kg ?? profile.startWeight }
 
     @State private var active = false
     @State private var workout: [DraftExercise] = []
@@ -433,7 +437,9 @@ struct TrainingView: View {
         var totals: [String: Double] = [:]
         for ex in workout {
             let m = muscleOf[ex.originalName ?? ex.name] ?? muscleOf[ex.name] ?? "Overig"
-            let vol = ex.sets.filter { $0.done && !$0.warmup }.map { $0.kg * Double($0.reps) }.reduce(0, +)
+            let bw = exercises.isBodyweight(ex.name)
+            let vol = ex.sets.filter { $0.done && !$0.warmup }
+                .map { liftLoad(kg: $0.kg, bodyweight: bodyWeight, bodyweightExercise: bw) * Double($0.reps) }.reduce(0, +)
             if vol > 0 { totals[m, default: 0] += vol }
         }
         guard let maxV = totals.values.max(), maxV > 0 else { return [:] }
@@ -451,7 +457,7 @@ struct TrainingView: View {
             !cal.isDateInToday(day) && sets(on: day).contains { names.contains($0.exercise) }
         }
         let previousVolume = previousDay.map { day in
-            Int(sets(on: day).map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+            Int(sets(on: day).map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         }
         summary = WorkoutSummary(
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
@@ -481,7 +487,16 @@ struct TrainingView: View {
     }
 
     private var doneCount: Int { workout.flatMap(\.sets).filter { $0.done && !$0.warmup }.count }
-    private var volume: Int { Int(workout.flatMap(\.sets).filter { $0.done && !$0.warmup }.map { $0.kg * Double($0.reps) }.reduce(0, +)) }
+    private var volume: Int {
+        var total = 0.0
+        for ex in workout {
+            let bw = exercises.isBodyweight(ex.name)
+            for s in ex.sets where s.done && !s.warmup {
+                total += liftLoad(kg: s.kg, bodyweight: bodyWeight, bodyweightExercise: bw) * Double(s.reps)
+            }
+        }
+        return Int(total)
+    }
 
     // MARK: - Body
 
@@ -911,6 +926,18 @@ struct TrainingView: View {
                     ex.sets.remove(atOffsets: offsets)
                 }
 
+                if exercises.isBarbell(ex.name),
+                   let top = ex.sets.filter({ !$0.warmup }).map(\.kg).max(),
+                   let plates = platesPerSide(total: top) {
+                    let approx = abs((20 + 2 * plates.reduce(0, +)) - top) < 0.05 ? "" : "≈ "
+                    let body = plates.isEmpty ? "alleen de 20 kg stang"
+                                             : "per kant \(plates.map(\.kgText).joined(separator: " + ")) · 20 kg stang"
+                    Label("\(approx)\(body)", systemImage: "scalemass")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .listRowSeparator(.hidden)
+                }
+
                 Button {
                     let last = ex.sets.last ?? DraftSet(kg: 20, reps: 8)
                     let new = DraftSet(kg: last.kg, reps: last.reps, previous: nil)
@@ -1229,7 +1256,13 @@ struct SessionDetailView: View {
     @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
     @Query private var allHabits: [DayHabits]
     @Query private var exercises: [Exercise]
+    @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
     @FocusState private var focused: UUID?
+
+    /// Lichaamsgewicht rond een dag, voor het meetellen van bodyweight-oefeningen.
+    private func bodyWeight(on d: Date) -> Double {
+        (allWeights.last { $0.date <= d } ?? allWeights.last)?.kg ?? 0
+    }
 
     private var cal: Calendar { .current }
     private var daySets: [SetEntry] {
@@ -1257,7 +1290,9 @@ struct SessionDetailView: View {
         return names.map { n in (n, daySets.filter { $0.exercise == n }) }
     }
 
-    private var volume: Int { Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +)) }
+    private var volume: Int {
+        Int(daySets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+    }
 
     private var durationText: String {
         guard let first = daySets.first?.date, let last = daySets.last?.date, last > first else { return "—" }
@@ -1276,7 +1311,7 @@ struct SessionDetailView: View {
     private var volumeDelta: Int? {
         guard let prev = previousDay else { return nil }
         let pv = Int(allSets.filter { cal.isDate($0.date, inSameDayAs: prev) }
-            .map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+            .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         return pv > 0 ? volume - pv : nil
     }
 

@@ -255,6 +255,24 @@ func setNotation(kg: Double, reps: Int, bodyweight: Bool) -> String {
     return kg > 0 ? "+\(kg.kgText)×\(reps)" : "×\(reps)"
 }
 
+/// Effectieve last voor volume/spierkaart: bodyweight-oefeningen tellen mee met
+/// lichaamsgewicht + eventueel extra gewicht, zodat ze niet op 0 uitkomen.
+func liftLoad(kg: Double, bodyweight: Double, bodyweightExercise: Bool) -> Double {
+    bodyweightExercise ? max(bodyweight, 0) + kg : kg
+}
+
+/// Schijven per kant voor een barbell-gewicht, greedy vanaf de zwaarste schijf.
+/// nil als het gewicht de stang niet haalt. Reststukje < kleinste schijf wordt genegeerd.
+func platesPerSide(total: Double, bar: Double = 20) -> [Double]? {
+    guard total >= bar else { return nil }
+    var perSide = (total - bar) / 2
+    var out: [Double] = []
+    for p in [25.0, 20, 15, 10, 5, 2.5, 1.25] {
+        while perSide >= p - 0.01 { out.append(p); perSide -= p }
+    }
+    return out
+}
+
 @Model
 final class ProteinEntry {
     var date: Date

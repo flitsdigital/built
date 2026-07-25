@@ -93,6 +93,10 @@ extension Array where Element == Exercise {
     func isBodyweight(_ name: String) -> Bool {
         first { $0.name == name }?.type == "Bodyweight"
     }
+    /// Barbell-oefening? Dan tonen we de schijven-per-kant.
+    func isBarbell(_ name: String) -> Bool {
+        first { $0.name == name }?.type == "Barbell"
+    }
 }
 
 // MARK: - Rij

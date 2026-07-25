@@ -225,22 +225,32 @@ struct DashboardView: View {
 
     private var header: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(isToday
-                     ? (profile.name.isEmpty ? "\(greeting) 👋" : "\(greeting) \(profile.name) 👋")
-                     : selectedDay.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(profile.name.isEmpty ? "\(greeting) 👋" : "\(greeting) \(profile.name) 👋")
                     .font(.title2.bold())
-                if isToday {
-                    Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+                HStack(spacing: 8) {
+                    Button { changeDay(by: -1, from: .leading) } label: {
+                        Image(systemName: "chevron.left").font(.caption.weight(.bold))
+                    }
+                    .foregroundStyle(.tertiary)
+                    .accessibilityLabel("Vorige dag")
+                    Text((isToday ? Date.now : selectedDay).formatted(.dateTime.weekday(.wide).day().month()))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                } else {
-                    Button { selectDay(today) } label: {
-                        Label("Terug naar vandaag", systemImage: "arrow.uturn.backward")
-                            .font(.subheadline)
-                            .foregroundStyle(.green)
+                    Button { changeDay(by: 1, from: .trailing) } label: {
+                        Image(systemName: "chevron.right").font(.caption.weight(.bold))
+                    }
+                    .foregroundStyle(isToday ? .quaternary : .tertiary)
+                    .disabled(isToday)
+                    .accessibilityLabel("Volgende dag")
+                    if !isToday {
+                        Button { selectDay(today) } label: {
+                            Text("Vandaag").font(.subheadline.weight(.semibold)).foregroundStyle(.green)
+                        }
+                        .padding(.leading, 2)
                     }
                 }
+                .buttonStyle(.plain)
             }
             Spacer()
             HStack(spacing: 10) {
