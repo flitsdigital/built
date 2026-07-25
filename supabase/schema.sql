@@ -89,7 +89,9 @@ create table if not exists public.day_habits (
   note text not null default '',
   bed_time timestamptz,
   wake_time timestamptz,
-  sleep_quality int not null default 0
+  sleep_quality int not null default 0,
+  journal jsonb not null default '[]',
+  workout_note text not null default ''
 );
 
 create table if not exists public.routines (
@@ -212,10 +214,11 @@ begin
     from jsonb_array_elements(coalesce(payload->'sets', '[]'::jsonb)) e;
 
   delete from public.day_habits where user_id = uid;
-  insert into public.day_habits (user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality)
+  insert into public.day_habits (user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note)
     select uid, (e->>'date')::timestamptz, (e->>'creatine')::boolean, (e->>'slept_enough')::boolean,
            coalesce(e->>'note', ''), (e->>'bed_time')::timestamptz, (e->>'wake_time')::timestamptz,
-           coalesce((e->>'sleep_quality')::int, 0)
+           coalesce((e->>'sleep_quality')::int, 0),
+           coalesce(e->'journal', '[]'::jsonb), coalesce(e->>'workout_note', '')
     from jsonb_array_elements(coalesce(payload->'habits', '[]'::jsonb)) e;
 
   delete from public.routines where user_id = uid;

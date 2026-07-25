@@ -371,7 +371,15 @@ struct WeightLogSheet: View {
     @Query(sort: \Scale.name) private var scales: [Scale]
     @AppStorage("lastScale") private var selectedScale = ""
     @State private var kgText = ""
-    @State private var date = Date.now
+    @State private var date: Date
+    @State private var showAddScale = false
+    @State private var newScaleName = ""
+
+    init(initialDate: Date = .now) {
+        _date = State(initialValue: initialDate)
+    }
+
+    private static let addTag = "\u{0}+"  // sentinel voor "Weegschaal toevoegen"
 
     private var kg: Double? {
         Double(kgText.replacingOccurrences(of: ",", with: "."))
@@ -386,12 +394,15 @@ struct WeightLogSheet: View {
                         .multilineTextAlignment(.trailing)
                 }
                 DatePicker("Datum", selection: $date, in: ...Date.now, displayedComponents: .date)
-                if !scales.isEmpty {
-                    Picker("Weegschaal", selection: $selectedScale) {
-                        ForEach(scales) { s in
-                            Text(s.name).tag(s.name)
-                        }
+                Picker("Weegschaal", selection: $selectedScale) {
+                    Text("Geen").tag("")
+                    ForEach(scales) { s in
+                        Text(s.name).tag(s.name)
                     }
+                    Label("Weegschaal toevoegen", systemImage: "plus").tag(Self.addTag)
+                }
+                .onChange(of: selectedScale) { old, new in
+                    if new == Self.addTag { selectedScale = old; showAddScale = true }
                 }
             }
             .navigationTitle("Wegen")
@@ -402,13 +413,10 @@ struct WeightLogSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Opslaan") {
-                        // ponytail: weegschaal-correctie wordt bij opslaan verrekend
-                        let offset = scales.first { $0.name == selectedScale }?.offset ?? 0
                         let entryDate = Calendar.current.isDateInToday(date)
                             ? Date.now
                             : Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: date) ?? date
-                        context.insert(WeightEntry(date: entryDate, kg: (kg ?? 0) + offset,
-                                                   scale: scales.isEmpty ? "" : selectedScale))
+                        context.insert(WeightEntry(date: entryDate, kg: kg ?? 0, scale: selectedScale))
                         dismiss()
                     }
                     .disabled((kg ?? 0) < 20)
@@ -416,10 +424,20 @@ struct WeightLogSheet: View {
             }
         }
         .presentationDetents([.height(320)])
-        .onAppear {
-            if !scales.map(\.name).contains(selectedScale) {
-                selectedScale = scales.first?.name ?? ""
+        .alert("Nieuwe weegschaal", isPresented: $showAddScale) {
+            TextField("Naam (bijv. Badkamer)", text: $newScaleName)
+            Button("Toevoegen") {
+                let name = newScaleName.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty {
+                    context.insert(Scale(name: name))
+                    selectedScale = name
+                }
+                newScaleName = ""
             }
+            Button("Annuleer", role: .cancel) { newScaleName = "" }
+        }
+        .onAppear {
+            if !scales.map(\.name).contains(selectedScale) { selectedScale = "" }
         }
     }
 }

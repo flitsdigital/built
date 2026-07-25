@@ -198,8 +198,6 @@ final class WeightEntry {
 @Model
 final class Scale {
     var name: String
-    // ponytail: offset wordt bij het opslaan verrekend, niet met terugwerkende kracht
-    var offset: Double = 0
     init(name: String) {
         self.name = name
     }
@@ -248,6 +246,13 @@ final class PhotoEntry {
 /// Geschat 1RM via de Epley-formule.
 func epley(_ weight: Double, _ reps: Int) -> Double {
     reps <= 1 ? weight : weight * (1 + Double(reps) / 30)
+}
+
+/// Set-notatie voor overzichten. Bodyweight zonder extra gewicht toont alleen reps
+/// (bijv. "×8"); met extra gewicht "+5×8"; anders het gewone "40×8".
+func setNotation(kg: Double, reps: Int, bodyweight: Bool) -> String {
+    guard bodyweight else { return "\(kg.kgText)×\(reps)" }
+    return kg > 0 ? "+\(kg.kgText)×\(reps)" : "×\(reps)"
 }
 
 @Model
@@ -317,6 +322,13 @@ struct Ingredient: Codable, Identifiable, Hashable {
     var name: String
     var protein: Int
     var kcal: Int
+}
+
+/// Eén journal-notitie met eigen tijdstip; meerdere per dag hangen als array aan DayHabits.
+struct JournalNote: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var text: String
+    var createdAt: Date = .now
 }
 
 @Model
@@ -390,6 +402,10 @@ final class DayHabits {
     var bedTime: Date?
     var wakeTime: Date?
     var sleepQuality: Int = 0 // 0 = niet ingevuld, 1-3 = slecht/oké/goed
+    /// Journal: meerdere getimede notities per dag.
+    var journal: [JournalNote] = []
+    /// Algemene notitie bij de training van die dag (los van de per-oefening notities).
+    var workoutNote: String = ""
     init(date: Date = .now, creatine: Bool = false, sleptEnough: Bool = false) {
         self.date = date
         self.creatine = creatine

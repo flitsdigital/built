@@ -15,41 +15,55 @@ struct DashboardView: View {
     @Query private var habitLogs: [HabitLog]
 
     @State private var showWeightSheet = false
-    @State private var showNoteAlert = false
     @State private var showSleepSheet = false
     @State private var showWeeklyReview = false
-    @State private var noteInput = ""
     @AppStorage("lastReviewWeek") private var lastReviewWeek = 0
     @State private var appeared = false
+    /// Geselecteerde dag op het dashboard; swipe of tik in de week-strip om te wisselen.
+    @State private var selectedDay = Calendar.current.startOfDay(for: .now)
+    /// Live horizontale verschuiving tijdens het swipen (volgt de vinger).
+    @GestureState private var dragX: CGFloat = 0
+    /// Kant waar de nieuwe dag vandaan schuift (spatiaal consistent met de veegrichting).
+    @State private var pageEdge: Edge = .trailing
+    /// True zolang een horizontale veeg bezig is — blokkeert per ongeluk afvuren van knoppen eronder.
+    @State private var swipeActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let syncStatus = SyncStatus.shared
 
     private var cal: Calendar { .current }
-    private var todayProtein: Int { proteins.filter { cal.isDateInToday($0.date) }.map(\.grams).reduce(0, +) }
-    private var todayKcal: Int { proteins.filter { cal.isDateInToday($0.date) }.map(\.kcal).reduce(0, +) }
-    private var trainedToday: Bool { sets.contains { cal.isDateInToday($0.date) } }
-    private var isRestDay: Bool {
-        !profile.trainingDays.isEmpty && !profile.trainingDays.contains(cal.component(.weekday, from: .now))
-    }
-    private var weightLoggedToday: Bool { weights.contains { cal.isDateInToday($0.date) } }
-    private var todayHabits: DayHabits? { habits.first { cal.isDateInToday($0.date) } }
+    private var today: Date { cal.startOfDay(for: .now) }
+    private var isToday: Bool { cal.isDate(selectedDay, inSameDayAs: today) }
 
-    private var score: Int {
-        // Genormaliseerd naar 100, ook als creatine/slaap uitgeschakeld zijn
-        var raw = min(30, Int(30.0 * Double(todayProtein) / Double(max(profile.proteinTarget, 1))))
+    // MARK: - Dag-gebonden helpers (werken voor elke dag, niet alleen vandaag)
+    private func habitsOn(_ day: Date) -> DayHabits? { habits.first { cal.isDate($0.date, inSameDayAs: day) } }
+    private func proteinOn(_ day: Date) -> Int { proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) }
+    private func kcalOn(_ day: Date) -> Int { proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.kcal).reduce(0, +) }
+    private func trainedOn(_ day: Date) -> Bool { sets.contains { cal.isDate($0.date, inSameDayAs: day) } }
+    private func weightLoggedOn(_ day: Date) -> Bool { weights.contains { cal.isDate($0.date, inSameDayAs: day) } }
+    private func restDayOn(_ day: Date) -> Bool {
+        !profile.trainingDays.isEmpty && !profile.trainingDays.contains(cal.component(.weekday, from: day))
+    }
+
+    /// Vervulling van een dag (0…100), zelfde weging als de Groei Score.
+    private func scoreOn(_ day: Date) -> Int {
+        var raw = min(30, Int(30.0 * Double(proteinOn(day)) / Double(max(profile.proteinTarget, 1))))
         var maxPoints = 70
-        if trainedToday || isRestDay { raw += 25 }
-        if weightLoggedToday { raw += 15 }
+        if trainedOn(day) || restDayOn(day) { raw += 25 }
+        if weightLoggedOn(day) { raw += 15 }
+        let h = habitsOn(day)
         if profile.tracksCreatine {
             maxPoints += 15
-            if todayHabits?.creatine == true { raw += 15 }
+            if h?.creatine == true { raw += 15 }
         }
         if profile.tracksSleep {
             maxPoints += 15
-            if todayHabits?.sleptEnough == true { raw += 15 }
+            if h?.sleptEnough == true { raw += 15 }
         }
         return Int((Double(raw) / Double(maxPoints) * 100).rounded())
     }
+
+    // Vandaag-waarden voor widget/haptics (los van de geselecteerde dag).
+    private var score: Int { scoreOn(today) }
 
     private var currentWeight: Double {
         weights.average(daysBack: 0..<7) ?? weights.last?.kg ?? profile.startWeight
@@ -73,7 +87,60 @@ struct DashboardView: View {
                         sets: sets, trainingDays: profile.trainingDays)
     }
 
-    private var proteinRemaining: Int { max(profile.proteinTarget - todayProtein, 0) }
+    private var proteinRemaining: Int { max(profile.proteinTarget - proteinOn(selectedDay), 0) }
+
+    /// Page-spring: kort, nauwelijks bounce — leest als een pagina die op z'n plek valt.
+    private var pageAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.2) : .spring(duration: 0.3, bounce: 0.1)
+    }
+
+    /// Dag wisselen; nooit naar de toekomst, max ~1 jaar terug. `edge` = kant waar de nieuwe dag vandaan komt.
+    private func changeDay(by delta: Int, from edge: Edge) {
+        let candidate = cal.date(byAdding: .day, value: delta, to: selectedDay) ?? selectedDay
+        guard candidate <= today,
+              cal.dateComponents([.day], from: candidate, to: today).day ?? 0 <= 365 else { return }
+        pageEdge = edge
+        withAnimation(pageAnimation) { selectedDay = candidate }
+    }
+
+    private func selectDay(_ day: Date) {
+        let d = cal.startOfDay(for: day)
+        guard d <= today, d != selectedDay else { return }
+        pageEdge = d > selectedDay ? .trailing : .leading
+        withAnimation(pageAnimation) { selectedDay = d }
+    }
+
+    /// Horizontaal swipen door dagen: content volgt de vinger, commit op afstand of flick.
+    /// Verticaal scrollen blijft aan de ScrollView (we reageren alleen op horizontaal-dominante drags).
+    private var daySwipe: some Gesture {
+        DragGesture(minimumDistance: 15)
+            .updating($dragX) { value, state, _ in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.2 else { return }
+                var dx = value.translation.width
+                if isToday && dx < 0 { dx *= 0.25 } // geen toekomst — wrijving i.p.v. harde muur
+                state = dx
+            }
+            .onChanged { value in
+                // Zodra het duidelijk een horizontale veeg is: knoppen eronder niet laten afvuren.
+                if abs(value.translation.width) > 10, abs(value.translation.width) > abs(value.translation.height) {
+                    if !swipeActive { swipeActive = true }
+                }
+            }
+            .onEnded { value in
+                defer { if swipeActive { DispatchQueue.main.async { swipeActive = false } } }
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.2 else { return }
+                let dist = value.translation.width
+                let flick = abs(value.predictedEndTranslation.width) > 200
+                guard abs(dist) > 70 || flick else { return } // anders veert 'ie terug (dragX → 0)
+                if dist < 0 { changeDay(by: 1, from: .trailing) }  // veeg naar links → nieuwere dag van rechts
+                else { changeDay(by: -1, from: .leading) }         // veeg naar rechts → oudere dag van links
+            }
+    }
+
+    /// Tijdstempel voor een nieuw record op de geselecteerde dag (nu voor vandaag, anders 12:00).
+    private func stamp(_ day: Date) -> Date {
+        cal.isDateInToday(day) ? .now : (cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day)
+    }
 
     private var greeting: String {
         switch cal.component(.hour, from: .now) {
@@ -94,14 +161,13 @@ struct DashboardView: View {
             VStack(spacing: 16) {
                 entranced(0, header)
                 entranced(1, weekCard)
-                entranced(2, scoreCard)
-                entranced(3, proteinCard)
-                entranced(4, checklistCard)
+                entranced(2, dayCards)
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
         }
         .background(Color(.systemGroupedBackground))
+        .simultaneousGesture(daySwipe)
         .overlay(alignment: .top) {
             // scroll-edge effect: content vervaagt onder de statusbalk i.p.v. er hard doorheen
             LinearGradient(colors: [Color(.systemGroupedBackground), Color(.systemGroupedBackground).opacity(0)],
@@ -142,16 +208,8 @@ struct DashboardView: View {
         }
         .sensoryFeedback(.success, trigger: score) { _, new in new == 100 } // succes-haptic alleen op het zeldzame moment
         .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
-        .sheet(isPresented: $showWeightSheet) { WeightLogSheet() }
-        .sheet(isPresented: $showSleepSheet) { SleepSheet() }
-        .alert("Notitie voor vandaag", isPresented: $showNoteAlert) {
-            TextField("bijv. Veel energie vandaag", text: $noteInput)
-            Button("Opslaan") {
-                todayHabitsOrCreate().note = noteInput
-                noteInput = ""
-            }
-            Button("Annuleer", role: .cancel) { noteInput = "" }
-        }
+        .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: selectedDay) }
+        .sheet(isPresented: $showSleepSheet) { SleepSheet(day: selectedDay) }
     }
 
     // MARK: - Kaarten
@@ -168,11 +226,21 @@ struct DashboardView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(profile.name.isEmpty ? "\(greeting) 👋" : "\(greeting) \(profile.name) 👋")
+                Text(isToday
+                     ? (profile.name.isEmpty ? "\(greeting) 👋" : "\(greeting) \(profile.name) 👋")
+                     : selectedDay.formatted(.dateTime.weekday(.wide).day().month(.wide)))
                     .font(.title2.bold())
-                Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if isToday {
+                    Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button { selectDay(today) } label: {
+                        Label("Terug naar vandaag", systemImage: "arrow.uturn.backward")
+                            .font(.subheadline)
+                            .foregroundStyle(.green)
+                    }
+                }
             }
             Spacer()
             HStack(spacing: 10) {
@@ -207,11 +275,12 @@ struct DashboardView: View {
     }
 
     private func writeSnapshot() {
-        WidgetSnapshot(score: score, protein: todayProtein, proteinTarget: profile.proteinTarget,
-                       trained: trainedToday, creatine: todayHabits?.creatine == true,
-                       weighed: weightLoggedToday, slept: todayHabits?.sleptEnough == true,
+        let h = habitsOn(today)
+        WidgetSnapshot(score: scoreOn(today), protein: proteinOn(today), proteinTarget: profile.proteinTarget,
+                       trained: trainedOn(today), creatine: h?.creatine == true,
+                       weighed: weightLoggedOn(today), slept: h?.sleptEnough == true,
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
-                       restDay: isRestDay).save()
+                       restDay: restDayOn(today)).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -219,33 +288,7 @@ struct DashboardView: View {
         card {
             HStack {
                 ForEach(weekDays, id: \.self) { day in
-                    let perfect = DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits,
-                                                   target: profile.proteinTarget,
-                                                   requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                                                   sets: sets, trainingDays: profile.trainingDays)
-                    VStack(spacing: 5) {
-                        Text(day.formatted(.dateTime.weekday(.narrow)))
-                            .font(.caption2)
-                            .foregroundStyle(cal.isDateInToday(day) ? .primary : .secondary)
-                        ZStack {
-                            Circle()
-                                .fill(perfect ? Color.green : Color(.tertiarySystemFill))
-                                .frame(width: 34, height: 34)
-                            if perfect {
-                                Image(systemName: "checkmark")
-                                    .font(.caption.bold())
-                                    .foregroundStyle(.white)
-                            } else if cal.isDateInToday(day) {
-                                Circle()
-                                    .strokeBorder(.green, lineWidth: 2)
-                                    .frame(width: 34, height: 34)
-                            }
-                        }
-                        Text(day.formatted(.dateTime.day()))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                    }
-                    .frame(maxWidth: .infinity)
+                    weekDot(day)
                 }
             }
             Divider()
@@ -259,21 +302,79 @@ struct DashboardView: View {
         }
     }
 
+    private func weekDot(_ day: Date) -> some View {
+        let s = scoreOn(day)
+        let sel = cal.isDate(day, inSameDayAs: selectedDay)
+        let isToday = cal.isDateInToday(day)
+        return VStack(spacing: 5) {
+            Text(day.formatted(.dateTime.weekday(.narrow)))
+                .font(.caption2)
+                .fontWeight(sel ? .bold : .regular)
+                .foregroundStyle(sel || isToday ? .primary : .secondary)
+            ZStack {
+                Circle().fill(Color(.tertiarySystemFill)).frame(width: 34, height: 34)
+                if s >= 100 {
+                    Circle().fill(.green).frame(width: 34, height: 34)
+                    Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white)
+                } else {
+                    Circle()
+                        .trim(from: 0, to: Double(s) / 100)
+                        .stroke(.green, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 30, height: 30)
+                    if s > 0 {
+                        Text("\(s)")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if sel {
+                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: 40, height: 40)
+                }
+            }
+            .frame(width: 40, height: 40)
+            Text(day.formatted(.dateTime.day()))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(isToday ? AnyShapeStyle(.green) : AnyShapeStyle(.tertiary))
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { selectDay(day) }
+        .animation(.snappy(duration: 0.25), value: sel)
+    }
+
+    /// De dag-gebonden kaarten als één groep, zodat ze samen als een pagina in/uit swipen.
+    private var dayCards: some View {
+        VStack(spacing: 16) {
+            scoreCard
+            proteinCard
+            checklistCard
+        }
+        .id(selectedDay)
+        .transition(reduceMotion
+            ? .opacity
+            : .asymmetric(insertion: .move(edge: pageEdge).combined(with: .opacity),
+                          removal: .move(edge: pageEdge == .trailing ? .leading : .trailing).combined(with: .opacity)))
+        .offset(x: reduceMotion ? 0 : dragX)
+        .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.82), value: dragX)
+    }
+
     private var scoreCard: some View {
-        card {
+        let s = scoreOn(selectedDay)
+        return card {
             HStack(spacing: 20) {
                 ZStack {
                     Circle()
                         .stroke(Color(.tertiarySystemFill), lineWidth: 12)
                     Circle()
-                        .trim(from: 0, to: Double(score) / 100)
+                        .trim(from: 0, to: Double(s) / 100)
                         .stroke(
                             AngularGradient(colors: [.green, .mint, .green], center: .center),
                             style: StrokeStyle(lineWidth: 12, lineCap: .round)
                         )
                         .rotationEffect(.degrees(-90))
                     VStack(spacing: 0) {
-                        Text("\(score)")
+                        Text("\(s)")
                             .font(.system(size: 34, weight: .bold, design: .rounded))
                             .monospacedDigit()
                             .contentTransition(.numericText())
@@ -283,15 +384,16 @@ struct DashboardView: View {
                     }
                 }
                 .frame(width: 96, height: 96)
-                .animation(.snappy, value: score)
+                .animation(.snappy, value: s)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Groei Score")
-                .accessibilityValue("\(score) van 100")
+                .accessibilityValue("\(s) van 100")
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("🔥 Groei Score")
                         .font(.headline)
-                    Text(score == 100 ? "Perfecte dag! 🏆" : "Nog \(100 - score) punten te pakken")
+                    Text(s == 100 ? (isToday ? "Perfecte dag! 🏆" : "Perfecte dag 🏆")
+                                  : (isToday ? "Nog \(100 - s) punten te pakken" : "\(s)/100 die dag"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     ProgressView(value: goalProgress)
@@ -306,6 +408,7 @@ struct DashboardView: View {
 
     private var proteinCard: some View {
         Button {
+            if swipeActive { return }
             withAnimation(.snappy(duration: 0.3)) { selectedTab = 2 }
         } label: {
             card {
@@ -314,8 +417,8 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(proteinRemaining > 0 ? "Nog \(proteinRemaining) g te gaan" : "Eiwitdoel gehaald 🎯")
                             .font(.headline)
-                        if todayKcal > 0 {
-                            Text("\(todayKcal) kcal gegeten")
+                        if kcalOn(selectedDay) > 0 {
+                            Text("\(kcalOn(selectedDay)) kcal gegeten")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -333,98 +436,106 @@ struct DashboardView: View {
     }
 
     private var checklistCard: some View {
-        card {
+        let h = habitsOn(selectedDay)
+        return card {
             checkRow(icon: "dumbbell.fill", color: .orange,
-                     title: isRestDay && !trainedToday ? "Rustdag (volgens plan)" : "Training",
-                     done: trainedToday || isRestDay) { selectedTab = 1 }
+                     title: restDayOn(selectedDay) && !trainedOn(selectedDay) ? "Rustdag (volgens plan)" : "Training",
+                     done: trainedOn(selectedDay) || restDayOn(selectedDay)) { selectedTab = 1 }
             if profile.tracksCreatine {
                 Divider()
                 checkRow(icon: "pills.fill", color: .teal, title: "Creatine",
-                         done: todayHabits?.creatine == true) { toggleHabit(\.creatine) }
+                         done: h?.creatine == true) { toggleHabit(\.creatine) }
             }
             Divider()
             checkRow(icon: "scalemass.fill", color: .purple, title: weightRowTitle,
-                     done: weightLoggedToday) { showWeightSheet = true }
+                     done: weightLoggedOn(selectedDay)) { showWeightSheet = true }
             if profile.tracksSleep {
                 Divider()
                 checkRow(icon: "moon.fill", color: .indigo, title: sleepText,
-                         done: todayHabits?.sleptEnough == true,
-                         missed: todayHabits?.sleepHours != nil && todayHabits?.sleptEnough != true) {
+                         done: h?.sleptEnough == true,
+                         missed: h?.sleepHours != nil && h?.sleptEnough != true) {
                     showSleepSheet = true
                 }
             }
             Divider()
-            checkRow(icon: "pencil", color: .gray, title: "Notitie",
-                     done: !(todayHabits?.note.isEmpty ?? true)) {
-                noteInput = todayHabits?.note ?? ""
-                showNoteAlert = true
+            NavigationLink {
+                DayDetailView(day: selectedDay, profile: profile)
+            } label: {
+                checkRowLabel(icon: "book.closed", color: .gray, title: "Journal",
+                              done: h?.journal.contains { !$0.text.isEmpty } ?? false)
             }
+            .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
                 Divider()
                 checkRow(icon: "star.fill", color: .mint, title: habit.name,
                          done: customDone(habit.name)) { toggleCustom(habit.name) }
             }
-            Text("Slaaptijden, kwaliteit en langere notities: Logboek → Vandaag.")
+            Text("Slaaptijden, kwaliteit en langere notities: tik op Journal.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
     }
 
     private func customDone(_ name: String) -> Bool {
-        habitLogs.contains { $0.name == name && cal.isDateInToday($0.date) }
+        habitLogs.contains { $0.name == name && cal.isDate($0.date, inSameDayAs: selectedDay) }
     }
 
     private func toggleCustom(_ name: String) {
-        if let log = habitLogs.first(where: { $0.name == name && cal.isDateInToday($0.date) }) {
+        if let log = habitLogs.first(where: { $0.name == name && cal.isDate($0.date, inSameDayAs: selectedDay) }) {
             context.delete(log)
         } else {
-            context.insert(HabitLog(name: name))
+            context.insert(HabitLog(name: name, date: stamp(selectedDay)))
         }
     }
 
     /// done = gehaald (groen ✓), missed = wel gelogd maar niet gehaald (oranje ⃠), anders open (leeg bolletje).
     private func checkRow(icon: String, color: Color, title: String, done: Bool, missed: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(color.opacity(0.18))
-                    .frame(width: 34, height: 34)
-                    .overlay {
-                        Image(systemName: icon)
-                            .font(.subheadline)
-                            .foregroundStyle(color)
-                    }
-                Text(title)
-                    .foregroundStyle(done ? .secondary : .primary)
-                    .strikethrough(done, color: .secondary)
-                Spacer()
-                Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
-                    .font(.title3)
-                    .foregroundStyle(done ? .green : (missed ? .orange : .secondary))
-                    .contentTransition(.symbolEffect(.replace))
-                    .animation(.snappy(duration: 0.2), value: done)
-                    .animation(.snappy(duration: 0.2), value: missed)
-            }
+        Button { if !swipeActive { action() } } label: {
+            checkRowLabel(icon: icon, color: color, title: title, done: done, missed: missed)
         }
         .buttonStyle(PressableStyle())
     }
 
+    private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false) -> some View {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(color.opacity(0.18))
+                .frame(width: 34, height: 34)
+                .overlay {
+                    Image(systemName: icon)
+                        .font(.subheadline)
+                        .foregroundStyle(color)
+                }
+            Text(title)
+                .foregroundStyle(done ? .secondary : .primary)
+                .strikethrough(done, color: .secondary)
+            Spacer()
+            Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
+                .font(.title3)
+                .foregroundStyle(done ? .green : (missed ? .orange : .secondary))
+                .contentTransition(.symbolEffect(.replace))
+                .animation(.snappy(duration: 0.2), value: done)
+                .animation(.snappy(duration: 0.2), value: missed)
+        }
+    }
+
     private var weightRowTitle: String {
-        if let w = weights.last(where: { cal.isDateInToday($0.date) }) {
+        if let w = weights.last(where: { cal.isDate($0.date, inSameDayAs: selectedDay) }) {
             return "Gewicht: \(w.kg.kgText) kg"
         }
         return "Gewicht invullen"
     }
 
     private var proteinRing: some View {
-        ZStack {
+        let p = proteinOn(selectedDay)
+        return ZStack {
             Circle().stroke(Color(.tertiarySystemFill), lineWidth: 10)
             Circle()
-                .trim(from: 0, to: min(1, Double(todayProtein) / Double(max(profile.proteinTarget, 1))))
+                .trim(from: 0, to: min(1, Double(p) / Double(max(profile.proteinTarget, 1))))
                 .stroke(.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             VStack(spacing: 0) {
-                Text("\(todayProtein)")
+                Text("\(p)")
                     .font(.title2.bold())
                     .contentTransition(.numericText())
                 Text("van \(profile.proteinTarget) g")
@@ -433,10 +544,10 @@ struct DashboardView: View {
             }
         }
         .frame(width: 80, height: 80)
-        .animation(.snappy, value: todayProtein)
+        .animation(.snappy, value: p)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Eiwit")
-        .accessibilityValue("\(todayProtein) van \(profile.proteinTarget) gram")
+        .accessibilityValue("\(p) van \(profile.proteinTarget) gram")
     }
 
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
@@ -447,13 +558,13 @@ struct DashboardView: View {
     }
 
     private var sleepText: String {
-        if let h = todayHabits?.sleepHours { return "\(h.kgText) uur geslapen" }
+        if let h = habitsOn(selectedDay)?.sleepHours { return "\(h.kgText) uur geslapen" }
         return "8 uur slaap"
     }
 
     private func todayHabitsOrCreate() -> DayHabits {
-        if let h = todayHabits { return h }
-        let h = DayHabits()
+        if let h = habitsOn(selectedDay) { return h }
+        let h = DayHabits(date: stamp(selectedDay))
         context.insert(h)
         return h
     }
@@ -467,6 +578,7 @@ struct DashboardView: View {
 /// Snel slaap loggen vanaf het dashboard: tijden staan vooringevuld met je vorige
 /// bed-/wektijd, dus meestal is het alleen "Opslaan". Afvinken-zonder-tijden kan ook.
 struct SleepSheet: View {
+    var day: Date = .now
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \DayHabits.date, order: .reverse) private var habits: [DayHabits]
@@ -477,7 +589,7 @@ struct SleepSheet: View {
     @State private var loaded = false
 
     private var cal: Calendar { .current }
-    private var today: DayHabits? { habits.first { cal.isDateInToday($0.date) } }
+    private var today: DayHabits? { habits.first { cal.isDate($0.date, inSameDayAs: day) } }
 
     private var hours: Double {
         var h = wake.timeIntervalSince(bed) / 3600
@@ -536,7 +648,7 @@ struct SleepSheet: View {
 
     private func todayOrCreate() -> DayHabits {
         if let today { return today }
-        let h = DayHabits()
+        let h = DayHabits(date: cal.isDateInToday(day) ? .now : (cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day))
         context.insert(h)
         return h
     }
@@ -551,8 +663,8 @@ struct SleepSheet: View {
             : habits.first { $0.bedTime != nil && $0.wakeTime != nil }
         let bedComps = source?.bedTime.map { cal.dateComponents([.hour, .minute], from: $0) }
         let wakeComps = source?.wakeTime.map { cal.dateComponents([.hour, .minute], from: $0) }
-        bed = cal.date(bySettingHour: bedComps?.hour ?? 23, minute: bedComps?.minute ?? 0, second: 0, of: .now) ?? .now
-        wake = cal.date(bySettingHour: wakeComps?.hour ?? 7, minute: wakeComps?.minute ?? 0, second: 0, of: .now) ?? .now
+        bed = cal.date(bySettingHour: bedComps?.hour ?? 23, minute: bedComps?.minute ?? 0, second: 0, of: day) ?? day
+        wake = cal.date(bySettingHour: wakeComps?.hour ?? 7, minute: wakeComps?.minute ?? 0, second: 0, of: day) ?? day
     }
 
     private func save() {

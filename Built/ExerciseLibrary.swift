@@ -88,6 +88,13 @@ final class Exercise {
     ]
 }
 
+extension Array where Element == Exercise {
+    /// Bodyweight-oefening? Dan is het gewicht optioneel extra gewicht ("+kg").
+    func isBodyweight(_ name: String) -> Bool {
+        first { $0.name == name }?.type == "Bodyweight"
+    }
+}
+
 // MARK: - Rij
 
 struct ExerciseRow: View {

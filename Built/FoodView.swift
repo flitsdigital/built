@@ -439,6 +439,7 @@ struct FoodLogSheet: View {
     @State private var quickKcal: Int?
     @State private var quickCarbs: Int?
     @State private var quickFat: Int?
+    @State private var quickSave = false
 
     struct PendingFood: Identifiable {
         let id = UUID()
@@ -693,12 +694,22 @@ struct FoodLogSheet: View {
                 Text("Alles in grammen behalve kcal. Alleen eiwit is verplicht.")
             }
             Section {
+                Toggle("Bewaar als eigen maaltijd", isOn: $quickSave)
+                    .disabled(quickLabel.trimmingCharacters(in: .whitespaces).isEmpty)
+            } footer: {
+                Text(quickLabel.trimmingCharacters(in: .whitespaces).isEmpty
+                     ? "Geef een omschrijving om te kunnen bewaren."
+                     : "Zet \u{201C}\(quickLabel)\u{201D} bij je recepten, zodat je 'm later met één tik logt.")
+            }
+            Section {
                 Button {
                     let grams = quickProtein ?? 0
+                    let name = quickLabel.trimmingCharacters(in: .whitespaces)
                     context.insert(ProteinEntry(date: entryDate, grams: grams,
-                                                label: quickLabel.isEmpty ? "Eigen maaltijd" : quickLabel,
+                                                label: name.isEmpty ? "Eigen maaltijd" : name,
                                                 kcal: quickKcal ?? 0, carbs: quickCarbs ?? 0, fat: quickFat ?? 0,
                                                 meal: meal))
+                    if quickSave, !name.isEmpty { saveQuickAsMeal(name: name, protein: grams, kcal: quickKcal ?? 0) }
                     dismiss()
                 } label: {
                     Text("Log \(quickProtein ?? 0) g eiwit")
@@ -710,6 +721,16 @@ struct FoodLogSheet: View {
                 .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                 .listRowBackground(Color.clear)
             }
+        }
+    }
+
+    /// Bewaart een snelle invoer als herbruikbaar recept (bestaande naam wordt bijgewerkt).
+    private func saveQuickAsMeal(name: String, protein: Int, kcal: Int) {
+        if let existing = recipes.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+            existing.protein = protein
+            existing.kcal = kcal
+        } else {
+            context.insert(Meal(name: name, protein: protein, kcal: kcal))
         }
     }
 

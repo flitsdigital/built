@@ -52,6 +52,8 @@ struct SavedWorkout: Codable, Equatable {
     var alternatives: [String: [String]]?
     /// Lopende rust bij het opslaan, zodat de timer na een force-quit klopt i.p.v. blijft hangen.
     var restEndsAt: Date?
+    /// Algemene notitie voor de hele sessie.
+    var workoutNote: String?
 }
 
 struct WorkoutSummary: Identifiable {
@@ -76,6 +78,7 @@ struct TrainingView: View {
     @State private var active = false
     @State private var workout: [DraftExercise] = []
     @State private var alternatives: [String: [String]] = [:]
+    @State private var workoutNote = ""
     @State private var startedAt = Date.now
     @State private var summary: WorkoutSummary?
     @State private var editingRoutine: Routine?
@@ -192,26 +195,34 @@ struct TrainingView: View {
 
     private func draft(for name: String, target: [Int]? = nil) -> DraftExercise {
         let last = lastSession(for: name)
+        let bw = exercises.isBodyweight(name)
         let goalSets = target.map { max($0.first ?? 3, 1) }
         let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
         guard !last.isEmpty else {
             let n = goalSets ?? 3
             let reps = goalReps ?? 8
-            return DraftExercise(name: name, tip: "Eerste keer — kies een gewicht dat je \(reps) reps aankan.",
-                                 sets: (0..<n).map { _ in DraftSet(kg: 20, reps: reps) })
+            let tip = bw ? "Eerste keer — log je reps (extra gewicht is optioneel)."
+                         : "Eerste keer — kies een gewicht dat je \(reps) reps aankan."
+            return DraftExercise(name: name, tip: tip,
+                                 sets: (0..<n).map { _ in DraftSet(kg: bw ? 0 : 20, reps: reps) })
         }
-        let top = last.map(\.weightKg).max() ?? 20
+        let top = last.map(\.weightKg).max() ?? (bw ? 0 : 20)
         let allEnough = last.allSatisfy { $0.reps >= (goalReps ?? 8) }
-        let tip = allEnough
-            ? "Vorige keer alles gehaald → vandaag \((top + 2.5).kgText) kg"
-            : "Zelfde gewicht, probeer 1 rep meer per set."
+        // Bodyweight progresseert op reps, niet op gewicht.
+        let tip = bw
+            ? "Zelfde, probeer 1 rep meer per set."
+            : (allEnough
+               ? "Vorige keer alles gehaald → vandaag \((top + 2.5).kgText) kg"
+               : "Zelfde gewicht, probeer 1 rep meer per set.")
         // Aantal sets uit het target (of het aantal van vorige keer), reps uit het target
         let count = goalSets ?? last.count
         return DraftExercise(name: name, tip: tip, sets: (0..<count).map { i in
             let prev = i < last.count ? last[i] : last.last
-            return DraftSet(kg: allEnough ? top + 2.5 : top,
-                            reps: goalReps ?? (allEnough ? 8 : min((prev?.reps ?? 8) + 1, 12)),
-                            previous: prev.map { "\($0.weightKg.kgText)×\($0.reps)" })
+            let kg = bw ? top : (allEnough ? top + 2.5 : top)
+            let reps = goalReps ?? (bw ? min((prev?.reps ?? 8) + 1, 30)
+                                       : (allEnough ? 8 : min((prev?.reps ?? 8) + 1, 12)))
+            return DraftSet(kg: kg, reps: reps,
+                            previous: prev.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) })
         })
     }
 
@@ -239,7 +250,8 @@ struct TrainingView: View {
     private func lastSessionSummary(_ name: String) -> String? {
         let last = lastSession(for: name)
         guard !last.isEmpty else { return nil }
-        return last.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  ")
+        let bw = exercises.isBodyweight(name)
+        return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) }.joined(separator: "  ")
     }
 
     private func restLabel(_ seconds: Int) -> String {
@@ -291,7 +303,8 @@ struct TrainingView: View {
                   sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure) },
                   originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }, alternatives: alternatives.isEmpty ? nil : alternatives,
-           restEndsAt: workoutStatus.restEndsAt)
+           restEndsAt: workoutStatus.restEndsAt,
+           workoutNote: workoutNote.isEmpty ? nil : workoutNote)
     }
 
     /// Na een force-quit: training terugzetten en de Live Activity weer adopteren.
@@ -306,6 +319,7 @@ struct TrainingView: View {
                           note: ex.note, originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }
         alternatives = saved.alternatives ?? [:]
+        workoutNote = saved.workoutNote ?? ""
         active = true
         if workoutStatus.startedAt == nil {
             workoutStatus.resumeWorkout(at: saved.startedAt)
@@ -364,6 +378,7 @@ struct TrainingView: View {
                              targets: [String: [Int]] = [:], supersets: [String: String] = [:],
                              restByExercise: [String: Int] = [:]) {
         startedAt = .now
+        workoutNote = ""
         workout = names.map { name in
             var d = draft(for: name, target: targets[name])
             d.superset = supersets[name]
@@ -400,6 +415,18 @@ struct TrainingView: View {
         record.note = ([record.note] + notes).filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
+    /// Algemene sessie-notitie op de dag bewaren (los van de per-oefening notities).
+    private func saveWorkoutNote() {
+        let clean = workoutNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        let record = habits.first { cal.isDateInToday($0.date) } ?? {
+            let h = DayHabits()
+            context.insert(h)
+            return h
+        }()
+        record.workoutNote = clean
+    }
+
     /// Spiergroep-intensiteit van de zojuist afgeronde training (0…1, genormaliseerd op volume).
     private func sessionMuscles() -> [String: Double] {
         let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
@@ -415,6 +442,7 @@ struct TrainingView: View {
 
     private func finishWorkout() {
         saveExerciseNotes()
+        saveWorkoutNote()
         WorkoutStatus.shared.endWorkout()
         // Vergelijk met de vorige sessie die minstens één oefening deelt — niet met een
         // willekeurige vorige dag (anders vergelijk je Legs met Push).
@@ -436,6 +464,7 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.3)) {
             active = false
             workout = []
+            workoutNote = ""
         }
     }
 
@@ -447,6 +476,7 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.3)) {
             active = false
             workout = []
+            workoutNote = ""
         }
     }
 
@@ -794,7 +824,8 @@ struct TrainingView: View {
                                 .foregroundStyle(.secondary)
                         }
                         ForEach(byExercise(daySets), id: \.name) { group in
-                            Text("\(group.name): " + group.sets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
+                            let bw = exercises.isBodyweight(group.name)
+                            Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) }.joined(separator: "  "))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -858,7 +889,7 @@ struct TrainingView: View {
                 HStack(spacing: 12) {
                     Text("SET").frame(width: 24, alignment: .leading)
                     Text("VORIGE").frame(width: 64, alignment: .leading)
-                    Text("KG").frame(width: 56)
+                    Text(exercises.isBodyweight(ex.name) ? "+KG" : "KG").frame(width: 56)
                     Text("REPS").frame(width: 48)
                     Spacer()
                 }
@@ -870,7 +901,8 @@ struct TrainingView: View {
 
                 ForEach($ex.sets) { $set in
                     let idx = ex.sets.firstIndex { $0.id == set.id } ?? 0
-                    setRow($set, number: ex.sets[...idx].filter { !$0.warmup }.count, exercise: ex.name)
+                    setRow($set, number: ex.sets[...idx].filter { !$0.warmup }.count, exercise: ex.name,
+                           bodyweight: exercises.isBodyweight(ex.name))
                 }
                 .onDelete { offsets in
                     for i in offsets {
@@ -974,6 +1006,11 @@ struct TrainingView: View {
             }
         }
 
+        Section("Notitie voor deze training") {
+            TextField("Bijv. voelde sterk, korte sessie", text: $workoutNote, axis: .vertical)
+                .lineLimit(1...6)
+        }
+
         Section {
             Button(role: .destructive) {
                 if doneCount > 0 {
@@ -1018,7 +1055,7 @@ struct TrainingView: View {
         return s
     }
 
-    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String) -> some View {
+    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, bodyweight: Bool) -> some View {
         HStack(spacing: 12) {
             Menu {
                 Button { set.wrappedValue.warmup = false } label: {
@@ -1048,7 +1085,7 @@ struct TrainingView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 64, alignment: .leading)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
-            NumericField(value: set.kg, decimal: true, placeholder: "kg",
+            NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "+kg" : "kg",
                          focus: $focusedSet, id: set.wrappedValue.id,
                          disabled: set.wrappedValue.done)
                 .frame(width: 56)
@@ -1190,11 +1227,28 @@ struct SessionDetailView: View {
     let day: Date
     @Environment(\.modelContext) private var context
     @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
+    @Query private var allHabits: [DayHabits]
+    @Query private var exercises: [Exercise]
     @FocusState private var focused: UUID?
 
     private var cal: Calendar { .current }
     private var daySets: [SetEntry] {
         allSets.filter { cal.isDate($0.date, inSameDayAs: day) }.sorted { $0.date < $1.date }
+    }
+
+    private var habitsRecord: DayHabits? { allHabits.first { cal.isDate($0.date, inSameDayAs: day) } }
+
+    private func record() -> DayHabits {
+        if let h = habitsRecord { return h }
+        let noon = cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
+        let h = DayHabits(date: noon)
+        context.insert(h)
+        return h
+    }
+
+    private var workoutNoteBinding: Binding<String> {
+        Binding(get: { habitsRecord?.workoutNote ?? "" },
+                set: { record().workoutNote = $0 })
     }
 
     private var byExercise: [(name: String, sets: [SetEntry])] {
@@ -1260,6 +1314,11 @@ struct SessionDetailView: View {
                 }
             }
 
+            Section("Notitie") {
+                TextField("Notitie over deze training", text: workoutNoteBinding, axis: .vertical)
+                    .lineLimit(1...6)
+            }
+
             if !prs.isEmpty {
                 Section("Records") {
                     ForEach(prs, id: \.exercise) { pr in
@@ -1277,12 +1336,12 @@ struct SessionDetailView: View {
                                 .font(.subheadline.monospacedDigit().bold())
                                 .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                                 .frame(width: 40, alignment: .leading)
-                            NumericField(value: kg(set), decimal: true, placeholder: "kg",
+                            NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "+kg" : "kg",
                                          focus: $focused, id: nil, disabled: false)
                                 .frame(width: 64)
                                 .padding(.vertical, 6)
                                 .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                            Text("kg").font(.footnote).foregroundStyle(.secondary)
+                            Text(exercises.isBodyweight(group.name) ? "+kg" : "kg").font(.footnote).foregroundStyle(.secondary)
                             NumericField(value: reps(set), decimal: false, placeholder: "reps",
                                          focus: $focused, id: nil, disabled: false)
                                 .frame(width: 52)

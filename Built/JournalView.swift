@@ -64,8 +64,11 @@ struct JournalView: View {
     }
 
     private func note(_ day: Date) -> String? {
-        let n = habits.first { cal.isDate($0.date, inSameDayAs: day) }?.note ?? ""
-        return n.isEmpty ? nil : n
+        let texts = (habits.first { cal.isDate($0.date, inSameDayAs: day) }?.journal ?? [])
+            .sorted { $0.createdAt > $1.createdAt }
+            .map(\.text).filter { !$0.isEmpty }
+        guard let latest = texts.first else { return nil }
+        return texts.count > 1 ? "\(latest)  (+\(texts.count - 1))" : latest
     }
 
     private func isPerfect(_ day: Date) -> Bool {
@@ -153,6 +156,7 @@ struct DayDetailView: View {
     @Query private var allHabits: [DayHabits]
     @Query(sort: \CustomHabit.createdAt) private var customHabits: [CustomHabit]
     @Query private var habitLogs: [HabitLog]
+    @Query private var exercises: [Exercise]
 
     @State private var day: Date
     @State private var showProteinSheet = false
@@ -216,6 +220,36 @@ struct DayDetailView: View {
             })
     }
 
+    // MARK: - Journal (meerdere notities per dag)
+
+    private var journalEntries: [JournalNote] {
+        (habitsRecord?.journal ?? []).sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private func journalBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { habitsRecord?.journal.first { $0.id == id }?.text ?? "" },
+            set: { newText in
+                let r = record()
+                if let i = r.journal.firstIndex(where: { $0.id == id }) { r.journal[i].text = newText }
+            })
+    }
+
+    private func addJournalEntry() {
+        let stamp = cal.isDateInToday(day) ? Date.now : noon
+        withAnimation(.snappy(duration: 0.2)) { record().journal.append(JournalNote(text: "", createdAt: stamp)) }
+    }
+
+    private func deleteJournalEntries(_ offsets: IndexSet) {
+        let ids = offsets.map { journalEntries[$0].id }
+        record().journal.removeAll { ids.contains($0.id) }
+    }
+
+    /// Lege entries opruimen bij het verlaten, zodat een per ongeluk toegevoegde notitie niet blijft staan.
+    private func pruneEmptyJournal() {
+        habitsRecord?.journal.removeAll { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     var body: some View {
         List {
             Section("Habits") {
@@ -267,10 +301,28 @@ struct DayDetailView: View {
                 }
             }
 
-            Section("Notitie") {
-                TextField("Hoe ging \(day.formatted(.dateTime.weekday(.wide)))?",
-                          text: bind(\.note, default: ""), axis: .vertical)
-                    .lineLimit(3...8)
+            Section {
+                if journalEntries.isEmpty {
+                    Text("Nog geen notities. Schrijf hoe je dag ging.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(journalEntries) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entry.createdAt.formatted(date: .omitted, time: .shortened))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        TextField("Schrijf iets…", text: journalBinding(entry.id), axis: .vertical)
+                            .lineLimit(1...12)
+                    }
+                    .padding(.vertical, 2)
+                }
+                .onDelete(perform: deleteJournalEntries)
+                Button { addJournalEntry() } label: {
+                    Label("Notitie toevoegen", systemImage: "square.and.pencil")
+                }
+            } header: {
+                Text("Journal")
             }
 
             Section("Eiwit — \(proteins.map(\.grams).reduce(0, +)) / \(profile.proteinTarget) g") {
@@ -304,13 +356,19 @@ struct DayDetailView: View {
 
             if !setsByExercise.isEmpty {
                 Section("Training") {
+                    if let wn = habitsRecord?.workoutNote, !wn.isEmpty {
+                        Text(wn)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(setsByExercise, id: \.name) { group in
+                        let bw = exercises.isBodyweight(group.name)
                         NavigationLink {
                             ExerciseDetailView(exercise: group.name)
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.name).font(.headline)
-                                Text(group.sets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
+                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) }.joined(separator: "  "))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
@@ -344,6 +402,7 @@ struct DayDetailView: View {
             }
         }
         .tabBarClearance()
+        .onDisappear(perform: pruneEmptyJournal)
         .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(date: .abbreviated, time: .omitted))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

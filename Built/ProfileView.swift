@@ -1,6 +1,5 @@
 import SwiftUI
 import SwiftData
-import AuthenticationServices
 
 struct ProfileView: View {
     @Bindable var profile: Profile
@@ -253,7 +252,7 @@ struct ProfileView: View {
             } header: {
                 Text("Weegschalen")
             } footer: {
-                Text("Correctie wordt verrekend bij het opslaan van nieuwe metingen. Weegt je weegschaal 0,3 kg te zwaar, zet de correctie dan op -0,3.")
+                Text("Kies bij elke meting op welke weegschaal je stond. Toevoegen kan ook direct in het weeg-scherm.")
             }
 
             if Sync.isConfigured {
@@ -542,7 +541,6 @@ struct AccountLoginSheet: View {
     @State private var password = ""
     @State private var busy = false
     @State private var message: String?
-    @State private var appleNonce = ""
 
     private var formValid: Bool {
         email.contains("@") && password.count >= 6
@@ -594,19 +592,6 @@ struct AccountLoginSheet: View {
                 }
 
                 Section {
-                    SignInWithAppleButton(.continue) { request in
-                        appleNonce = Sync.makeAppleNonce()
-                        request.requestedScopes = [.fullName, .email]
-                        request.nonce = Sync.hashNonce(appleNonce)
-                    } onCompletion: { result in
-                        run { try await Sync.finishAppleSignIn(result, rawNonce: appleNonce, context: context) }
-                    }
-                    .signInWithAppleButtonStyle(.black)
-                    .frame(height: 48)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
-                    .listRowBackground(Color.clear)
-                    .disabled(busy)
-
                     Button {
                         google()
                     } label: {
@@ -755,25 +740,9 @@ struct NotificationsSettingsView: View {
 }
 
 struct ScaleRow: View {
-    @Bindable var scale: Scale
+    let scale: Scale
 
     var body: some View {
-        LabeledContent(scale.name) {
-            HStack(spacing: 4) {
-                Text("correctie")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                TextField("-0,3", value: Binding(
-                    get: { scale.offset },
-                    set: { scale.offset = min(5, max(-5, $0)) } // ponytail: clamp — typo's van -50 kg vervuilen anders alles
-                ), format: .number)
-                    .keyboardType(.numbersAndPunctuation)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 56)
-                Text("kg")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
+        Label(scale.name, systemImage: "scalemass")
     }
 }

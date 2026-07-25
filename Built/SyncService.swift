@@ -3,7 +3,6 @@ import SwiftData
 import Supabase
 import Observation
 import AuthenticationServices
-import CryptoKit
 import UIKit
 
 /// Presentatie-anker voor de Google OAuth-websessie.
@@ -63,6 +62,9 @@ enum Sync {
     private struct HabitsRow: Codable {
         var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
         var note: String; var bed_time: Date?; var wake_time: Date?; var sleep_quality: Int
+        // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
+        var journal: [JournalNote]? = []
+        var workout_note: String? = ""
     }
     private struct RoutineRow: Codable {
         var user_id: UUID; var name: String; var exercises: [String]
@@ -74,7 +76,7 @@ enum Sync {
         var created_at: Date; var servings: Double; var ingredients: [Ingredient]
         var favorite: Bool
     }
-    private struct ScaleRow: Codable { var user_id: UUID; var name: String; var correction: Double }
+    private struct ScaleRow: Codable { var user_id: UUID; var name: String }
     private struct CustomHabitRow: Codable { var user_id: UUID; var name: String; var created_at: Date }
     private struct ExerciseRow: Codable { var user_id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date }
     private struct HabitLogRow: Codable { var user_id: UUID; var name: String; var date: Date }
@@ -140,7 +142,8 @@ enum Sync {
                           dropset: $0.dropset, failure: $0.failure) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
             .map { HabitsRow(user_id: uid, date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
-                             note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality) }
+                             note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality,
+                             journal: $0.journal, workout_note: $0.workoutNote) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
             .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises,
                               alternatives: $0.alternatives, targets: $0.targets,
@@ -160,7 +163,7 @@ enum Sync {
         p.exercises = try context.fetch(FetchDescriptor<Exercise>(sortBy: [.init(\.name)]))
             .map { ExerciseRow(user_id: uid, name: $0.name, muscle: $0.muscle, type: $0.type, created_at: $0.createdAt) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
-            .map { ScaleRow(user_id: uid, name: $0.name, correction: $0.offset) }
+            .map { ScaleRow(user_id: uid, name: $0.name) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
             .map { CustomHabitRow(user_id: uid, name: $0.name, created_at: $0.createdAt) }
         p.habitLogs = try context.fetch(FetchDescriptor<HabitLog>(sortBy: [.init(\.date)]))
@@ -238,6 +241,8 @@ enum Sync {
             h.bedTime = r.bed_time
             h.wakeTime = r.wake_time
             h.sleepQuality = r.sleep_quality
+            h.journal = r.journal ?? []
+            h.workoutNote = r.workout_note ?? ""
             context.insert(h)
         }
         for r in routineRows {
@@ -274,9 +279,7 @@ enum Sync {
             context.insert(ex)
         }
         for r in scaleRows {
-            let scale = Scale(name: r.name)
-            scale.offset = r.correction
-            context.insert(scale)
+            context.insert(Scale(name: r.name))
         }
         for r in customRows {
             let habit = CustomHabit(name: r.name)
@@ -430,31 +433,6 @@ enum Sync {
         await bootstrap(context)
     }
 
-    // MARK: - Sign in with Apple (verplicht naast Google — App Store 4.8)
-
-    /// Verse rauwe nonce; bewaar 'm in de view en geef de gehashte versie aan Apple.
-    static func makeAppleNonce() -> String { randomNonce() }
-    static func hashNonce(_ raw: String) -> String { sha256(raw) }
-
-    /// Rondt de Sign in with Apple-flow af: ruilt Apple's identity-token in bij Supabase.
-    static func finishAppleSignIn(_ result: Result<ASAuthorization, Error>,
-                                  rawNonce: String, context: ModelContext) async throws {
-        guard let client else { throw notConfigured() }
-        let auth = try result.get()
-        guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
-              let tokenData = cred.identityToken,
-              let idToken = String(data: tokenData, encoding: .utf8) else {
-            throw NSError(domain: "Sync", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Geen Apple-token ontvangen."])
-        }
-        try await client.auth.signInWithIdToken(
-            credentials: .init(provider: .apple, idToken: idToken, nonce: rawNonce))
-        pushAllowed = false
-        lastPushedHash = nil
-        SyncStatus.shared.lastError = nil
-        await bootstrap(context)
-    }
-
     /// Verwijdert het account volledig: alle serverdata + de auth-user (via RPC met
     /// verhoogde rechten), daarna het toestel leegmaken. Onomkeerbaar.
     static func deleteAccount(context: ModelContext) async throws {
@@ -463,25 +441,6 @@ enum Sync {
         // Server-account is weg; signOut ruimt de lokale sessie op, wist het toestel
         // en start een verse anonieme lijn zodat de app bruikbaar blijft.
         await signOut(context: context, keepLocalData: false)
-    }
-
-    private static func randomNonce(length: Int = 32) -> String {
-        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
-        var result = ""
-        var remaining = length
-        while remaining > 0 {
-            var byte: UInt8 = 0
-            _ = SecRandomCopyBytes(kSecRandomDefault, 1, &byte)
-            if Int(byte) < charset.count { // vermijd modulo-bias
-                result.append(charset[Int(byte)])
-                remaining -= 1
-            }
-        }
-        return result
-    }
-
-    private static func sha256(_ input: String) -> String {
-        SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Automatische sync-lus
