@@ -464,6 +464,64 @@ final class DayHabits {
     var checkedIn: Bool { energy > 0 || mood > 0 || soreness > 0 || stress > 0 }
 }
 
+// MARK: - Dag-index
+//
+// `Calendar.isDate(_:inSameDayAs:)` kost ~3 µs per aanroep. In een `filter` over een
+// tabel met duizenden rijen, en dat per dag, loopt dat op tot seconden per render.
+// Onderstaande twee dingen vervangen dat patroon: een goedkope dag-sleutel, en een
+// index die je één keer per render bouwt en daarna O(1) bevraagt.
+
+/// Lokale kalenderdag als geheel getal (opeenvolgende dagen = opeenvolgende getallen).
+/// ~27× goedkoper dan `Calendar.startOfDay` (114 ns vs 3,1 µs) en over ruim een miljoen
+/// paren rond DST-overgangen identiek aan `Calendar.isDate(_:inSameDayAs:)`.
+@inline(__always) func dayKey(_ date: Date) -> Int {
+    let offset = Double(TimeZone.autoupdatingCurrent.secondsFromGMT(for: date))
+    return Int(((date.timeIntervalSinceReferenceDate + offset) / 86_400).rounded(.down))
+}
+
+/// Alle "wat gebeurde er op dag X?"-vragen, één keer voorbewerkt.
+///
+/// Bouwen kost één pass per tabel (~0,2 ms per 1.000 rijen); daarna is elke vraag O(1).
+/// Bouw 'm bovenaan `body` in een `let` en geef 'm door — niet als computed property,
+/// want die zou bij elke aanroep opnieuw opbouwen.
+///
+/// `weights` moet oplopend op datum staan: bij meerdere wegingen op één dag wint de laatste.
+struct DayIndex {
+    private var proteinG: [Int: Int] = [:]
+    private var proteinKcal: [Int: Int] = [:]
+    private var dayVolume: [Int: Double] = [:]
+    private var trainedDays: Set<Int> = []
+    private var weightByDay: [Int: Double] = [:]
+    private var habitByDay: [Int: DayHabits] = [:]
+    private var logsByDay: [Int: Set<String>] = [:]
+
+    init(proteins: [ProteinEntry] = [], weights: [WeightEntry] = [], sets: [SetEntry] = [],
+         habits: [DayHabits] = [], habitLogs: [HabitLog] = []) {
+        for p in proteins {
+            let k = dayKey(p.date)
+            proteinG[k, default: 0] += p.grams
+            proteinKcal[k, default: 0] += p.kcal
+        }
+        for w in weights { weightByDay[dayKey(w.date)] = w.kg }
+        for s in sets {
+            let k = dayKey(s.date)
+            trainedDays.insert(k)
+            dayVolume[k, default: 0] += s.weightKg * Double(s.reps)
+        }
+        for h in habits { habitByDay[dayKey(h.date)] = h }
+        for l in habitLogs { logsByDay[dayKey(l.date), default: []].insert(l.name) }
+    }
+
+    func protein(_ day: Date) -> Int { proteinG[dayKey(day)] ?? 0 }
+    func kcal(_ day: Date) -> Int { proteinKcal[dayKey(day)] ?? 0 }
+    func volume(_ day: Date) -> Double { dayVolume[dayKey(day)] ?? 0 }
+    func trained(_ day: Date) -> Bool { trainedDays.contains(dayKey(day)) }
+    func weighed(_ day: Date) -> Bool { weightByDay[dayKey(day)] != nil }
+    func weight(_ day: Date) -> Double? { weightByDay[dayKey(day)] }
+    func habits(_ day: Date) -> DayHabits? { habitByDay[dayKey(day)] }
+    func logged(_ name: String, on day: Date) -> Bool { logsByDay[dayKey(day)]?.contains(name) ?? false }
+}
+
 /// Aaneengesloten dagen tot vandaag waarop `done` geldt; vandaag mag nog open staan.
 /// ponytail: zelfde vorm als DayCheck.streak, maar voor één losse habit.
 func habitStreak(_ done: (Date) -> Bool) -> Int {
@@ -481,12 +539,8 @@ func habitStreak(_ done: (Date) -> Bool) -> Int {
 extension Array where Element == WeightEntry {
     /// Gemiddeld gewicht binnen een venster van dagen terug, bv. 0..<7 = afgelopen week.
     func average(daysBack range: Range<Int>) -> Double? {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: .now)
-        let slice = filter {
-            let d = cal.dateComponents([.day], from: cal.startOfDay(for: $0.date), to: today).day ?? 0
-            return range.contains(d)
-        }
+        let today = dayKey(.now)
+        let slice = filter { range.contains(today - dayKey($0.date)) }
         guard !slice.isEmpty else { return nil }
         return slice.map(\.kg).reduce(0, +) / Double(slice.count)
     }
@@ -501,33 +555,31 @@ extension Array where Element == WeightEntry {
 enum DayCheck {
     /// Perfecte dag = de dagelijkse factoren die de gebruiker bijhoudt.
     /// Met geplande trainingsdagen telt training/rustdag-volgens-plan mee (North Star).
-    static func perfect(_ day: Date, proteins: [ProteinEntry], weights: [WeightEntry], habits: [DayHabits],
+    static func perfect(_ day: Date, index: DayIndex,
                         target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
-                        sets: [SetEntry] = [], trainingDays: [Int] = [], requireFood: Bool = true) -> Bool {
-        let cal = Calendar.current
-        let proteinDone = !requireFood
-            || proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= target
-        let weighed = weights.contains { cal.isDate($0.date, inSameDayAs: day) }
-        let h = habits.first { cal.isDate($0.date, inSameDayAs: day) }
+                        trainingDays: [Int] = [], requireFood: Bool = true) -> Bool {
+        let proteinDone = !requireFood || index.protein(day) >= target
+        let weighed = index.weighed(day)
+        let h = index.habits(day)
         let creatineOK = !requireCreatine || h?.creatine == true
         let sleepOK = !requireSleep || h?.sleptEnough == true
         var trainingOK = true
-        if trainingDays.contains(cal.component(.weekday, from: day)) {
-            trainingOK = sets.contains { cal.isDate($0.date, inSameDayAs: day) }
+        if trainingDays.contains(Calendar.current.component(.weekday, from: day)) {
+            trainingOK = index.trained(day)
         }
         return proteinDone && weighed && creatineOK && sleepOK && trainingOK
     }
 
-    static func streak(proteins: [ProteinEntry], weights: [WeightEntry], habits: [DayHabits],
+    static func streak(index: DayIndex,
                        target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
-                       sets: [SetEntry] = [], trainingDays: [Int] = [], requireFood: Bool = true) -> Int {
+                       trainingDays: [Int] = [], requireFood: Bool = true) -> Int {
         let cal = Calendar.current
         var count = 0
         for n in 0..<365 {
             guard let day = cal.date(byAdding: .day, value: -n, to: cal.startOfDay(for: .now)) else { break }
-            if perfect(day, proteins: proteins, weights: weights, habits: habits, target: target,
+            if perfect(day, index: index, target: target,
                        requireCreatine: requireCreatine, requireSleep: requireSleep,
-                       sets: sets, trainingDays: trainingDays, requireFood: requireFood) { count += 1 }
+                       trainingDays: trainingDays, requireFood: requireFood) { count += 1 }
             else if n == 0 { continue } // vandaag mag nog open staan
             else { break }
         }

@@ -91,14 +91,13 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         s.plannedToday = profile.trainingDays.contains(cal.component(.weekday, from: .now))
         s.schedule = profile.schedule
         s.plannedRoutineToday = profile.plannedRoutine(weekday: cal.component(.weekday, from: .now))
-        s.streak = DayCheck.streak(proteins: proteins, weights: weights, habits: habits,
-                                   target: profile.proteinTarget,
+        let idx = DayIndex(proteins: proteins, weights: weights, sets: sets, habits: habits)
+        s.streak = DayCheck.streak(index: idx, target: profile.proteinTarget,
                                    requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                                   sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
-        s.perfectToday = DayCheck.perfect(.now, proteins: proteins, weights: weights, habits: habits,
-                                          target: profile.proteinTarget,
+                                   trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+        s.perfectToday = DayCheck.perfect(.now, index: idx, target: profile.proteinTarget,
                                           requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                                          sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+                                          trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
         return s
     }
 

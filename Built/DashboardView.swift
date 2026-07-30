@@ -4,6 +4,9 @@ import WidgetKit
 
 struct DashboardView: View {
     let profile: Profile
+    /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
+    /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
+    var isVisible = true
     @Binding var selectedTab: Int
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
@@ -36,14 +39,15 @@ struct DashboardView: View {
 
     private var cal: Calendar { .current }
     private var today: Date { cal.startOfDay(for: .now) }
-    private var isToday: Bool { cal.isDate(selectedDay, inSameDayAs: today) }
+    private var isToday: Bool { dayKey(selectedDay) == dayKey(today) }
+
+    /// Eén keer per render opgebouwd en overal doorgegeven. Als computed property zou
+    /// hij bij élke aanroep opnieuw over alle tabellen lopen — precies wat we weghalen.
+    private func makeIndex() -> DayIndex {
+        DayIndex(proteins: proteins, weights: weights, sets: sets, habits: habits, habitLogs: habitLogs)
+    }
 
     // MARK: - Dag-gebonden helpers (werken voor elke dag, niet alleen vandaag)
-    private func habitsOn(_ day: Date) -> DayHabits? { habits.first { cal.isDate($0.date, inSameDayAs: day) } }
-    private func proteinOn(_ day: Date) -> Int { proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) }
-    private func kcalOn(_ day: Date) -> Int { proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.kcal).reduce(0, +) }
-    private func trainedOn(_ day: Date) -> Bool { sets.contains { cal.isDate($0.date, inSameDayAs: day) } }
-    private func weightLoggedOn(_ day: Date) -> Bool { weights.contains { cal.isDate($0.date, inSameDayAs: day) } }
     private func restDayOn(_ day: Date) -> Bool {
         !profile.trainingDays.isEmpty && !profile.trainingDays.contains(cal.component(.weekday, from: day))
     }
@@ -51,16 +55,16 @@ struct DashboardView: View {
     /// Vervulling van een dag (0…100), zelfde weging als de Groei Score.
     /// Zonder eten-tracking vervallen de 30 eiwitpunten en schaalt de rest mee,
     /// anders is 100 onbereikbaar en liegt de score over je dag.
-    private func scoreOn(_ day: Date) -> Int {
+    private func scoreOn(_ day: Date, _ idx: DayIndex) -> Int {
         var raw = 0
         var maxPoints = 40
         if profile.tracksFood {
             maxPoints += 30
-            raw += min(30, Int(30.0 * Double(proteinOn(day)) / Double(max(profile.proteinTarget, 1))))
+            raw += min(30, Int(30.0 * Double(idx.protein(day)) / Double(max(profile.proteinTarget, 1))))
         }
-        if trainedOn(day) || restDayOn(day) { raw += 25 }
-        if weightLoggedOn(day) { raw += 15 }
-        let h = habitsOn(day)
+        if idx.trained(day) || restDayOn(day) { raw += 25 }
+        if idx.weighed(day) { raw += 15 }
+        let h = idx.habits(day)
         if profile.tracksCreatine {
             maxPoints += 15
             if h?.creatine == true { raw += 15 }
@@ -71,9 +75,6 @@ struct DashboardView: View {
         }
         return Int((Double(raw) / Double(maxPoints) * 100).rounded())
     }
-
-    // Vandaag-waarden voor widget/haptics (los van de geselecteerde dag).
-    private var score: Int { scoreOn(today) }
 
     private var currentWeight: Double {
         weights.average(daysBack: 0..<7) ?? weights.last?.kg ?? profile.startWeight
@@ -91,25 +92,25 @@ struct DashboardView: View {
         return min(1, max(0, (currentWeight - profile.startWeight) / total))
     }
 
-    private var streak: Int {
-        DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
+    private func streak(_ idx: DayIndex) -> Int {
+        DayCheck.streak(index: idx, target: profile.proteinTarget,
                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                        sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+                        trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
     }
 
     // MARK: - Streak per habit (🔥5 naast de rij)
 
-    private func streakTrained() -> Int { habitStreak { trainedOn($0) || restDayOn($0) } }
-    private func streakWeighed() -> Int { habitStreak { weightLoggedOn($0) } }
-    private func streakCreatine() -> Int { habitStreak { habitsOn($0)?.creatine == true } }
-    private func streakSlept() -> Int { habitStreak { habitsOn($0)?.sleptEnough == true } }
-    private func streakJournal() -> Int { habitStreak { d in habitsOn(d)?.journal.contains { !$0.text.isEmpty } == true } }
-    private func streakCheckIn() -> Int { habitStreak { habitsOn($0)?.checkedIn == true } }
-    private func streakCustom(_ name: String) -> Int {
-        habitStreak { d in habitLogs.contains { $0.name == name && cal.isDate($0.date, inSameDayAs: d) } }
+    private func streakTrained(_ idx: DayIndex) -> Int { habitStreak { idx.trained($0) || restDayOn($0) } }
+    private func streakWeighed(_ idx: DayIndex) -> Int { habitStreak { idx.weighed($0) } }
+    private func streakCreatine(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.creatine == true } }
+    private func streakSlept(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.sleptEnough == true } }
+    private func streakJournal(_ idx: DayIndex) -> Int {
+        habitStreak { d in idx.habits(d)?.journal.contains { !$0.text.isEmpty } == true }
     }
-
-    private var proteinRemaining: Int { max(profile.proteinTarget - proteinOn(selectedDay), 0) }
+    private func streakCheckIn(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.checkedIn == true } }
+    private func streakCustom(_ name: String, _ idx: DayIndex) -> Int {
+        habitStreak { idx.logged(name, on: $0) }
+    }
 
     /// Page-spring: kort, nauwelijks bounce — leest als een pagina die op z'n plek valt.
     private var pageAnimation: Animation {
@@ -179,11 +180,20 @@ struct DashboardView: View {
     // MARK: - Body
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                entranced(0, header)
-                entranced(1, weekCard)
-                entranced(2, dayCards)
+        if isVisible { content } else { Color.clear }
+    }
+
+    @ViewBuilder private var content: some View {
+        // Eén index per render, gedeeld door elke kaart hieronder. Ook `score` en `streak`
+        // hangen eraan, zodat de .onChange-vergelijkingen niet opnieuw gaan rekenen.
+        let idx = makeIndex()
+        let score = scoreOn(today, idx)
+        let streak = streak(idx)
+        return ScrollView {
+            LazyVStack(spacing: 16) {
+                entranced(0, header(idx, streak: streak))
+                entranced(1, weekCard(idx))
+                entranced(2, dayCards(idx))
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
@@ -202,7 +212,7 @@ struct DashboardView: View {
         .task { await health.refreshIfEnabled() }
         .onAppear {
             appeared = true
-            writeSnapshot()
+            writeSnapshot(idx, score: score, streak: streak)
             // Zondag-review: één keer per week, op zondag
             let week = cal.component(.weekOfYear, from: .now) + cal.component(.yearForWeekOfYear, from: .now) * 100
             if cal.component(.weekday, from: .now) == 1, lastReviewWeek != week {
@@ -210,8 +220,8 @@ struct DashboardView: View {
                 showWeeklyReview = true
             }
         }
-        .onChange(of: score) { writeSnapshot() }
-        .onChange(of: streak) { writeSnapshot() }
+        .onChange(of: score) { writeSnapshot(idx, score: score, streak: streak) }
+        .onChange(of: streak) { writeSnapshot(idx, score: score, streak: streak) }
         .onReceive(Notifier.shared.$pendingAction) { action in
             guard let action else { return }
             switch action {
@@ -251,7 +261,7 @@ struct DashboardView: View {
             .animation(.easeOut(duration: 0.3).delay(Double(index) * 0.05), value: appeared)
     }
 
-    private var header: some View {
+    private func header(_ idx: DayIndex, streak: Int) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(profile.name.isEmpty ? "\(greeting) 👋" : "\(greeting) \(profile.name) 👋")
@@ -312,21 +322,21 @@ struct DashboardView: View {
         .padding(.top, 8)
     }
 
-    private func writeSnapshot() {
-        let h = habitsOn(today)
-        WidgetSnapshot(score: scoreOn(today), protein: proteinOn(today), proteinTarget: profile.proteinTarget,
-                       trained: trainedOn(today), creatine: h?.creatine == true,
-                       weighed: weightLoggedOn(today), slept: h?.sleptEnough == true,
+    private func writeSnapshot(_ idx: DayIndex, score: Int, streak: Int) {
+        let h = idx.habits(today)
+        WidgetSnapshot(score: score, protein: idx.protein(today), proteinTarget: profile.proteinTarget,
+                       trained: idx.trained(today), creatine: h?.creatine == true,
+                       weighed: idx.weighed(today), slept: h?.sleptEnough == true,
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
                        restDay: restDayOn(today), showFood: profile.tracksFood).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    private var weekCard: some View {
+    private func weekCard(_ idx: DayIndex) -> some View {
         card {
             HStack {
                 ForEach(weekDays, id: \.self) { day in
-                    weekDot(day)
+                    weekDot(day, idx)
                 }
             }
             Divider()
@@ -340,9 +350,9 @@ struct DashboardView: View {
         }
     }
 
-    private func weekDot(_ day: Date) -> some View {
-        let s = scoreOn(day)
-        let sel = cal.isDate(day, inSameDayAs: selectedDay)
+    private func weekDot(_ day: Date, _ idx: DayIndex) -> some View {
+        let s = scoreOn(day, idx)
+        let sel = dayKey(day) == dayKey(selectedDay)
         let isToday = cal.isDateInToday(day)
         return VStack(spacing: 5) {
             Text(day.formatted(.dateTime.weekday(.narrow)))
@@ -386,12 +396,12 @@ struct DashboardView: View {
     }
 
     /// De dag-gebonden kaarten als één groep, zodat ze samen als een pagina in/uit swipen.
-    private var dayCards: some View {
+    private func dayCards(_ idx: DayIndex) -> some View {
         VStack(spacing: 16) {
-            scoreCard
-            checklistCard          // habits eerst — dat is de kern
-            checkInCard
-            if profile.tracksFood { proteinCard } // eten is extra
+            scoreCard(idx)
+            checklistCard(idx)     // habits eerst — dat is de kern
+            checkInCard(idx)
+            if profile.tracksFood { proteinCard(idx) } // eten is extra
         }
         .id(selectedDay)
         .transition(reduceMotion
@@ -402,8 +412,8 @@ struct DashboardView: View {
         .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.82), value: dragX)
     }
 
-    private var scoreCard: some View {
-        let s = scoreOn(selectedDay)
+    private func scoreCard(_ idx: DayIndex) -> some View {
+        let s = scoreOn(selectedDay, idx)
         return card {
             HStack(spacing: 20) {
                 ProgressRing(value: Double(s) / 100, lineWidth: 12,
@@ -441,19 +451,21 @@ struct DashboardView: View {
         }
     }
 
-    private var proteinCard: some View {
-        Button {
+    private func proteinCard(_ idx: DayIndex) -> some View {
+        let remaining = max(profile.proteinTarget - idx.protein(selectedDay), 0)
+        let kcal = idx.kcal(selectedDay)
+        return Button {
             if swipeActive { return }
             withAnimation(.snappy(duration: 0.3)) { selectedTab = 2 }
         } label: {
             card {
                 HStack(spacing: 16) {
-                    proteinRing
+                    proteinRing(idx)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(proteinRemaining > 0 ? "Nog \(proteinRemaining) g te gaan" : "Eiwitdoel gehaald 🎯")
+                        Text(remaining > 0 ? "Nog \(remaining) g te gaan" : "Eiwitdoel gehaald 🎯")
                             .font(.headline)
-                        if kcalOn(selectedDay) > 0 {
-                            Text("\(kcalOn(selectedDay)) kcal gegeten")
+                        if kcal > 0 {
+                            Text("\(kcal) kcal gegeten")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -470,27 +482,29 @@ struct DashboardView: View {
         .buttonStyle(PressableStyle(scale: 0.985))
     }
 
-    private var checklistCard: some View {
-        let h = habitsOn(selectedDay)
+    private func checklistCard(_ idx: DayIndex) -> some View {
+        let h = idx.habits(selectedDay)
+        let trained = idx.trained(selectedDay)
+        let restDay = restDayOn(selectedDay)
         return card {
             checkRow(icon: "dumbbell.fill", color: .habitTraining,
-                     title: restDayOn(selectedDay) && !trainedOn(selectedDay) ? "Rustdag (volgens plan)" : "Training",
-                     done: trainedOn(selectedDay) || restDayOn(selectedDay),
-                     streak: streakTrained()) { selectedTab = 1 }
+                     title: restDay && !trained ? "Rustdag (volgens plan)" : "Training",
+                     done: trained || restDay,
+                     streak: streakTrained(idx)) { selectedTab = 1 }
             if profile.tracksCreatine {
                 Divider()
                 checkRow(icon: "pills.fill", color: .habitCreatine, title: "Creatine",
-                         done: h?.creatine == true, streak: streakCreatine()) { toggleHabit(\.creatine) }
+                         done: h?.creatine == true, streak: streakCreatine(idx)) { toggleHabit(\.creatine, idx) }
             }
             Divider()
-            checkRow(icon: "scalemass.fill", color: .habitWeight, title: weightRowTitle,
-                     done: weightLoggedOn(selectedDay), streak: streakWeighed()) { showWeightSheet = true }
+            checkRow(icon: "scalemass.fill", color: .habitWeight, title: weightRowTitle(idx),
+                     done: idx.weighed(selectedDay), streak: streakWeighed(idx)) { showWeightSheet = true }
             if profile.tracksSleep {
                 Divider()
-                checkRow(icon: "moon.fill", color: .habitSleep, title: sleepText,
+                checkRow(icon: "moon.fill", color: .habitSleep, title: sleepText(idx),
                          done: h?.sleptEnough == true,
                          missed: h?.sleepHours != nil && h?.sleptEnough != true,
-                         streak: streakSlept()) {
+                         streak: streakSlept(idx)) {
                     showSleepSheet = true
                 }
             }
@@ -506,13 +520,14 @@ struct DashboardView: View {
             } label: {
                 checkRowLabel(icon: "book.closed", color: .habitJournal, title: "Journal",
                               done: h?.journal.contains { !$0.text.isEmpty } ?? false,
-                              streak: streakJournal())
+                              streak: streakJournal(idx))
             }
             .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
                 Divider()
                 checkRow(icon: "star.fill", color: .habitCustom, title: habit.name,
-                         done: customDone(habit.name), streak: streakCustom(habit.name)) { toggleCustom(habit.name) }
+                         done: idx.logged(habit.name, on: selectedDay),
+                         streak: streakCustom(habit.name, idx)) { toggleCustom(habit.name) }
             }
             Text("Slaaptijden, kwaliteit en langere notities: tik op Journal.")
                 .font(.caption2)
@@ -524,8 +539,8 @@ struct DashboardView: View {
 
     /// Ingevuld = compacte samenvatting; leeg = uitnodiging. De vragen zelf staan in
     /// de drawer, met grote knoppen — één vraag tegelijk leest makkelijker dan vier rijtjes.
-    private var checkInCard: some View {
-        let h = habitsOn(selectedDay)
+    private func checkInCard(_ idx: DayIndex) -> some View {
+        let h = idx.habits(selectedDay)
         let answers: [(String, Int)] = [("😵🥱🙂💪⚡️", h?.energy ?? 0), ("😞😕😐🙂😄", h?.mood ?? 0),
                                         ("✅🙂😬😖🥵", h?.soreness ?? 0), ("😌🙂😐😰🤯", h?.stress ?? 0),
                                         ("😴🙂😃", h?.sleepQuality ?? 0)]
@@ -539,7 +554,7 @@ struct DashboardView: View {
                             Text("Hoe was je dag?")
                                 .font(.headline)
                                 .foregroundStyle(.primary)
-                            streakBadge(streakCheckIn())
+                            streakBadge(streakCheckIn(idx))
                         }
                         Text(h?.checkedIn == true ? "Tik om aan te passen" : "5 korte vragen · ±20 seconden")
                             .font(.caption)
@@ -571,12 +586,9 @@ struct DashboardView: View {
 
     private func healthSteps(on day: Date) -> Int? { health.steps(on: day) }
 
-    private func customDone(_ name: String) -> Bool {
-        habitLogs.contains { $0.name == name && cal.isDate($0.date, inSameDayAs: selectedDay) }
-    }
-
     private func toggleCustom(_ name: String) {
-        if let log = habitLogs.first(where: { $0.name == name && cal.isDate($0.date, inSameDayAs: selectedDay) }) {
+        let key = dayKey(selectedDay)
+        if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
             context.delete(log)
         } else {
             context.insert(HabitLog(name: name, date: stamp(selectedDay)))
@@ -613,15 +625,13 @@ struct DashboardView: View {
         }
     }
 
-    private var weightRowTitle: String {
-        if let w = weights.last(where: { cal.isDate($0.date, inSameDayAs: selectedDay) }) {
-            return "Gewicht: \(w.kg.kgText) kg"
-        }
+    private func weightRowTitle(_ idx: DayIndex) -> String {
+        if let kg = idx.weight(selectedDay) { return "Gewicht: \(kg.kgText) kg" }
         return "Gewicht invullen"
     }
 
-    private var proteinRing: some View {
-        let p = proteinOn(selectedDay)
+    private func proteinRing(_ idx: DayIndex) -> some View {
+        let p = idx.protein(selectedDay)
         return ProgressRing(value: Double(p) / Double(max(profile.proteinTarget, 1))) {
             VStack(spacing: 0) {
                 Text("\(p)")
@@ -643,20 +653,20 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 12, content: content).builtCard()
     }
 
-    private var sleepText: String {
-        if let h = habitsOn(selectedDay)?.sleepHours { return "\(h.kgText) uur geslapen" }
+    private func sleepText(_ idx: DayIndex) -> String {
+        if let h = idx.habits(selectedDay)?.sleepHours { return "\(h.kgText) uur geslapen" }
         return "8 uur slaap"
     }
 
-    private func todayHabitsOrCreate() -> DayHabits {
-        if let h = habitsOn(selectedDay) { return h }
+    private func todayHabitsOrCreate(_ idx: DayIndex) -> DayHabits {
+        if let h = idx.habits(selectedDay) { return h }
         let h = DayHabits(date: stamp(selectedDay))
         context.insert(h)
         return h
     }
 
-    private func toggleHabit(_ keyPath: ReferenceWritableKeyPath<DayHabits, Bool>) {
-        let h = todayHabitsOrCreate()
+    private func toggleHabit(_ keyPath: ReferenceWritableKeyPath<DayHabits, Bool>, _ idx: DayIndex) {
+        let h = todayHabitsOrCreate(idx)
         h[keyPath: keyPath].toggle()
     }
 }
@@ -675,7 +685,7 @@ struct SleepSheet: View {
     @State private var loaded = false
 
     private var cal: Calendar { .current }
-    private var today: DayHabits? { habits.first { cal.isDate($0.date, inSameDayAs: day) } }
+    private var today: DayHabits? { habits.first { dayKey($0.date) == dayKey(day) } }
 
     private var hours: Double {
         var h = wake.timeIntervalSince(bed) / 3600

@@ -201,6 +201,9 @@ struct FoodThumb: View {
 
 struct FoodView: View {
     let profile: Profile
+    /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
+    /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
+    var isVisible = true
     @Environment(\.modelContext) private var context
     @Query private var proteins: [ProteinEntry]
     @Query private var products: [FoodProduct]
@@ -215,7 +218,7 @@ struct FoodView: View {
     private var cal: Calendar { .current }
     private var isToday: Bool { cal.isDateInToday(day) }
     private var dayEntries: [ProteinEntry] {
-        proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.sorted { $0.date < $1.date }
+        proteins.filter { dayKey($0.date) == dayKey(day) }.sorted { $0.date < $1.date }
     }
     private var totalProtein: Int { dayEntries.map(\.grams).reduce(0, +) }
     private var totalKcal: Int { dayEntries.map(\.kcal).reduce(0, +) }
@@ -242,6 +245,10 @@ struct FoodView: View {
     }
 
     var body: some View {
+        if isVisible { content } else { Color.clear }
+    }
+
+    @ViewBuilder private var content: some View {
         List {
             Section {
                 dayHeader
@@ -1119,7 +1126,7 @@ struct NutritionReportSheet: View {
     private var last7: [DayTotal] {
         (0..<7).reversed().compactMap { offset -> DayTotal? in
             guard let day = cal.date(byAdding: .day, value: -offset, to: cal.startOfDay(for: .now)) else { return nil }
-            let entries = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }
+            let entries = proteins.filter { dayKey($0.date) == dayKey(day) }
             return DayTotal(day: day, protein: entries.map(\.grams).reduce(0, +), kcal: entries.map(\.kcal).reduce(0, +))
         }
     }

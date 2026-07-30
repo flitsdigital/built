@@ -22,7 +22,6 @@ targets:
       path: Built/Built.entitlements
       properties:
         com.apple.security.application-groups: [group.com.jordiklavers.Built]
-        com.apple.developer.applesignin: [Default]
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.access: []
     info:

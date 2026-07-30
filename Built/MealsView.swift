@@ -35,7 +35,7 @@ struct ProteinLogSheet: View {
 
     private var yesterdayEntries: [ProteinEntry] {
         guard let yesterday = cal.date(byAdding: .day, value: -1, to: .now) else { return [] }
-        return proteins.filter { cal.isDate($0.date, inSameDayAs: yesterday) }
+        return proteins.filter { dayKey($0.date) == dayKey(yesterday) }
     }
 
     private var quickAdds: [QuickAdd] {

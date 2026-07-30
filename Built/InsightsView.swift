@@ -4,6 +4,9 @@ import Charts
 
 struct InsightsView: View {
     let profile: Profile
+    /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
+    /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
+    var isVisible = true
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
     @Query private var proteins: [ProteinEntry]
     @Query private var sets: [SetEntry]
@@ -14,19 +17,21 @@ struct InsightsView: View {
 
     private var cal: Calendar { .current }
 
+    /// Eén keer per render bouwen en doorgeven — zie `DayIndex`.
+    private func makeIndex() -> DayIndex {
+        DayIndex(proteins: proteins, weights: weights, sets: sets, habits: habits, habitLogs: habitLogs)
+    }
+
     // MARK: - Dag-checks
 
-    private func proteinDone(_ day: Date) -> Bool {
-        proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= profile.proteinTarget
+    private func proteinDone(_ day: Date, _ idx: DayIndex) -> Bool {
+        idx.protein(day) >= profile.proteinTarget
     }
-    private func trained(_ day: Date) -> Bool { sets.contains { cal.isDate($0.date, inSameDayAs: day) } }
-    private func weighed(_ day: Date) -> Bool { weights.contains { cal.isDate($0.date, inSameDayAs: day) } }
-    private func habit(_ day: Date) -> DayHabits? { habits.first { cal.isDate($0.date, inSameDayAs: day) } }
 
-    private func perfectDay(_ day: Date) -> Bool {
-        DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
+    private func perfectDay(_ day: Date, _ idx: DayIndex) -> Bool {
+        DayCheck.perfect(day, index: idx, target: profile.proteinTarget,
                          requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                         sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+                         trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
     }
 
     // MARK: - Correlaties
@@ -34,11 +39,6 @@ struct InsightsView: View {
     // Geen statistiek, gewoon twee gemiddeldes naast elkaar: dagen mét X versus dagen
     // zónder X. Dat is wat je wil weten ("slaap ik beter → train ik zwaarder?") en het
     // is uitlegbaar. ponytail: pas tonen vanaf 5 dagen per groep, anders is het ruis.
-
-    private func dayVolume(_ day: Date) -> Double {
-        sets.filter { cal.isDate($0.date, inSameDayAs: day) }
-            .map { $0.weightKg * Double($0.reps) }.reduce(0, +)
-    }
 
     private struct Correlation: Identifiable {
         let id = UUID()
@@ -67,46 +67,46 @@ struct InsightsView: View {
             delta: pct)
     }
 
-    private func avgCheckIn(_ keyPath: KeyPath<DayHabits, Int>, on day: Date) -> Double? {
-        guard let v = habit(day)?[keyPath: keyPath], v > 0 else { return nil }
+    private func avgCheckIn(_ keyPath: KeyPath<DayHabits, Int>, on day: Date, _ idx: DayIndex) -> Double? {
+        guard let v = idx.habits(day)?[keyPath: keyPath], v > 0 else { return nil }
         return Double(v)
     }
 
-    private var correlations: [Correlation] {
+    private func correlations(_ idx: DayIndex) -> [Correlation] {
         var out: [Correlation?] = []
         // Slaap → volume, energie
         out.append(compare("Trainingsvolume", unit: " kg",
-                           split: { (habit($0)?.sleepHours ?? 0) >= 7.5 },
+                           split: { (idx.habits($0)?.sleepHours ?? 0) >= 7.5 },
                            splitLabel: ("7,5+ uur slaap", "kortere nachten"),
-                           value: { let v = dayVolume($0); return v > 0 ? v : nil }))
+                           value: { let v = idx.volume($0); return v > 0 ? v : nil }))
         out.append(compare("Energie", unit: "/5",
-                           split: { (habit($0)?.sleepHours ?? 0) >= 7.5 },
+                           split: { (idx.habits($0)?.sleepHours ?? 0) >= 7.5 },
                            splitLabel: ("7,5+ uur slaap", "kortere nachten"),
-                           value: { avgCheckIn(\.energy, on: $0) }))
+                           value: { avgCheckIn(\.energy, on: $0, idx) }))
         // Training → stemming, stress
         out.append(compare("Stemming", unit: "/5",
-                           split: { trained($0) },
+                           split: { idx.trained($0) },
                            splitLabel: ("trainingsdagen", "rustdagen"),
-                           value: { avgCheckIn(\.mood, on: $0) }))
+                           value: { avgCheckIn(\.mood, on: $0, idx) }))
         out.append(compare("Stress", unit: "/5",
-                           split: { trained($0) },
+                           split: { idx.trained($0) },
                            splitLabel: ("trainingsdagen", "rustdagen"),
-                           value: { avgCheckIn(\.stress, on: $0) }))
+                           value: { avgCheckIn(\.stress, on: $0, idx) }))
         // Stappen → energie en slaap
         out.append(compare("Energie", unit: "/5",
                            split: { (HealthService.shared.steps(on: $0) ?? 0) >= 8000 },
                            splitLabel: ("8.000+ stappen", "rustigere dagen"),
-                           value: { avgCheckIn(\.energy, on: $0) }))
+                           value: { avgCheckIn(\.energy, on: $0, idx) }))
         out.append(compare("Stappen", unit: "",
-                           split: { trained($0) },
+                           split: { idx.trained($0) },
                            splitLabel: ("trainingsdagen", "rustdagen"),
                            value: { HealthService.shared.steps(on: $0).map(Double.init) }))
         // Spierpijn → volume van de dag ervoor is te complex; houd het bij eiwit
         if profile.tracksFood {
             out.append(compare("Trainingsvolume", unit: " kg",
-                               split: { proteinDone($0) },
+                               split: { proteinDone($0, idx) },
                                splitLabel: ("eiwitdoel gehaald", "eiwitdoel gemist"),
-                               value: { let v = dayVolume($0); return v > 0 ? v : nil }))
+                               value: { let v = idx.volume($0); return v > 0 ? v : nil }))
         }
         return out.compactMap { $0 }.sorted { abs($0.delta) > abs($1.delta) }
     }
@@ -135,39 +135,37 @@ struct InsightsView: View {
     }
 
     /// Vervulling van een dag (0…1) voor de kleurintensiteit van de heatmap.
-    private func fill(_ day: Date) -> Double {
-        var done = 0.0, total = 0.0
-        for f in factors {
-            total += 1
-            if f.done(day) { done += 1 }
-        }
-        return total > 0 ? done / total : 0
+    /// Neemt `factors` als parameter: die lijst is per render constant, dus 'm hier
+    /// opnieuw opbouwen zou 371× hetzelfde werk zijn.
+    private func fill(_ day: Date, _ factors: [(name: String, done: (Date) -> Bool)]) -> Double {
+        guard !factors.isEmpty else { return 0 }
+        var done = 0.0
+        for f in factors where f.done(day) { done += 1 }
+        return done / Double(factors.count)
     }
 
     private func daysBack(_ n: Int) -> [Date] {
         (0..<n).compactMap { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: .now)) }
     }
 
-    private var perfectLast30: Int { daysBack(30).filter(perfectDay).count }
+    private func perfectLast30(_ idx: DayIndex) -> Int { daysBack(30).filter { perfectDay($0, idx) }.count }
 
-    private var streak: Int {
-        DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
+    private func streak(_ idx: DayIndex) -> Int {
+        DayCheck.streak(index: idx, target: profile.proteinTarget,
                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                        sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+                        trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
     }
 
-    private var factors: [(name: String, done: (Date) -> Bool)] {
+    private func factors(_ idx: DayIndex) -> [(name: String, done: (Date) -> Bool)] {
         var out: [(name: String, done: (Date) -> Bool)] =
-            [("Training", trained),
-             ("Gewicht", weighed)]
-        if profile.tracksFood { out.insert(("Eiwit", proteinDone), at: 0) }
-        if profile.tracksCreatine { out.append(("Creatine", { habit($0)?.creatine == true })) }
-        if profile.tracksSleep { out.append(("Slaap", { habit($0)?.sleptEnough == true })) }
+            [("Training", { idx.trained($0) }),
+             ("Gewicht", { idx.weighed($0) })]
+        if profile.tracksFood { out.insert(("Eiwit", { proteinDone($0, idx) }), at: 0) }
+        if profile.tracksCreatine { out.append(("Creatine", { idx.habits($0)?.creatine == true })) }
+        if profile.tracksSleep { out.append(("Slaap", { idx.habits($0)?.sleptEnough == true })) }
         for custom in customHabits {
             let name = custom.name
-            out.append((name, { day in
-                self.habitLogs.contains { $0.name == name && Calendar.current.isDate($0.date, inSameDayAs: day) }
-            }))
+            out.append((name, { idx.logged(name, on: $0) }))
         }
         return out
     }
@@ -179,27 +177,28 @@ struct InsightsView: View {
     }
 
     private var trainingDays: Int {
-        Set(sets.filter { inLastWeek($0.date) }.map { cal.startOfDay(for: $0.date) }).count
+        Set(sets.filter { inLastWeek($0.date) }.map { dayKey($0.date) }).count
     }
 
-    private var proteinDays: Int {
-        daysBack(7).filter(proteinDone).count
+    private func proteinDays(_ idx: DayIndex) -> Int {
+        daysBack(7).filter { proteinDone($0, idx) }.count
     }
 
     private var weekDelta: Double? { weights.trendPerWeek }
 
-    private var advices: [(text: String, warning: Bool)] {
+    private func advices(_ idx: DayIndex, plateaus: [(name: String, sessions: Int, kg: Double)]) -> [(text: String, warning: Bool)] {
         var out: [(text: String, warning: Bool)] = []
+        let trainingDays = trainingDays
         if trainingDays < profile.trainingsPerWeek {
             out.append(("Plan je trainingen vooraf in — je mist er \(profile.trainingsPerWeek - trainingDays) deze week.", true))
         }
-        if proteinDays < 5 {
+        if proteinDays(idx) < 5 {
             out.append(("Eiwit is de bottleneck: zet elke ochtend een shake klaar.", true))
         }
         if let d = weekDelta, profile.weeklyRate > 0, d < 0.05 {
             out.append(("Gewicht staat stil. Voeg ±250 kcal per dag toe.", true))
         }
-        for lift in plateauedLifts.prefix(2) {
+        for lift in plateaus.prefix(2) {
             out.append(("\(lift.name) staat al \(lift.sessions) sessies vast — probeer een deload (-10%) of een variatie.", true))
         }
         let recentProteins = proteins.filter { inLastWeek($0.date) }
@@ -219,6 +218,33 @@ struct InsightsView: View {
 
     // MARK: - Training analytics
 
+    /// Alle oefening-gebonden statistiek, één keer per render berekend. Elke lift kwam
+    /// hiervoor drie keer langs met een volledige scan over `sets` (tops, e1RM's, topgewicht).
+    struct LiftStats {
+        /// Topgewicht per sessie, oplopend op dag.
+        var tops: [String: [(day: Date, kg: Double)]] = [:]
+        /// Beste geschat 1RM per sessie, oplopend op dag.
+        var e1rms: [String: [Double]] = [:]
+        var topWeight: [String: Double] = [:]
+        /// Meest gelogde oefeningen eerst.
+        var mostLogged: [String] = []
+    }
+
+    private func makeLiftStats() -> LiftStats {
+        var out = LiftStats()
+        let byExercise = Dictionary(grouping: sets, by: \.exercise)
+        for (name, group) in byExercise {
+            let byDay = Dictionary(grouping: group) { dayKey($0.date) }.sorted { $0.key < $1.key }
+            out.tops[name] = byDay.map { _, day in
+                (day: day.map(\.date).min() ?? .now, kg: day.map(\.weightKg).max() ?? 0)
+            }
+            out.e1rms[name] = byDay.map { _, day in day.map { epley($0.weightKg, $0.reps) }.max() ?? 0 }
+            out.topWeight[name] = group.map(\.weightKg).max() ?? 0
+        }
+        out.mostLogged = byExercise.mapValues(\.count).sorted { $0.value > $1.value }.prefix(4).map(\.key)
+        return out
+    }
+
     private var weeklyVolume: [(week: Date, volume: Double)] {
         let groups = Dictionary(grouping: sets) {
             cal.dateInterval(of: .weekOfYear, for: $0.date)?.start ?? cal.startOfDay(for: $0.date)
@@ -233,20 +259,6 @@ struct InsightsView: View {
         return result.suffix(volumeWeeks).map { $0 }
     }
 
-    private var topExercises: [String] {
-        Dictionary(grouping: sets, by: \.exercise)
-            .mapValues(\.count)
-            .sorted { $0.value > $1.value }
-            .prefix(4)
-            .map(\.key)
-    }
-
-    private func sessionTops(_ name: String) -> [(day: Date, kg: Double)] {
-        Dictionary(grouping: sets.filter { $0.exercise == name }) { cal.startOfDay(for: $0.date) }
-            .map { ($0.key, $0.value.map(\.weightKg).max() ?? 0) }
-            .sorted { $0.0 < $1.0 }
-    }
-
     private func delta(_ tops: [(day: Date, kg: Double)]) -> Int? {
         guard tops.count >= 2, let first = tops.first?.kg, let last = tops.last?.kg, first > 0 else { return nil }
         return Int(((last - first) / first * 100).rounded())
@@ -254,38 +266,24 @@ struct InsightsView: View {
 
     // MARK: - Plateaus (geschat 1RM per sessie)
 
-    private func sessionE1RMs(_ name: String) -> [Double] {
-        Dictionary(grouping: sets.filter { $0.exercise == name }) { cal.startOfDay(for: $0.date) }
-            .sorted { $0.key < $1.key }
-            .map { _, daySets in daySets.map { epley($0.weightKg, $0.reps) }.max() ?? 0 }
-    }
-
     /// Lifts zonder nieuw 1RM-record in de laatste 3 sessies (min. 5 sessies).
-    private var plateauedLifts: [(name: String, sessions: Int, kg: Double)] {
-        var out: [(String, Int, Double)] = []
-        for name in Set(sets.map(\.exercise)) {
-            let e = sessionE1RMs(name)
-            guard e.count >= 5 else { continue }
+    private func plateauedLifts(_ stats: LiftStats) -> [(name: String, sessions: Int, kg: Double)] {
+        var out: [(name: String, sessions: Int, kg: Double)] = []
+        for (name, e) in stats.e1rms where e.count >= 5 {
             let priorBest = e.dropLast(3).max() ?? 0
             let recentBest = e.suffix(3).max() ?? 0
             if recentBest <= priorBest * 1.005 {
-                let topKg = sets.filter { $0.exercise == name }.map(\.weightKg).max() ?? 0
-                out.append((name, e.count, topKg))
+                out.append((name, e.count, stats.topWeight[name] ?? 0))
             }
         }
-        return out.sorted { $0.1 > $1.1 }
+        return out.sorted { $0.sessions > $1.sessions }
     }
 
     // MARK: - Volume per spiergroep (laatste 28 dagen)
 
-    private var muscleIntensity: [String: Double] {
-        let mv = muscleVolume
+    private func muscleIntensity(_ mv: [(muscle: String, volume: Double)]) -> [String: Double] {
         guard let maxV = mv.map(\.volume).max(), maxV > 0 else { return [:] }
         return Dictionary(mv.map { ($0.muscle, $0.volume / maxV) }, uniquingKeysWith: { a, _ in a })
-    }
-
-    private func volumeFor(_ muscle: String) -> Int {
-        Int(muscleVolume.first { $0.muscle == muscle }?.volume ?? 0)
     }
 
     private var muscleVolume: [(muscle: String, volume: Double)] {
@@ -311,194 +309,258 @@ struct InsightsView: View {
     @State private var selectedDayBox: DayBox?
     @State private var selectedMuscle: String?
 
-    private var perfectLast7: Int { daysBack(7).filter(perfectDay).count }
+    private func perfectLast7(_ idx: DayIndex) -> Int { daysBack(7).filter { perfectDay($0, idx) }.count }
 
     var body: some View {
-        List {
-            Section("Deze week") {
-                HStack {
-                    StatTile(value: "\(trainingDays)/\(profile.trainingsPerWeek)", label: "trainingen", large: true)
-                    Divider()
-                    StatTile(value: "\(proteinDays)/7", label: "eiwit-dagen", large: true)
-                }
-                HStack {
-                    StatTile(value: weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—",
-                             label: "trend/week", large: true)
-                    Divider()
-                    StatTile(value: "\(perfectLast7)/7", label: "perfecte dagen", large: true)
-                }
-                Button {
-                    showReview = true
-                } label: {
-                    Label("Bekijk week review", systemImage: "chart.bar.doc.horizontal")
-                }
+        if isVisible { content } else { Color.clear }
+    }
+
+    @ViewBuilder private var content: some View {
+        // Alles wat over de volledige tabellen loopt: precies één keer per render.
+        // Elk blok hieronder krijgt het resultaat door i.p.v. het zelf te herberekenen.
+        let idx = makeIndex()
+        let stats = makeLiftStats()
+        let factors = factors(idx)
+        let plateaus = plateauedLifts(stats)
+        let correlations = correlations(idx)
+        return ScrollView {
+            LazyVStack(spacing: 14) {
+                BuiltScreenTitle("Inzicht", "Week \(profile.daysIn / 7 + 1)")
+                weekBlock(idx)
+                bodyMapBlock
+                coachBlock(idx, plateaus: plateaus)
+                perfectDaysBlock(idx)
+                yearBlock(factors)
+                correlationsBlock(correlations)
+                habitsBlock(factors)
+                volumeBlock
+                plateauBlock(plateaus)
+                strengthBlock(stats)
             }
-
-            Section {
-                    BodyMapView(values: muscleIntensity) { muscle in
-                        withAnimation(.snappy) { selectedMuscle = muscle }
-                    }
-                    .padding(.vertical, 4)
-                    .listRowSeparator(.hidden)
-                    if let m = selectedMuscle {
-                        HStack {
-                            Circle().fill(Color.muscleTint(muscleIntensity[m] ?? 0)).frame(width: 10, height: 10)
-                            Text(m).font(.subheadline.bold())
-                            Spacer()
-                            Text("\(volumeFor(m)) kg")
-                                .font(.subheadline.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Volume per spiergroep")
-                } footer: {
-                    Text("Laatste 28 dagen — voller groen = meer volume. Tik op een spiergroep. Zie je er een achterblijven, voeg er een oefening voor toe.")
-                }
-
-            Section {
-                NavigationLink {
-                    RecordsView()
-                } label: {
-                    Label("Records", systemImage: "trophy.fill")
-                        .foregroundStyle(.primary)
-                }
-            }
-
-            Section("Coach") {
-                ForEach(advices, id: \.text) { advice in
-                    Label {
-                        Text(advice.text)
-                    } icon: {
-                        Image(systemName: advice.warning ? "exclamationmark.circle.fill" : "lightbulb")
-                            .foregroundStyle(advice.warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                    }
-                    .font(.subheadline)
-                }
-            }
-
-            Section {
-                HStack {
-                    StatTile(value: "\(perfectLast30)", label: "van 30 dagen", large: true)
-                    Divider()
-                    StatTile(value: streak > 0 ? "🔥 \(streak)" : "—",
-                             label: streak > 0 ? "huidige reeks" : "start vandaag je reeks", large: true)
-                }
-                heatmap
-            } header: {
-                Text("Perfecte dagen")
-            } footer: {
-                Text("De laatste vijf weken — tik op een dag voor het logboek.")
-            }
-
-            Section {
-                yearHeatmap
-            } header: {
-                Text("Je jaar")
-            } footer: {
-                Text("Elke kolom is een week, elk blokje een dag — voller groen = meer habits gehaald. Tik op een dag voor het logboek.")
-            }
-
-            Section {
-                if correlations.isEmpty {
-                    Text("Vul je dag-check-in een paar weken in — dan zie je hier wat écht verband houdt met je energie, stemming en training.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(correlations) { c in
-                    Label {
-                        Text(c.text).font(.subheadline)
-                    } icon: {
-                        Image(systemName: c.delta >= 0 ? "arrow.up.right" : "arrow.down.right")
-                            .foregroundStyle(c.delta >= 0 ? .green : .orange)
-                    }
-                }
-            } header: {
-                Text("Verbanden")
-            } footer: {
-                if !correlations.isEmpty {
-                    Text("Gemiddeldes over de laatste 120 dagen, alleen getoond bij 5+ dagen per groep en 5%+ verschil. Verband is geen oorzaak.")
-                }
-            }
-
-            Section("Habits per dag") {
-                weekGrid
-            }
-
-            Section("Trainingsvolume per week") {
-                Picker("Periode", selection: $volumeWeeks) {
-                    Text("8 wk").tag(8)
-                    Text("16 wk").tag(16)
-                    Text("26 wk").tag(26)
-                }
-                .pickerStyle(.segmented)
-                .listRowSeparator(.hidden)
-                if weeklyVolume.isEmpty {
-                    Text("Na je eerste trainingen zie hier je volume per week groeien.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    volumeChart
-                }
-            }
-
-
-            if !plateauedLifts.isEmpty {
-                Section {
-                    ForEach(plateauedLifts, id: \.name) { lift in
-                        NavigationLink {
-                            ExerciseDetailView(exercise: lift.name)
-                        } label: {
-                            Label {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(lift.name)
-                                    Text("\(lift.sessions) sessies zonder nieuw record")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            } icon: {
-                                Image(systemName: "chart.line.flattrend.xyaxis")
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Plateaus")
-                } footer: {
-                    Text("Deload-tip: doe één week op ~90% met dezelfde reps, bouw daarna weer op. Vaak breek je er zo doorheen.")
-                }
-            }
-
-            Section {
-                if topExercises.isEmpty {
-                    Text("Na 2+ sessies per oefening verschijnt hier je krachtcurve.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(topExercises, id: \.self) { name in
-                    NavigationLink {
-                        ExerciseDetailView(exercise: name)
-                    } label: {
-                        strengthRow(name)
-                    }
-                }
-            } header: {
-                Text("Kracht")
-            } footer: {
-                if !topExercises.isEmpty {
-                    Text("Topgewicht per sessie; records op geschat 1RM (Epley).")
-                }
-            }
+            .padding(.horizontal)
+            .padding(.bottom, 24)
         }
-        .navigationTitle("Inzicht")
+        .background(Color(.systemGroupedBackground))
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showReview) { WeeklyReviewSheet(profile: profile) }
         .navigationDestination(item: $selectedDayBox) { box in
             DayDetailView(day: box.day, profile: profile)
         }
     }
 
+    // MARK: - Blokken
+    //
+    // Los gehouden omdat de type-checker afhaakt op één grote VStack, en omdat een
+    // scherm van tien secties anders niet te lezen is.
+
+    private func weekBlock(_ idx: DayIndex) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                StatTile(value: "\(trainingDays)/\(profile.trainingsPerWeek)", label: "trainingen", large: true)
+                Divider()
+                StatTile(value: "\(proteinDays(idx))/7", label: "eiwit-dagen", large: true)
+            }
+            Divider()
+            HStack {
+                StatTile(value: weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—",
+                         label: "trend/week", large: true)
+                Divider()
+                StatTile(value: "\(perfectLast7(idx))/7", label: "perfecte dagen", large: true)
+            }
+            Button {
+                showReview = true
+            } label: {
+                Label("Bekijk week review", systemImage: "chart.bar.doc.horizontal")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(.builtTint(.green), in: Capsule())
+            }
+            .buttonStyle(PressableStyle())
+        }
+        .builtCard()
+    }
+
+    @ViewBuilder private var bodyMapBlock: some View {
+        let mv = muscleVolume
+        let intensity = muscleIntensity(mv)
+        BuiltSectionHeader("Volume per spiergroep")
+        VStack(spacing: 10) {
+            BodyMapView(values: intensity) { muscle in
+                withAnimation(.snappy) { selectedMuscle = muscle }
+            }
+            if let m = selectedMuscle {
+                HStack {
+                    Circle().fill(Color.muscleTint(intensity[m] ?? 0)).frame(width: 10, height: 10)
+                    Text(m).font(.subheadline.bold())
+                    Spacer()
+                    Text("\(Int(mv.first { $0.muscle == m }?.volume ?? 0)) kg")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .builtCard()
+        BuiltFootnote("Laatste 28 dagen — voller groen = meer volume. Tik op een spiergroep. Zie je er een achterblijven, voeg er een oefening voor toe.")
+
+        NavigationLink {
+            RecordsView()
+        } label: {
+            HStack(spacing: 12) {
+                BuiltIconTile(systemName: "trophy.fill", color: .orange)
+                Text("Records").font(.headline).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+            }
+            .builtCard()
+        }
+        .buttonStyle(PressableStyle(scale: 0.985))
+    }
+
+    @ViewBuilder private func coachBlock(_ idx: DayIndex, plateaus: [(name: String, sessions: Int, kg: Double)]) -> some View {
+        let advices = advices(idx, plateaus: plateaus)
+        if !advices.isEmpty {
+            BuiltSectionHeader("Coach")
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(advices, id: \.text) { advice in
+                    Label {
+                        Text(advice.text).font(.subheadline)
+                    } icon: {
+                        Image(systemName: advice.warning ? "exclamationmark.circle.fill" : "lightbulb")
+                            .foregroundStyle(advice.warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    }
+                }
+            }
+            .builtCard()
+        }
+    }
+
+    @ViewBuilder private func perfectDaysBlock(_ idx: DayIndex) -> some View {
+        let streak = streak(idx)
+        BuiltSectionHeader("Perfecte dagen")
+        VStack(spacing: 12) {
+            HStack {
+                StatTile(value: "\(perfectLast30(idx))", label: "van 30 dagen", large: true)
+                Divider()
+                StatTile(value: streak > 0 ? "🔥 \(streak)" : "—",
+                         label: streak > 0 ? "huidige reeks" : "start vandaag je reeks", large: true)
+            }
+            heatmap(idx)
+        }
+        .builtCard()
+        BuiltFootnote("De laatste vijf weken — tik op een dag voor het logboek.")
+    }
+
+    @ViewBuilder private func yearBlock(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
+        BuiltSectionHeader("Je jaar")
+        yearHeatmap(factors).builtCard()
+        BuiltFootnote("Elke kolom is een week, elk blokje een dag — voller groen = meer habits gehaald. Tik op een dag voor het logboek.")
+    }
+
+    @ViewBuilder private func correlationsBlock(_ correlations: [Correlation]) -> some View {
+        BuiltSectionHeader("Verbanden")
+        VStack(alignment: .leading, spacing: 10) {
+            if correlations.isEmpty {
+                Text("Vul je dag-check-in een paar weken in — dan zie je hier wat écht verband houdt met je energie, stemming en training.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(correlations) { c in
+                Label {
+                    Text(c.text).font(.subheadline)
+                } icon: {
+                    Image(systemName: c.delta >= 0 ? "arrow.up.right" : "arrow.down.right")
+                        .foregroundStyle(c.delta >= 0 ? .green : .orange)
+                }
+            }
+        }
+        .builtCard()
+        if !correlations.isEmpty {
+            BuiltFootnote("Gemiddeldes over de laatste 120 dagen, alleen getoond bij 5+ dagen per groep en 5%+ verschil. Verband is geen oorzaak.")
+        }
+    }
+
+    @ViewBuilder private func habitsBlock(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
+        BuiltSectionHeader("Habits per dag")
+        weekGrid(factors).builtCard()
+    }
+
+    @ViewBuilder private var volumeBlock: some View {
+        BuiltSectionHeader("Trainingsvolume per week")
+        VStack(spacing: 12) {
+            Picker("Periode", selection: $volumeWeeks) {
+                Text("8 wk").tag(8)
+                Text("16 wk").tag(16)
+                Text("26 wk").tag(26)
+            }
+            .pickerStyle(.segmented)
+            if weeklyVolume.isEmpty {
+                Text("Na je eerste trainingen zie hier je volume per week groeien.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                volumeChart
+            }
+        }
+        .builtCard()
+    }
+
+    @ViewBuilder private func plateauBlock(_ plateaus: [(name: String, sessions: Int, kg: Double)]) -> some View {
+        if !plateaus.isEmpty {
+            BuiltSectionHeader("Plateaus")
+            VStack(spacing: 0) {
+                ForEach(Array(plateaus.enumerated()), id: \.element.name) { i, lift in
+                    if i > 0 { Divider() }
+                    NavigationLink {
+                        ExerciseDetailView(exercise: lift.name)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "chart.line.flattrend.xyaxis").foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(lift.name).foregroundStyle(.primary)
+                                Text("\(lift.sessions) sessies zonder nieuw record")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 10)
+                    }
+                    .buttonStyle(PressableStyle())
+                }
+            }
+            .builtCard()
+            BuiltFootnote("Deload-tip: doe één week op ~90% met dezelfde reps, bouw daarna weer op. Vaak breek je er zo doorheen.")
+        }
+    }
+
+    @ViewBuilder private func strengthBlock(_ stats: LiftStats) -> some View {
+        BuiltSectionHeader("Kracht")
+        if stats.mostLogged.isEmpty {
+            Text("Na 2+ sessies per oefening verschijnt hier je krachtcurve.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .builtCard()
+        }
+        ForEach(stats.mostLogged, id: \.self) { name in
+            NavigationLink {
+                ExerciseDetailView(exercise: name)
+            } label: {
+                strengthRow(name, stats.tops[name] ?? []).builtCard()
+            }
+            .buttonStyle(PressableStyle(scale: 0.985))
+        }
+        if !stats.mostLogged.isEmpty {
+            BuiltFootnote("Topgewicht per sessie; records op geschat 1RM (Epley).")
+        }
+    }
+
     /// 5 weken × 7 dagen; gevuld = perfecte dag, tik = logboek.
-    private var heatmap: some View {
+    private func heatmap(_ idx: DayIndex) -> some View {
         let days = (0..<35).compactMap { cal.date(byAdding: .day, value: -34 + $0, to: cal.startOfDay(for: .now)) }
         return VStack(spacing: 5) {
             ForEach(0..<5, id: \.self) { row in
@@ -509,7 +571,7 @@ struct InsightsView: View {
                             selectedDayBox = DayBox(day: day)
                         } label: {
                             RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                .fill(perfectDay(day) ? Color.green : Color(.quaternarySystemFill))
+                                .fill(perfectDay(day, idx) ? Color.green : Color(.quaternarySystemFill))
                                 .frame(height: 26)
                                 .overlay {
                                     if cal.isDateInToday(day) {
@@ -527,32 +589,41 @@ struct InsightsView: View {
     }
 
     /// Een jaar in één blik. Horizontaal scrollbaar, nieuwste week rechts.
-    private var yearHeatmap: some View {
+    private func yearHeatmap(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
         let today = cal.startOfDay(for: .now)
+        // Weken én vullingen één keer berekenen. `fill` stond hier drie keer per dag
+        // (kleur, vinkje, accessibility) en `yearWeeks` werd ook nog eens los opgevraagd.
+        let weeks = yearWeeks
+        let todayKey = dayKey(today)
+        let fills = Dictionary(uniqueKeysWithValues: weeks.flatMap { $0 }
+            .filter { $0 <= today }
+            .map { (dayKey($0), fill($0, factors)) })
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 3) {
-                    ForEach(Array(yearWeeks.enumerated()), id: \.offset) { index, week in
+                    ForEach(Array(weeks.enumerated()), id: \.offset) { index, week in
                         VStack(spacing: 3) {
                             ForEach(week, id: \.self) { day in
                                 if day > today {
                                     Color.clear.frame(width: 13, height: 13)
                                 } else {
+                                    let key = dayKey(day)
+                                    let v = fills[key] ?? 0
                                     Button {
                                         selectedDayBox = DayBox(day: day)
                                     } label: {
                                         RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                            .fill(Color.muscleTint(fill(day)))
+                                            .fill(Color.muscleTint(v))
                                             .frame(width: 13, height: 13)
                                             .overlay {
                                                 // Vorm naast kleur: bij kleurenblindheid is
                                                 // "alles gehaald" anders niet te onderscheiden.
-                                                if fill(day) >= 0.999 {
+                                                if v >= 0.999 {
                                                     Image(systemName: "checkmark")
                                                         .font(.system(size: 8, weight: .black))
                                                         .foregroundStyle(.white)
                                                 }
-                                                if cal.isDateInToday(day) {
+                                                if key == todayKey {
                                                     RoundedRectangle(cornerRadius: BuiltRadius.micro)
                                                         .strokeBorder(.green, lineWidth: 1.5)
                                                 }
@@ -560,7 +631,7 @@ struct InsightsView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityLabel(day.formatted(date: .abbreviated, time: .omitted))
-                                    .accessibilityValue("\(Int(fill(day) * 100))% van je habits")
+                                    .accessibilityValue("\(Int(v * 100))% van je habits")
                                 }
                             }
                         }
@@ -569,7 +640,7 @@ struct InsightsView: View {
                 }
                 .padding(.vertical, 4)
             }
-            .onAppear { proxy.scrollTo(yearWeeks.count - 1, anchor: .trailing) }
+            .onAppear { proxy.scrollTo(weeks.count - 1, anchor: .trailing) }
         }
     }
 
@@ -598,7 +669,7 @@ struct InsightsView: View {
         .animation(.smooth(duration: 0.3), value: volumeWeeks)
     }
 
-    private var weekGrid: some View {
+    private func weekGrid(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
         let days = daysBack(7).reversed().map { $0 }
         return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
@@ -638,9 +709,8 @@ struct InsightsView: View {
         .padding(.vertical, 4)
     }
 
-    fileprivate func strengthRow(_ name: String) -> some View {
-        let tops = sessionTops(name)
-        return HStack {
+    fileprivate func strengthRow(_ name: String, _ tops: [(day: Date, kg: Double)]) -> some View {
+        HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.subheadline.bold())
                 if let d = delta(tops) {
@@ -694,24 +764,23 @@ struct WeeklyReviewSheet: View {
     }
 
     private var weekSets: [SetEntry] { sets.filter { inLastWeek($0.date) } }
-    private var trainingDays: Int { Set(weekSets.map { cal.startOfDay(for: $0.date) }).count }
+    private var trainingDays: Int { Set(weekSets.map { dayKey($0.date) }).count }
     private var weekVolume: Int { Int(weekSets.map { $0.weightKg * Double($0.reps) }.reduce(0, +)) }
 
-    private var proteinDays: Int {
+    private var lastSevenDays: [Date] {
         (0..<7).compactMap { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: .now)) }
-            .filter { day in
-                proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= profile.proteinTarget
-            }.count
     }
 
-    private var perfectDays: Int {
-        (0..<7).compactMap { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: .now)) }
-            .filter {
-                DayCheck.perfect($0, proteins: proteins, weights: weights, habits: habits,
-                                 target: profile.proteinTarget,
-                                 requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                                 sets: sets, trainingDays: profile.trainingDays)
-            }.count
+    private func proteinDays(_ idx: DayIndex) -> Int {
+        lastSevenDays.filter { idx.protein($0) >= profile.proteinTarget }.count
+    }
+
+    private func perfectDays(_ idx: DayIndex) -> Int {
+        lastSevenDays.filter {
+            DayCheck.perfect($0, index: idx, target: profile.proteinTarget,
+                             requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
+                             trainingDays: profile.trainingDays)
+        }.count
     }
 
     private var bestLift: (name: String, e1rm: Double)? {
@@ -722,16 +791,17 @@ struct WeeklyReviewSheet: View {
 
     private var weekDelta: Double? { weights.trendPerWeek }
 
-    private var verdict: String {
+    private func verdict(proteinDays: Int) -> String {
         let trainingOK = trainingDays >= profile.trainingsPerWeek
-        let proteinOK = proteinDays >= 5
-        if trainingOK && proteinOK { return "Op schema — sterke week! 🚀" }
+        if trainingOK && proteinDays >= 5 { return "Op schema — sterke week! 🚀" }
         if !trainingOK { return "Volgende week: plan je \(profile.trainingsPerWeek) trainingen vooraf in." }
         return "Volgende week: eiwit is de bottleneck — zet je shake klaar."
     }
 
     var body: some View {
-        VStack(spacing: 20) {
+        let idx = DayIndex(proteins: proteins, weights: weights, sets: sets, habits: habits)
+        let proteinDays = proteinDays(idx)
+        return VStack(spacing: 20) {
             Text("📊")
                 .font(.system(size: 52))
                 .symbolEffect(.bounce, value: bounced)
@@ -743,7 +813,7 @@ struct WeeklyReviewSheet: View {
             }
             HStack {
                 tile(weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—", "trend/week")
-                tile("\(perfectDays)/7", "perfecte dagen")
+                tile("\(perfectDays(idx))/7", "perfecte dagen")
             }
             if let bestLift {
                 Text("🏆 Beste lift: \(bestLift.name) — e1RM \(bestLift.e1rm.kgText) kg")
@@ -752,7 +822,7 @@ struct WeeklyReviewSheet: View {
                     .frame(maxWidth: .infinity)
                     .background(.builtTint(.yellow), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
             }
-            Text(verdict)
+            Text(verdict(proteinDays: proteinDays))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -826,7 +896,8 @@ struct ExerciseDetailView: View {
     }
 
     private func isRecordDay(_ day: Date) -> Bool {
-        let dayBest = sets.filter { cal.isDate($0.date, inSameDayAs: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+        let key = dayKey(day)
+        let dayBest = sets.filter { dayKey($0.date) == key }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
         let before = sets.filter { $0.date < cal.startOfDay(for: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
         return before > 0 && dayBest > before + 0.1
     }
@@ -883,7 +954,7 @@ struct ExerciseDetailView: View {
 
             Section("Historie") {
                 ForEach(days, id: \.self) { day in
-                    let daySets = sets.filter { cal.isDate($0.date, inSameDayAs: day) }
+                    let daySets = sets.filter { dayKey($0.date) == dayKey(day) }
                     let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {

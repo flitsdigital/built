@@ -3,6 +3,9 @@ import SwiftData
 import Charts
 
 struct WeightView: View {
+    /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
+    /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
+    var isVisible = true
     let profile: Profile
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
@@ -86,6 +89,10 @@ struct WeightView: View {
     // MARK: - Body
 
     var body: some View {
+        if isVisible { content } else { Color.clear }
+    }
+
+    @ViewBuilder private var content: some View {
         List {
             Section {
                 HStack(spacing: 0) {

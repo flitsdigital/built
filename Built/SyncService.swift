@@ -463,6 +463,14 @@ enum Sync {
     private(set) static var pushAllowed = false
     static var appActive = true
 
+    /// Gaat aan bij elke lokale wijziging. Zonder deze vlag draaide de 20-seconden-lus
+    /// élke ronde `collect()` — twaalf volledige fetches plus een JSON-encode van de
+    /// complete database, op de main thread, ook als er niets veranderd was.
+    private static var dirty = true
+
+    /// Laat de sync-lus weten dat er iets te pushen valt.
+    static func markDirty() { dirty = true }
+
     private static func hash(_ p: Payload) throws -> Int {
         var hasher = Hasher()
         hasher.combine(try JSONEncoder().encode(p))
@@ -472,6 +480,10 @@ enum Sync {
     static func start(_ context: ModelContext) {
         guard isConfigured, !running else { return }
         running = true
+        // SwiftData meldt elke save; dat is precies "er valt iets te pushen".
+        NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { markDirty() }
+        }
         Task {
             while true {
                 try? await Task.sleep(for: .seconds(20))
@@ -482,8 +494,9 @@ enum Sync {
     }
 
     static func pushIfChanged(_ context: ModelContext) async {
-        guard pushAllowed,
-              let uid = try? await userID(),
+        guard pushAllowed, dirty else { return }
+        dirty = false
+        guard let uid = try? await userID(),
               let p = try? collect(context, uid: uid),
               let h = try? hash(p),
               h != lastPushedHash else { return }

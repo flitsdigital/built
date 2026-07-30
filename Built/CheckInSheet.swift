@@ -44,7 +44,7 @@ struct CheckInSheet: View {
     ]
 
     private var cal: Calendar { .current }
-    private var record: DayHabits? { allHabits.first { cal.isDate($0.date, inSameDayAs: day) } }
+    private var record: DayHabits? { allHabits.first { dayKey($0.date) == dayKey(day) } }
     private var onSummary: Bool { step >= questions.count }
 
     private func recordOrCreate() -> DayHabits {
@@ -58,7 +58,9 @@ struct CheckInSheet: View {
     private func value(_ q: Question) -> Int { record?[keyPath: q.key] ?? 0 }
 
     private var streak: Int {
-        habitStreak { d in allHabits.first { cal.isDate($0.date, inSameDayAs: d) }?.checkedIn == true }
+        // Eén keer indexeren: habitStreak liep hier per dag opnieuw door alle dagen.
+        let checkedIn = Set(allHabits.filter(\.checkedIn).map { dayKey($0.date) })
+        return habitStreak { checkedIn.contains(dayKey($0)) }
     }
 
     private func select(_ q: Question, _ level: Int) {

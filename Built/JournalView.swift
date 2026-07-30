@@ -3,6 +3,9 @@ import SwiftData
 
 struct JournalView: View {
     let profile: Profile
+    /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
+    /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
+    var isVisible = true
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
     @Query private var proteins: [ProteinEntry]
     @Query private var sets: [SetEntry]
@@ -18,93 +21,124 @@ struct JournalView: View {
 
     private var cal: Calendar { .current }
 
-    private var days: [Date] {
+    /// Eén keer per render bouwen en doorgeven — zie `DayIndex`.
+    private func makeIndex() -> DayIndex {
+        DayIndex(proteins: proteins, weights: weights, sets: sets, habits: habits)
+    }
+
+    private func days(_ idx: DayIndex) -> [Date] {
         var all = Set<Date>()
         for w in weights { all.insert(cal.startOfDay(for: w.date)) }
         for p in proteins { all.insert(cal.startOfDay(for: p.date)) }
         for s in sets { all.insert(cal.startOfDay(for: s.date)) }
         for h in habits { all.insert(cal.startOfDay(for: h.date)) }
         all.insert(cal.startOfDay(for: .now))
-        return all.sorted(by: >).prefix(365).filter(matchesFilter)
+        return all.sorted(by: >).prefix(365).filter { matchesFilter($0, idx) }
     }
 
-    private func matchesFilter(_ day: Date) -> Bool {
+    private func matchesFilter(_ day: Date, _ idx: DayIndex) -> Bool {
         switch filter {
         case .all:
             return true
         case .training:
-            return sets.contains { cal.isDate($0.date, inSameDayAs: day) }
+            return idx.trained(day)
         case .notes:
-            return note(day) != nil
+            return note(day, idx) != nil
         }
     }
 
     /// Gegroepeerd per maand, nieuwste eerst.
-    private var monthGroups: [(month: Date, days: [Date])] {
-        Dictionary(grouping: days) {
+    private func monthGroups(_ idx: DayIndex) -> [(month: Date, days: [Date])] {
+        Dictionary(grouping: days(idx)) {
             cal.date(from: cal.dateComponents([.year, .month], from: $0)) ?? $0
         }
         .map { (month: $0.key, days: $0.value.sorted(by: >)) }
         .sorted { $0.month > $1.month }
     }
 
-    private func summary(_ day: Date) -> String {
+    private func summary(_ day: Date, _ idx: DayIndex) -> String {
         var parts: [String] = []
-        if sets.contains(where: { cal.isDate($0.date, inSameDayAs: day) }) { parts.append("Training") }
-        let dayProteins = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }
-        let protein = dayProteins.map(\.grams).reduce(0, +)
+        if idx.trained(day) { parts.append("Training") }
+        let protein = idx.protein(day)
         if protein > 0 { parts.append("\(protein) g eiwit") }
-        let kcal = dayProteins.map(\.kcal).reduce(0, +)
+        let kcal = idx.kcal(day)
         if kcal > 0 { parts.append("\(kcal) kcal") }
-        if let w = weights.last(where: { cal.isDate($0.date, inSameDayAs: day) }) { parts.append("\(w.kg.kgText) kg") }
-        if let h = habits.first(where: { cal.isDate($0.date, inSameDayAs: day) }), let hours = h.sleepHours {
-            parts.append("\(hours.kgText) u slaap")
-        }
+        if let kg = idx.weight(day) { parts.append("\(kg.kgText) kg") }
+        if let hours = idx.habits(day)?.sleepHours { parts.append("\(hours.kgText) u slaap") }
         return parts.isEmpty ? "Niets gelogd" : parts.joined(separator: " · ")
     }
 
-    private func note(_ day: Date) -> String? {
-        let texts = (habits.first { cal.isDate($0.date, inSameDayAs: day) }?.journal ?? [])
+    private func note(_ day: Date, _ idx: DayIndex) -> String? {
+        let texts = (idx.habits(day)?.journal ?? [])
             .sorted { $0.createdAt > $1.createdAt }
             .map(\.text).filter { !$0.isEmpty }
         guard let latest = texts.first else { return nil }
         return texts.count > 1 ? "\(latest)  (+\(texts.count - 1))" : latest
     }
 
-    private func isPerfect(_ day: Date) -> Bool {
-        DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits,
-                         target: profile.proteinTarget,
+    private func isPerfect(_ day: Date, _ idx: DayIndex) -> Bool {
+        DayCheck.perfect(day, index: idx, target: profile.proteinTarget,
                          requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                         sets: sets, trainingDays: profile.trainingDays)
+                         trainingDays: profile.trainingDays)
     }
 
     var body: some View {
-        List {
-            ForEach(monthGroups, id: \.month) { group in
-                Section(group.month.formatted(.dateTime.month(.wide).year())) {
-                    ForEach(group.days, id: \.self) { day in
-                        dayRow(day)
-                            .listRowBackground(cal.isDateInToday(day) ? Color.green.opacity(0.08) : nil)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Logboek")
-        .toolbar {
-            Menu {
-                Picker("Filter", selection: $filter) {
-                    ForEach(Filter.allCases, id: \.self) { f in
-                        Text(f.rawValue).tag(f)
-                    }
-                }
-            } label: {
-                Image(systemName: filter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-            }
-        }
+        if isVisible { content } else { Color.clear }
     }
 
-    private func dayRow(_ day: Date) -> some View {
-        NavigationLink {
+    @ViewBuilder private var content: some View {
+        let idx = makeIndex()
+        let groups = monthGroups(idx)
+        // LazyVStack: alleen de maandkaarten in beeld worden gebouwd. Eerder stonden
+        // hier tot 365 dagrijen tegelijk, elk met een volledige perfecte-dag-check.
+        return ScrollView {
+            LazyVStack(spacing: 14) {
+                BuiltScreenTitle(eyebrow: "Logboek", title: "\(groups.reduce(0) { $0 + $1.days.count }) dagen") {
+                    Menu {
+                        Picker("Filter", selection: $filter) {
+                            ForEach(Filter.allCases, id: \.self) { f in
+                                Text(f.rawValue).tag(f)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: filter == .all ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+                            .font(.headline)
+                            .foregroundStyle(.green)
+                            .frame(width: 36, height: 36)
+                            .background(.builtTint(.green), in: Circle())
+                    }
+                    .accessibilityLabel("Filter")
+                }
+                ForEach(groups, id: \.month) { group in
+                    BuiltSectionHeader(group.month.formatted(.dateTime.month(.wide).year()))
+                    // Eén kaart per maand, dagen als rijen erbinnen — dat leest als een
+                    // logboek in plaats van als een instellingenlijst.
+                    VStack(spacing: 0) {
+                        ForEach(Array(group.days.enumerated()), id: \.element) { i, day in
+                            if i > 0 { Divider().padding(.leading, 50) }
+                            dayRow(day, idx)
+                                .padding(.vertical, 10)
+                                .background(cal.isDateInToday(day) ? Color.green.opacity(0.08) : .clear)
+                        }
+                    }
+                    // clipShape omdat de "vandaag"-markering anders vierkante hoeken
+                    // buiten de kaart steekt; .background(in:) klipt z'n inhoud niet.
+                    .clipShape(RoundedRectangle(cornerRadius: BuiltRadius.card, style: .continuous))
+                    .builtCard(padding: 0)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 24)
+        }
+        .background(Color(.systemGroupedBackground))
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private func dayRow(_ day: Date, _ idx: DayIndex) -> some View {
+        let summary = summary(day, idx)
+        let empty = summary == "Niets gelogd"
+        let isToday = cal.isDateInToday(day)
+        return NavigationLink {
             DayDetailView(day: day, profile: profile)
         } label: {
             HStack(spacing: 12) {
@@ -117,20 +151,20 @@ struct JournalView: View {
                 }
                 .frame(width: 38)
                 .overlay(alignment: .topTrailing) {
-                    if isPerfect(day) {
+                    if isPerfect(day, idx) {
                         Circle().fill(.green).frame(width: 7, height: 7).offset(x: 4, y: -2)
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(cal.isDateInToday(day) ? "Vandaag" : summary(day))
-                        .font(.subheadline.weight(cal.isDateInToday(day) ? .semibold : .regular))
-                        .foregroundStyle(summary(day) == "Niets gelogd" ? .secondary : .primary)
-                    if cal.isDateInToday(day) {
-                        Text(summary(day))
+                    Text(isToday ? "Vandaag" : summary)
+                        .font(.subheadline.weight(isToday ? .semibold : .regular))
+                        .foregroundStyle(empty ? .secondary : .primary)
+                    if isToday {
+                        Text(summary)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    if let note = note(day) {
+                    if let note = note(day, idx) {
                         HStack(spacing: 6) {
                             Rectangle().fill(.green.opacity(0.5)).frame(width: 3)
                             Text(note)
@@ -141,9 +175,15 @@ struct JournalView: View {
                         }
                     }
                 }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.tertiary)
             }
-            .opacity(summary(day) == "Niets gelogd" && !cal.isDateInToday(day) ? 0.55 : 1)
+            .padding(.horizontal, 16)
+            .opacity(empty && !isToday ? 0.55 : 1)
         }
+        .buttonStyle(PressableStyle())
     }
 }
 
@@ -170,10 +210,11 @@ struct DayDetailView: View {
     }
 
     private var cal: Calendar { .current }
-    private var weights: [WeightEntry] { allWeights.filter { cal.isDate($0.date, inSameDayAs: day) } }
-    private var proteins: [ProteinEntry] { allProteins.filter { cal.isDate($0.date, inSameDayAs: day) } }
-    private var daySets: [SetEntry] { allSets.filter { cal.isDate($0.date, inSameDayAs: day) } }
-    private var habitsRecord: DayHabits? { allHabits.first { cal.isDate($0.date, inSameDayAs: day) } }
+    private var key: Int { dayKey(day) }
+    private var weights: [WeightEntry] { allWeights.filter { dayKey($0.date) == key } }
+    private var proteins: [ProteinEntry] { allProteins.filter { dayKey($0.date) == key } }
+    private var daySets: [SetEntry] { allSets.filter { dayKey($0.date) == key } }
+    private var habitsRecord: DayHabits? { allHabits.first { dayKey($0.date) == key } }
 
     private var setsByExercise: [(name: String, sets: [SetEntry])] {
         var names: [String] = []
@@ -197,11 +238,11 @@ struct DayDetailView: View {
 
     private func customBinding(_ name: String) -> Binding<Bool> {
         Binding(
-            get: { habitLogs.contains { $0.name == name && cal.isDate($0.date, inSameDayAs: day) } },
+            get: { habitLogs.contains { $0.name == name && dayKey($0.date) == key } },
             set: { on in
                 if on {
                     context.insert(HabitLog(name: name, date: noon))
-                } else if let log = habitLogs.first(where: { $0.name == name && cal.isDate($0.date, inSameDayAs: day) }) {
+                } else if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
                     context.delete(log)
                 }
             })

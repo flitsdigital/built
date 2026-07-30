@@ -78,6 +78,9 @@ struct WorkoutSummary: Identifiable {
 
 struct TrainingView: View {
     let profile: Profile
+    /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
+    /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
+    var isVisible = true
     @Environment(\.modelContext) private var context
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @Query(sort: \Routine.createdAt) private var routines: [Routine]
@@ -118,6 +121,35 @@ struct TrainingView: View {
 
     private var cal: Calendar { .current }
 
+    // MARK: - Historie-index
+    //
+    // Elke helper hieronder filterde eerder de volledige sets-tabel, en dat per oefening
+    // én per historie-dag, bij élke render. Nu wordt er één keer per render gegroepeerd.
+
+    /// Sets per oefening en per dag, plus de oefening-catalogus als opzoektabel.
+    struct HistoryIndex {
+        var byExercise: [String: [SetEntry]] = [:]
+        var byDay: [Int: [SetEntry]] = [:]
+        /// Beste geschat 1RM per oefening vóór een gegeven dag — voor de PR-badges.
+        var typeOf: [String: String] = [:]
+        var muscleOf: [String: String] = [:]
+
+        func isBodyweight(_ name: String) -> Bool { typeOf[name] == "Bodyweight" }
+        func isBarbell(_ name: String) -> Bool { typeOf[name] == "Barbell" }
+        func isCardio(_ name: String) -> Bool { typeOf[name] == "Cardio" }
+    }
+
+    private func makeHistory() -> HistoryIndex {
+        var h = HistoryIndex()
+        h.byExercise = Dictionary(grouping: sets, by: \.exercise)
+        h.byDay = Dictionary(grouping: sets) { dayKey($0.date) }
+        for e in exercises {
+            h.typeOf[e.name] = e.type
+            h.muscleOf[e.name] = e.muscle
+        }
+        return h
+    }
+
     // MARK: - Historie helpers
 
     private func byExercise(_ daySets: [SetEntry]) -> [(name: String, sets: [SetEntry])] {
@@ -129,31 +161,26 @@ struct TrainingView: View {
     }
 
     private var pastDays: [Date] {
-        let days = Set(sets.map { cal.startOfDay(for: $0.date) })
-        return Array(days.sorted(by: >).prefix(90))
-    }
-
-    private func sets(on day: Date) -> [SetEntry] {
-        sets.filter { cal.isDate($0.date, inSameDayAs: day) }
-    }
-
-    private var recentExercises: [String] {
-        var names: [String] = []
-        for s in sets where !names.contains(s.exercise) {
-            names.append(s.exercise)
+        var seen = Set<Int>()
+        var out: [Date] = []
+        // `sets` staat aflopend op datum, dus de eerste hit per dag is meteen de juiste.
+        for s in sets where seen.insert(dayKey(s.date)).inserted {
+            out.append(cal.startOfDay(for: s.date))
+            if out.count == 90 { break }
         }
-        return Array(names.prefix(10))
+        return out
     }
 
-    private func lastSession(for name: String) -> [SetEntry] {
-        let prev = sets.filter { $0.exercise == name && $0.date < startedAt }
-        guard let latest = prev.first?.date else { return [] }
-        return prev.filter { cal.isDate($0.date, inSameDayAs: latest) }.sorted { $0.date < $1.date }
+    private func lastSession(for name: String, _ history: HistoryIndex) -> [SetEntry] {
+        let prev = (history.byExercise[name] ?? []).filter { $0.date < startedAt }
+        guard let latest = prev.map(\.date).max() else { return [] }
+        let key = dayKey(latest)
+        return prev.filter { dayKey($0.date) == key }.sorted { $0.date < $1.date }
     }
 
     private var trainedThisWeek: Int {
         let weekStart = cal.startOfDay(for: .now).addingTimeInterval(-6 * 86_400)
-        return Set(sets.filter { $0.date > weekStart }.map { cal.startOfDay(for: $0.date) }).count
+        return Set(sets.filter { $0.date > weekStart }.map { dayKey($0.date) }).count
     }
 
     private var weekDays: [Date] {
@@ -181,7 +208,7 @@ struct TrainingView: View {
     }
 
     private func trained(on day: Date) -> Bool {
-        sets.contains { cal.isDate($0.date, inSameDayAs: day) }
+        sets.contains { dayKey($0.date) == dayKey(day) }
     }
 
     private func routineSubtitle(_ routine: Routine) -> String {
@@ -193,27 +220,43 @@ struct TrainingView: View {
         sets.filter { routine.exercises.contains($0.exercise) }.map(\.date).max()
     }
 
-    /// Dag met minstens één nieuw e1RM-record. ponytail: O(dagen × sets), prima op deze schaal.
-    private func isPRDay(_ day: Date) -> Bool {
-        for s in sets(on: day) {
-            let before = sets.filter { $0.exercise == s.exercise && $0.date < cal.startOfDay(for: day) }
-            let best = before.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+    private func sets(on day: Date, _ history: HistoryIndex) -> [SetEntry] {
+        history.byDay[dayKey(day)] ?? []
+    }
+
+    /// Dag met minstens één nieuw e1RM-record.
+    private func isPRDay(_ day: Date, _ history: HistoryIndex) -> Bool {
+        let start = cal.startOfDay(for: day)
+        // Per oefening één keer het oude record bepalen i.p.v. per set opnieuw scannen.
+        var bestBefore: [String: Double] = [:]
+        for s in sets(on: day, history) {
+            let best: Double
+            if let cached = bestBefore[s.exercise] {
+                best = cached
+            } else {
+                best = (history.byExercise[s.exercise] ?? [])
+                    .filter { $0.date < start }
+                    .map { epley($0.weightKg, $0.reps) }.max() ?? 0
+                bestBefore[s.exercise] = best
+            }
             if best > 0, epley(s.weightKg, s.reps) > best + 0.1 { return true }
         }
         return false
     }
 
-    private var prCount: Int { workout.compactMap { prInfo($0) }.count }
+    private func prCount(_ history: HistoryIndex) -> Int {
+        workout.compactMap { prInfo($0, history) }.count
+    }
 
     // MARK: - Doelgerichte voorstellen (dubbele progressie)
 
-    private func draft(for name: String, target: [Int]? = nil) -> DraftExercise {
-        let last = lastSession(for: name)
-        let bw = exercises.isBodyweight(name)
+    private func draft(for name: String, target: [Int]? = nil, _ history: HistoryIndex) -> DraftExercise {
+        let last = lastSession(for: name, history)
+        let bw = history.isBodyweight(name)
         let goalSets = target.map { max($0.first ?? 3, 1) }
         let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
         // Cardio: één blok met een duur. Doel-reps zijn hier minuten.
-        if exercises.isCardio(name) {
+        if history.isCardio(name) {
             let minutes = goalReps ?? last.compactMap { $0.seconds > 0 ? $0.seconds / 60 : nil }.max() ?? 20
             let tip = last.isEmpty ? "Log je minuten — kg en reps blijven leeg."
                                    : "Vorige keer \(last.map { $0.seconds / 60 }.max() ?? 0) min."
@@ -251,10 +294,9 @@ struct TrainingView: View {
     // PR op geschat 1RM (Epley): 8×60 telt dan ook als record t.o.v. 5×62,5
     /// Laatste notitie voor deze oefening, teruggevist uit de dagnotities
     /// (afronden schrijft ze als "Oefening: tekst").
-    private func lastNote(for exercise: String) -> String? {
+    private func lastNote(for exercise: String, _ pastNotes: [DayHabits]) -> String? {
         let prefix = exercise + ": "
-        let past = habits.filter { !cal.isDateInToday($0.date) }.sorted { $0.date > $1.date }
-        for record in past {
+        for record in pastNotes {
             for line in record.note.components(separatedBy: "\n") where line.hasPrefix(prefix) {
                 let note = String(line.dropFirst(prefix.count))
                 if !note.isEmpty { return note }
@@ -269,10 +311,10 @@ struct TrainingView: View {
     }
 
     /// Volledige vorige sessie van deze oefening, bijv. "40×8  40×8  37,5×7".
-    private func lastSessionSummary(_ name: String) -> String? {
-        let last = lastSession(for: name)
+    private func lastSessionSummary(_ name: String, _ history: HistoryIndex) -> String? {
+        let last = lastSession(for: name, history)
         guard !last.isEmpty else { return nil }
-        let bw = exercises.isBodyweight(name)
+        let bw = history.isBodyweight(name)
         return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
     }
 
@@ -303,21 +345,24 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.25)) { workout.swapAt(i, j) }
     }
 
+    /// Beste geschat 1RM voor deze oefening vóór de huidige sessie.
+    private func bestBefore(_ name: String, _ history: HistoryIndex) -> Double? {
+        (history.byExercise[name] ?? []).filter { $0.date < startedAt }
+            .map { epley($0.weightKg, $0.reps) }.max()
+    }
+
     /// Nieuw geschat 1RM-record t.o.v. je historie én eerdere sets deze sessie?
-    private func isNewPR(exercise name: String, kg: Double, reps: Int) -> Bool {
+    private func isNewPR(exercise name: String, kg: Double, reps: Int, _ history: HistoryIndex) -> Bool {
         let now = epley(kg, reps)
-        let historical = sets.filter { $0.exercise == name && $0.date < startedAt }
-            .map { epley($0.weightKg, $0.reps) }.max() ?? 0
+        let historical = bestBefore(name, history) ?? 0
         let sessionBest = workout.first { $0.name == name }?.sets
             .filter { $0.done && !$0.warmup }.map { epley($0.kg, $0.reps) }.max() ?? 0
         return now > max(historical, sessionBest) + 0.1 && historical > 0
     }
 
-    private func prInfo(_ ex: DraftExercise) -> (new: Double, old: Double)? {
-        guard let doneMax = ex.sets.filter { $0.done && !$0.warmup }.map({ epley($0.kg, $0.reps) }).max() else { return nil }
-        guard let prev = sets.filter({ $0.exercise == ex.name && $0.date < startedAt })
-                .map({ epley($0.weightKg, $0.reps) }).max(),
-              doneMax > prev + 0.1 else { return nil }
+    private func prInfo(_ ex: DraftExercise, _ history: HistoryIndex) -> (new: Double, old: Double)? {
+        guard let doneMax = ex.sets.filter({ $0.done && !$0.warmup }).map({ epley($0.kg, $0.reps) }).max() else { return nil }
+        guard let prev = bestBefore(ex.name, history), doneMax > prev + 0.1 else { return nil }
         return (doneMax, prev)
     }
 
@@ -329,6 +374,9 @@ struct TrainingView: View {
         }
     }
 
+    // Wordt bij elke render opgebouwd en Equatable vergeleken, maar loopt alleen over de
+    // sets van de lópende training (tientallen, geen duizenden) — dat is microseconden.
+    // Bewust zo gelaten: dit is wat een force-quit midden in een set opvangt.
     private var draftSnapshot: SavedWorkout? {
         guard active else { return nil }
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
@@ -399,10 +447,12 @@ struct TrainingView: View {
         return next != group
     }
 
+    // Onderstaande drie zijn event-handlers, geen render-pad: hier is de index één keer
+    // opbouwen goedkoper dan 'm doorgeven vanuit body.
     private func swapExercise(_ id: UUID, to newName: String) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
         let original = workout[i].originalName ?? workout[i].name
-        var replacement = draft(for: newName)
+        var replacement = draft(for: newName, makeHistory())
         replacement.originalName = original
         withAnimation(.snappy(duration: 0.25)) { workout[i] = replacement }
     }
@@ -412,8 +462,9 @@ struct TrainingView: View {
                              restByExercise: [String: Int] = [:]) {
         startedAt = .now
         workoutNote = ""
+        let history = makeHistory()
         workout = names.map { name in
-            var d = draft(for: name, target: targets[name])
+            var d = draft(for: name, target: targets[name], history)
             d.superset = supersets[name]
             d.restSeconds = restByExercise[name]
             return d
@@ -424,7 +475,8 @@ struct TrainingView: View {
     }
 
     private func addExercise(_ name: String) {
-        withAnimation(.snappy(duration: 0.25)) { workout.append(draft(for: name)) }
+        let d = draft(for: name, makeHistory())
+        withAnimation(.snappy(duration: 0.25)) { workout.append(d) }
     }
 
     private func removeExercise(_ id: DraftExercise.ID) {
@@ -461,12 +513,12 @@ struct TrainingView: View {
     }
 
     /// Spiergroep-intensiteit van de zojuist afgeronde training (0…1, genormaliseerd op volume).
-    private func sessionMuscles() -> [String: Double] {
-        let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
+    private func sessionMuscles(_ history: HistoryIndex) -> [String: Double] {
+        let muscleOf = history.muscleOf
         var totals: [String: Double] = [:]
         for ex in workout {
             let m = muscleOf[ex.originalName ?? ex.name] ?? muscleOf[ex.name] ?? "Overig"
-            let bw = exercises.isBodyweight(ex.name)
+            let bw = history.isBodyweight(ex.name)
             let vol = ex.sets.filter { $0.done && !$0.warmup }
                 .map { liftLoad(kg: $0.kg, bodyweight: bodyWeight, bodyweightExercise: bw) * Double($0.reps) }.reduce(0, +)
             if vol > 0 { totals[m, default: 0] += vol }
@@ -479,26 +531,27 @@ struct TrainingView: View {
         saveExerciseNotes()
         saveWorkoutNote()
         WorkoutStatus.shared.endWorkout()
+        let history = makeHistory()
         // Vergelijk met de vorige sessie die minstens één oefening deelt — niet met een
         // willekeurige vorige dag (anders vergelijk je Legs met Push).
         let names = Set(workout.map(\.name))
         let previousDay = pastDays.first { day in
-            !cal.isDateInToday(day) && sets(on: day).contains { names.contains($0.exercise) }
+            !cal.isDateInToday(day) && sets(on: day, history).contains { names.contains($0.exercise) }
         }
         let previousVolume = previousDay.map { day in
-            Int(sets(on: day).map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+            Int(sets(on: day, history).map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: history.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         }
         summary = WorkoutSummary(
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
-            volume: volume,
+            volume: volume(history),
             sets: doneCount,
-            prs: workout.compactMap { ex in prInfo(ex).map { (ex.name, $0.new, $0.old) } },
+            prs: workout.compactMap { ex in prInfo(ex, history).map { (ex.name, $0.new, $0.old) } },
             previousVolume: previousVolume,
-            muscles: sessionMuscles(),
+            muscles: sessionMuscles(history),
             lines: workout.compactMap { ex in
                 let done = ex.sets.filter { $0.done && !$0.warmup }
                 guard !done.isEmpty else { return nil }
-                let bw = exercises.isBodyweight(ex.name)
+                let bw = history.isBodyweight(ex.name)
                 return "\(ex.name): " + done.map { setNotation(kg: $0.kg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
             }
         )
@@ -522,10 +575,10 @@ struct TrainingView: View {
     }
 
     private var doneCount: Int { workout.flatMap(\.sets).filter { $0.done && !$0.warmup }.count }
-    private var volume: Int {
+    private func volume(_ history: HistoryIndex) -> Int {
         var total = 0.0
         for ex in workout {
-            let bw = exercises.isBodyweight(ex.name)
+            let bw = history.isBodyweight(ex.name)
             for s in ex.sets where s.done && !s.warmup {
                 total += liftLoad(kg: s.kg, bodyweight: bodyWeight, bodyweightExercise: bw) * Double(s.reps)
             }
@@ -535,11 +588,37 @@ struct TrainingView: View {
 
     // MARK: - Body
 
-    var body: some View {
-        List {
-            if active { activeSections } else { idleSections }
+    /// Actieve training blijft een List: swipe-to-delete op sets bestaat daarbuiten
+    /// niet, en tijdens het loggen wil je juist een dichte lijst.
+    @ViewBuilder private func screen(_ history: HistoryIndex, _ pastNotes: [DayHabits]) -> some View {
+        if active {
+            List { activeSections(history, pastNotes) }
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 14) { idleContent(history) }
+                    .padding(.horizontal)
+                    .padding(.bottom, 24)
+            }
+            .background(Color(.systemGroupedBackground))
         }
+    }
+
+    var body: some View {
+        if isVisible { content } else { Color.clear }
+    }
+
+    @ViewBuilder private var content: some View {
+        // Eén groepering per render; elke helper hieronder zocht hiervoor zelf de
+        // volledige sets-tabel af, meerdere keren per oefening.
+        let history = makeHistory()
+        let prCount = prCount(history)
+        // Dagnotities één keer sorteren i.p.v. per oefening in de kop.
+        let pastNotes = habits.filter { !cal.isDateInToday($0.date) && !$0.note.isEmpty }
+            .sorted { $0.date > $1.date }
+        return screen(history, pastNotes)
         .navigationTitle("Training")
+        .navigationBarTitleDisplayMode(active ? .inline : .large)
+        .toolbar(active ? .automatic : .hidden, for: .navigationBar) // idle heeft z'n eigen titel
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             if active {
@@ -592,9 +671,9 @@ struct TrainingView: View {
                             isPresented: Binding(get: { dayToDelete != nil },
                                                  set: { if !$0 { dayToDelete = nil } }),
                             titleVisibility: .visible) {
-            Button("Verwijder \(dayToDelete.map { sets(on: $0).count } ?? 0) sets", role: .destructive) {
+            Button("Verwijder \(dayToDelete.map { sets(on: $0, history).count } ?? 0) sets", role: .destructive) {
                 if let day = dayToDelete {
-                    for s in sets(on: day) { context.delete(s) }
+                    for s in sets(on: day, history) { context.delete(s) }
                 }
                 dayToDelete = nil
             }
@@ -646,137 +725,283 @@ struct TrainingView: View {
         }
     }
 
-    // MARK: - Idle (Hevy Workout-tab)
-    private var thisWeekSection: some View {
-        Section {
-            VStack(spacing: 10) {
-                HStack {
-                    Text("Deze week").font(.headline)
-                    Spacer()
-                    Text("\(trainedThisWeek) van \(profile.trainingsPerWeek) trainingen")
-                        .font(.footnote)
-                        .foregroundStyle(trainedThisWeek >= profile.trainingsPerWeek ? .green : .secondary)
-                }
-                HStack(spacing: 8) {
-                    ForEach(weekDays, id: \.self) { day in
-                        weekDot(day)
-                    }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
+    // MARK: - Idle: kaarten i.p.v. een List, zodat de tab niet leest als Instellingen
 
-    private func weekDot(_ day: Date) -> some View {
-        let did = trained(on: day)
-        return VStack(spacing: 4) {
-            Text(day.formatted(.dateTime.weekday(.narrow)))
-                .font(.caption2)
-                .foregroundStyle(cal.isDateInToday(day) ? .primary : .secondary)
-            ZStack {
-                Circle()
-                    .fill(did ? Color.green : Color(.tertiarySystemFill))
-                    .frame(width: 30, height: 30)
-                if did {
-                    Image(systemName: "dumbbell.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white)
-                } else if cal.isDateInToday(day) {
-                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: 30, height: 30)
+    /// Eén weekstrip die zowel toont wát je deed als wát er gepland staat. Stond eerder
+    /// twee keer op het scherm: "Deze week" (bolletjes) plus zeven Form-rijen met de planning.
+    private func weekCard(_ history: HistoryIndex) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Deze week").font(.headline)
+                Spacer()
+                Text("\(trainedThisWeek) van \(profile.trainingsPerWeek)")
+                    .font(.footnote.bold().monospacedDigit())
+                    .foregroundStyle(trainedThisWeek >= profile.trainingsPerWeek ? .green : .secondary)
+            }
+            HStack(spacing: 6) {
+                ForEach(weekDays, id: \.self) { day in
+                    weekDay(day, history)
                 }
             }
         }
-        .frame(maxWidth: .infinity)
+        .builtCard()
     }
 
-    @ViewBuilder private var planningSection: some View {
-        if !routines.isEmpty {
-            Section {
-                ForEach(planDays, id: \.day) { entry in
-                    planningRow(entry.day, entry.label)
-                }
-            } header: {
-                Text("Weekplanning")
-            } footer: {
-                Text("Koppel een routine aan een dag. Op die dag zie je bovenaan \u{201C}Vandaag gepland\u{201D} en tellen meldingen mee.")
-            }
-        }
-    }
+    /// Eén dag: gedaan (vol), gepland (routine-kleur), of leeg. Tik = routine koppelen.
+    private func weekDay(_ day: Date, _ history: HistoryIndex) -> some View {
+        let did = !sets(on: day, history).isEmpty
+        let weekday = cal.component(.weekday, from: day)
+        let planned = profile.plannedRoutine(weekday: weekday)
+        let routine = routines.first { $0.name == planned }
+        let tint = routine.map { routineColor($0, history) } ?? .green
+        let isToday = cal.isDateInToday(day)
 
-    private func planningRow(_ weekday: Int, _ label: String) -> some View {
-        let assigned = profile.plannedRoutine(weekday: weekday)
         return Menu {
             Button("Rustdag") { assignRoutine(nil, to: weekday) }
             Divider()
-            ForEach(routines) { routine in
+            ForEach(routines) { r in
                 Button {
-                    assignRoutine(routine.name, to: weekday)
+                    assignRoutine(r.name, to: weekday)
                 } label: {
-                    if assigned == routine.name {
-                        Label(routine.name, systemImage: "checkmark")
-                    } else {
-                        Text(routine.name)
+                    if planned == r.name { Label(r.name, systemImage: "checkmark") } else { Text(r.name) }
+                }
+            }
+        } label: {
+            VStack(spacing: 5) {
+                // Color.primary i.p.v. .primary: binnen een Menu-label worden de
+                // hiërarchische stijlen getint met het accent, en dan wordt alles groen.
+                Text(day.formatted(.dateTime.weekday(.narrow)))
+                    .font(.caption2.weight(isToday ? .bold : .regular))
+                    .foregroundStyle(isToday ? Color.primary : Color.secondary)
+                ZStack {
+                    RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
+                        .fill(did ? AnyShapeStyle(tint) : AnyShapeStyle(.builtTint(planned == nil ? .gray : tint)))
+                        .frame(height: 46)
+                    if did {
+                        Image(systemName: "dumbbell.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white)
+                    } else if let planned {
+                        Text(planned.prefix(2).uppercased())
+                            .font(.caption2.bold())
+                            .foregroundStyle(tint)
+                    }
+                    if isToday {
+                        RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
+                            .strokeBorder(.green, lineWidth: 2)
+                            .frame(height: 46)
                     }
                 }
+                Text(day.formatted(.dateTime.day()))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(isToday ? Color.green : Color.secondary.opacity(0.6))
             }
-        } label: {
-            HStack {
-                Text(label).foregroundStyle(.primary)
-                Spacer()
-                Text(assigned ?? "Rustdag")
-                    .foregroundStyle(assigned == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.green))
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
         }
+        .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).day().month()))
+        .accessibilityValue(did ? "Getraind" : (planned.map { "Gepland: \($0)" } ?? "Rustdag"))
     }
 
-    private func plannedCard(_ planned: Routine) -> some View {
-        Button {
-            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets, supersets: planned.supersets, restByExercise: planned.restByExercise)
+    // MARK: - Routine-identiteit
+
+    /// Dominante spiergroep bepaalt de kleur — zo herken je Push van Legs zonder te lezen.
+    private func routineColor(_ routine: Routine, _ history: HistoryIndex) -> Color {
+        var tally: [String: Int] = [:]
+        for name in routine.exercises { tally[history.muscleOf[name] ?? "Overig", default: 0] += 1 }
+        guard let top = tally.max(by: { $0.value < $1.value })?.key else { return .green }
+        return .muscle(top)
+    }
+
+    private func routineIcon(_ routine: Routine, _ history: HistoryIndex) -> String {
+        guard !routine.exercises.isEmpty else { return "square.and.pencil" }
+        var tally: [String: Int] = [:]
+        for name in routine.exercises { tally[history.typeOf[name] ?? "Overig", default: 0] += 1 }
+        let top = tally.max { $0.value < $1.value }?.key ?? "Overig"
+        return Exercise.typeIcon[top] ?? "dumbbell"
+    }
+
+    private func plannedCard(_ planned: Routine, _ history: HistoryIndex) -> some View {
+        let tint = routineColor(planned, history)
+        return Button {
+            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets,
+                         supersets: planned.supersets, restByExercise: planned.restByExercise)
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "calendar.badge.clock")
-                    .font(.title)
-                    .foregroundStyle(.green)
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
+                    .fill(.builtTint(tint))
+                    .frame(width: 52, height: 52)
+                    .overlay {
+                        Image(systemName: routineIcon(planned, history))
+                            .font(.title3)
+                            .foregroundStyle(tint)
+                    }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Vandaag gepland").font(.caption).foregroundStyle(.secondary)
-                    Text(planned.name).font(.headline).foregroundStyle(.primary)
+                    Text("VANDAAG GEPLAND")
+                        .font(.caption2.weight(.semibold)).tracking(0.8)
+                        .foregroundStyle(.secondary)
+                    Text(planned.name)
+                        .font(.title3.bold())
+                        .foregroundStyle(.primary)
                 }
                 Spacer()
-                Text("Start")
+                Image(systemName: "play.fill")
                     .font(.subheadline.bold())
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(.green, in: Capsule())
+                    .frame(width: 40, height: 40)
+                    .background(.green, in: Circle())
             }
-            .padding(.vertical, 4)
+            .builtCard()
         }
-        .buttonStyle(PressableStyle())
+        .buttonStyle(PressableStyle(scale: 0.985))
     }
 
-
-    @ViewBuilder private var idleSections: some View {
-        if let planned = todayPlanned, !trained(on: cal.startOfDay(for: .now)) {
-            Section { plannedCard(planned) }
-        }
-
-        thisWeekSection
-
-        planningSection
-
-        Section("Snel starten") {
-            Button {
-                startWorkout(with: [])
-            } label: {
-                Label("Lege training starten", systemImage: "plus")
+    private func routineCard(_ routine: Routine, _ history: HistoryIndex) -> some View {
+        let tint = routineColor(routine, history)
+        return Button {
+            editingRoutine = routine // preview: bekijken, bewerken of starten
+        } label: {
+            HStack(spacing: 14) {
+                // Gekleurde balk links (Equinox/Runna) + tegel: routine krijgt een gezicht
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(tint)
+                    .frame(width: 4)
+                RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous)
+                    .fill(.builtTint(tint))
+                    .frame(width: 40, height: 40)
+                    .overlay {
+                        Image(systemName: routineIcon(routine, history))
+                            .font(.subheadline)
+                            .foregroundStyle(tint)
+                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(routine.name).font(.headline).foregroundStyle(.primary)
+                    Text(routineSubtitle(routine))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let last = lastDone(routine) {
+                        Text("Laatst: \(last.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+                Menu {
+                    if !routine.exercises.isEmpty {
+                        Button("Start meteen", systemImage: "play.fill") {
+                            startWorkout(with: routine.exercises, alternatives: routine.alternatives,
+                                         targets: routine.targets, supersets: routine.supersets,
+                                         restByExercise: routine.restByExercise)
+                        }
+                    }
+                    Button("Wijzig routine", systemImage: "pencil") { editingRoutine = routine }
+                    Button("Verwijder routine", systemImage: "trash", role: .destructive) {
+                        // Ruim de weekplanning op zodat een dode naam niet in agenda/meldingen blijft spoken
+                        for (weekday, name) in profile.schedule where name == routine.name {
+                            profile.schedule[weekday] = nil
+                            if let day = Int(weekday) { profile.trainingDays.removeAll { $0 == day } }
+                        }
+                        context.delete(routine)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(.rect)
+                }
+                .accessibilityLabel("Acties voor \(routine.name)")
             }
+            .padding(.trailing, 12)
+            .padding(.vertical, 12)
+            .padding(.leading, 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: BuiltRadius.card, style: .continuous))
+        }
+        .buttonStyle(PressableStyle(scale: 0.985))
+    }
+
+    private func historyCard(_ day: Date, _ history: HistoryIndex) -> some View {
+        let daySets = sets(on: day, history)
+        let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+        return NavigationLink {
+            SessionDetailView(day: day)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    if isPRDay(day, history) {
+                        Text("🏆").font(.caption).accessibilityLabel("Persoonlijk record")
+                    }
+                    Spacer()
+                    Text("\(vol) kg")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(byExercise(daySets), id: \.name) { group in
+                    let bw = history.isBodyweight(group.name)
+                    Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .builtCard()
+        }
+        .buttonStyle(PressableStyle(scale: 0.985))
+        // Swipe-to-delete bestaat niet buiten een List; een hele trainingsdag wegvegen
+        // was sowieso te makkelijk voor iets onomkeerbaars.
+        .contextMenu {
+            Button("Verwijder deze dag", systemImage: "trash", role: .destructive) { dayToDelete = day }
+        }
+    }
+
+    @ViewBuilder private func idleContent(_ history: HistoryIndex) -> some View {
+        let weekTitle = trainedThisWeek >= profile.trainingsPerWeek
+            ? "Week rond 💪" : "Week \(profile.daysIn / 7 + 1)"
+        BuiltScreenTitle(eyebrow: "Training", title: weekTitle) {
+            Menu {
+                Button("Nieuwe routine…", systemImage: "plus") { showNewRoutine = true }
+                Divider()
+                Button("Template: Push / Pull / Legs") { addTemplate(Self.pplTemplate) }
+                Button("Template: Upper / Lower") { addTemplate(Self.ulTemplate) }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.headline)
+                    .foregroundStyle(.green)
+                    .frame(width: 36, height: 36)
+                    .background(.builtTint(.green), in: Circle())
+            }
+            .accessibilityLabel("Routine toevoegen")
         }
 
-        Section {
-            if routines.isEmpty {
+        if let planned = todayPlanned, !trained(on: cal.startOfDay(for: .now)) {
+            plannedCard(planned, history)
+        }
+
+        weekCard(history)
+        if !routines.isEmpty {
+            BuiltFootnote("Tik op een dag om er een routine aan te koppelen.")
+        }
+
+        Button {
+            startWorkout(with: [])
+        } label: {
+            Label("Lege training starten", systemImage: "plus")
+                .font(.subheadline.bold())
+                .foregroundStyle(.green)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(.builtTint(.green), in: Capsule())
+        }
+        .buttonStyle(PressableStyle())
+
+        BuiltSectionHeader("Routines")
+        if routines.isEmpty {
+            VStack(spacing: 12) {
                 ContentUnavailableView {
                     Label("Nog geen routines", systemImage: "square.stack.3d.up")
                 } description: {
@@ -786,126 +1011,45 @@ struct TrainingView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
                 }
-                Button {
-                    addTemplate(Self.pplTemplate)
-                } label: {
-                    Label("Push / Pull / Legs", systemImage: "square.stack.3d.up")
-                }
-                Button {
-                    addTemplate(Self.ulTemplate)
-                } label: {
-                    Label("Upper / Lower", systemImage: "square.stack.3d.up")
+                HStack(spacing: 10) {
+                    templateButton("Push / Pull / Legs", Self.pplTemplate)
+                    templateButton("Upper / Lower", Self.ulTemplate)
                 }
             }
-            ForEach(routines) { routine in
-                Button {
-                    editingRoutine = routine // preview: bekijken, bewerken of starten
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: routine.exercises.isEmpty ? "square.and.pencil" : "list.bullet.rectangle")
-                            .font(.title)
-                            .foregroundStyle(.green)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(routine.name).font(.headline).foregroundStyle(.primary)
-                            Text(routineSubtitle(routine))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            if let last = lastDone(routine) {
-                                Text("Laatst: \(last.formatted(.relative(presentation: .named)))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        Spacer()
-                        Menu {
-                            if !routine.exercises.isEmpty {
-                                Button("Start meteen", systemImage: "play.fill") {
-                                    startWorkout(with: routine.exercises, alternatives: routine.alternatives,
-                                                 targets: routine.targets, supersets: routine.supersets,
-                                                 restByExercise: routine.restByExercise)
-                                }
-                            }
-                            Button("Wijzig routine", systemImage: "pencil") { editingRoutine = routine }
-                            Button("Verwijder routine", systemImage: "trash", role: .destructive) {
-                                // Ruim de weekplanning op zodat een dode naam niet in agenda/meldingen blijft spoken
-                                for (weekday, name) in profile.schedule where name == routine.name {
-                                    profile.schedule[weekday] = nil
-                                    if let day = Int(weekday) { profile.trainingDays.removeAll { $0 == day } }
-                                }
-                                context.delete(routine)
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .foregroundStyle(.secondary)
-                                .frame(width: 32, height: 32)
-                                .contentShape(.rect)
-                        }
-                        .accessibilityLabel("Acties voor \(routine.name)")
-                    }
-                    .padding(.vertical, 4)
-                }
-                .buttonStyle(PressableStyle())
-            }
-        } header: {
-            HStack {
-                Text("Routines")
-                Spacer()
-                Menu {
-                    Button("Nieuwe routine…", systemImage: "plus") { showNewRoutine = true }
-                    Divider()
-                    Button("Template: Push / Pull / Legs") { addTemplate(Self.pplTemplate) }
-                    Button("Template: Upper / Lower") { addTemplate(Self.ulTemplate) }
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .font(.footnote.bold())
-                .accessibilityLabel("Routine toevoegen")
-            }
+            .builtCard()
+        }
+        ForEach(routines) { routine in
+            routineCard(routine, history)
         }
 
-        Section("Geschiedenis") {
-            if pastDays.isEmpty {
-                ContentUnavailableView("Nog geen trainingen", systemImage: "clock.arrow.circlepath",
-                                       description: Text("Je eerste training verschijnt hier — met volume, oefeningen en records."))
-            }
-            ForEach(pastDays, id: \.self) { day in
-                let daySets = sets(on: day)
-                let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
-                NavigationLink {
-                    SessionDetailView(day: day)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
-                                .font(.headline)
-                            if isPRDay(day) {
-                                Text("🏆").font(.caption).accessibilityLabel("Persoonlijk record")
-                            }
-                            Spacer()
-                            Text("\(vol) kg")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(byExercise(daySets), id: \.name) { group in
-                            let bw = exercises.isBodyweight(group.name)
-                            Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-            .onDelete { offsets in
-                if let i = offsets.first { dayToDelete = pastDays[i] }
-            }
+        BuiltSectionHeader("Geschiedenis")
+        if pastDays.isEmpty {
+            ContentUnavailableView("Nog geen trainingen", systemImage: "clock.arrow.circlepath",
+                                   description: Text("Je eerste training verschijnt hier — met volume, oefeningen en records."))
+                .builtCard()
         }
+        ForEach(pastDays, id: \.self) { day in
+            historyCard(day, history)
+        }
+    }
+
+    private func templateButton(_ title: String, _ template: [(String, [String])]) -> some View {
+        Button {
+            addTemplate(template)
+        } label: {
+            Text(title)
+                .font(.footnote.bold())
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(.builtTint(.green), in: Capsule())
+                .foregroundStyle(.green)
+        }
+        .buttonStyle(PressableStyle())
     }
 
     // MARK: - Actieve training (Hevy Log Workout)
 
-    @ViewBuilder private var activeSections: some View {
+    @ViewBuilder private func activeSections(_ history: HistoryIndex, _ pastNotes: [DayHabits]) -> some View {
         Section {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -916,6 +1060,7 @@ struct TrainingView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 VStack(alignment: .leading, spacing: 2) {
+                    let volume = volume(history)
                     Text("Volume").font(.caption2).foregroundStyle(.secondary)
                     Text("\(volume) kg")
                         .font(.subheadline.bold().monospacedDigit())
@@ -940,145 +1085,7 @@ struct TrainingView: View {
         }
 
         ForEach($workout) { $ex in
-            Section {
-                if let previousNote = lastNote(for: ex.name) {
-                    Label("Vorige keer: \u{201C}\(previousNote)\u{201D}", systemImage: "text.quote")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .listRowSeparator(.hidden)
-                }
-                TextField("Notitie (bijv. voelde zwaar)", text: $ex.note, axis: .vertical)
-                    .font(.footnote)
-                    .listRowSeparator(.hidden)
-                HStack(spacing: 12) {
-                    Text("SET").frame(width: 24, alignment: .leading)
-                    Text("VORIGE").frame(width: 64, alignment: .leading)
-                    if exercises.isCardio(ex.name) {
-                        Text("MINUTEN").frame(width: 56)
-                    } else {
-                        Text(exercises.isBodyweight(ex.name) ? "+KG" : "KG").frame(width: 56)
-                        Text("REPS").frame(width: 48)
-                    }
-                    Spacer()
-                }
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-                .listRowSeparator(.hidden)
-
-                ForEach($ex.sets) { $set in
-                    let idx = ex.sets.firstIndex { $0.id == set.id } ?? 0
-                    setRow($set, number: ex.sets[...idx].filter { !$0.warmup }.count, exercise: ex.name,
-                           bodyweight: exercises.isBodyweight(ex.name),
-                           cardio: exercises.isCardio(ex.name),
-                           duplicate: { duplicateSet(exercise: ex.id, set: set.id) })
-                }
-                .onDelete { offsets in
-                    for i in offsets {
-                        if let e = ex.sets[i].savedEntry, !e.isDeleted { context.delete(e) }
-                    }
-                    ex.sets.remove(atOffsets: offsets)
-                }
-
-                if exercises.isBarbell(ex.name),
-                   let top = ex.sets.filter({ !$0.warmup }).map(\.kg).max(),
-                   let plates = platesPerSide(total: top) {
-                    let approx = abs((20 + 2 * plates.reduce(0, +)) - top) < 0.05 ? "" : "≈ "
-                    let body = plates.isEmpty ? "alleen de 20 kg stang"
-                                             : "per kant \(plates.map(\.kgText).joined(separator: " + ")) · 20 kg stang"
-                    Label("\(approx)\(body)", systemImage: "scalemass")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .listRowSeparator(.hidden)
-                }
-
-                Button {
-                    let last = ex.sets.last ?? DraftSet(kg: 20, reps: 8)
-                    let new = DraftSet(kg: last.kg, reps: last.reps, previous: nil)
-                    withAnimation(.snappy(duration: 0.2)) { ex.sets.append(new) }
-                    focusedSet = new.id
-                } label: {
-                    Label("Set toevoegen", systemImage: "plus")
-                        .font(.footnote.bold())
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderless)
-            } header: {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            if let group = ex.superset {
-                                Text("Superset \(group)")
-                                    .font(.caption2.bold())
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(.builtTint(.green), in: Capsule())
-                                    .foregroundStyle(.green)
-                            }
-                            Text(ex.name)
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                        }
-                        if let pr = prInfo(ex) {
-                            Text("🏆 Nieuw record — geschat 1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
-                                .font(.caption.bold())
-                                .foregroundStyle(.orange)
-                                .transition(.scale(scale: 0.9).combined(with: .opacity))
-                        } else if let tip = ex.tip {
-                            Text(tip).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if let prev = lastSessionSummary(ex.name) {
-                            Label(prev, systemImage: "clock.arrow.circlepath")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                    Spacer()
-                    Menu {
-                        let options = swapOptions(ex)
-                        if !options.isEmpty {
-                            if ex.sets.contains(where: \.done) {
-                                Text("Vervangen kan alleen vóór je eerste set")
-                            } else {
-                                Section("Vervang door") {
-                                    ForEach(options, id: \.self) { alt in
-                                        Button(alt, systemImage: "arrow.triangle.2.circlepath") {
-                                            swapExercise(ex.id, to: alt)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if !exercises.isCardio(ex.name) {
-                            if ex.sets.contains(where: \.warmup) {
-                                Button("Warming-up weghalen", systemImage: "flame") { removeWarmup(ex.id) }
-                            } else {
-                                Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
-                            }
-                        }
-                        Menu("Rust: \(restLabel(ex.restSeconds ?? restSeconds))", systemImage: "timer") {
-                            Button("Standaard (\(restLabel(restSeconds)))") { setRest(ex.id, nil) }
-                            ForEach([60, 90, 120, 180], id: \.self) { sec in
-                                Button(restLabel(sec)) { setRest(ex.id, sec) }
-                            }
-                        }
-                        Divider()
-                        Button("Verplaats omhoog", systemImage: "arrow.up") { moveExercise(ex.id, by: -1) }
-                        Button("Verplaats omlaag", systemImage: "arrow.down") { moveExercise(ex.id, by: 1) }
-                        Button("Oefening verwijderen", systemImage: "trash", role: .destructive) {
-                            if ex.sets.contains(where: { $0.done && !$0.warmup }) { exerciseToRemove = ex.id }
-                            else { removeExercise(ex.id) }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 32, height: 20)
-                    }
-                    .accessibilityLabel("Acties voor \(ex.name)")
-                }
-                .textCase(nil) // ponytail: headers uppercasen anders ook het ⋯-menu
-            }
+            exerciseSection($ex, history, pastNotes)
         }
 
         Section {
@@ -1111,16 +1118,16 @@ struct TrainingView: View {
     }
 
     /// Voedt de Live Activity: oefening, set-voortgang en een PR-tip op basis van je vorige sessie.
-    private func updateActivity(exercise name: String, currentKg: Double) {
+    private func updateActivity(exercise name: String, currentKg: Double, _ history: HistoryIndex) {
         guard let ex = workout.first(where: { $0.name == name }) else { return }
         WorkoutStatus.shared.updateContext(exercise: name,
                                            setsDone: ex.sets.filter(\.done).count,
                                            setsTotal: ex.sets.count,
-                                           tip: activityTip(for: name, currentKg: currentKg))
+                                           tip: activityTip(for: name, currentKg: currentKg, history))
     }
 
-    private func activityTip(for name: String, currentKg: Double) -> String? {
-        let last = lastSession(for: name)
+    private func activityTip(for name: String, currentKg: Double, _ history: HistoryIndex) -> String? {
+        let last = lastSession(for: name, history)
         guard let best = last.max(by: { epley($0.weightKg, $0.reps) < epley($1.weightKg, $1.reps) }) else { return nil }
         let prevText = "Vorige keer: \(best.weightKg.kgText) kg × \(best.reps)"
         let prevE1RM = epley(best.weightKg, best.reps)
@@ -1132,6 +1139,182 @@ struct TrainingView: View {
         return prevText
     }
 
+    /// Eén oefening in de actieve training. Los van `activeSections` omdat de
+    /// type-checker afhaakt op een ForEach-closure van deze omvang.
+    @ViewBuilder private func exerciseSection(_ exercise: Binding<DraftExercise>, _ history: HistoryIndex,
+                                              _ pastNotes: [DayHabits]) -> some View {
+        let ex = exercise.wrappedValue
+        let bodyweight = history.isBodyweight(ex.name)
+        let cardio = history.isCardio(ex.name)
+        let numbers = setNumbers(ex.sets)
+        // Beide closures één `some View`-expressie: anders kiest de compiler de
+        // TableRow-variant van Section en klapt de type-inferentie eruit.
+        Section {
+            exerciseRows(exercise, history, pastNotes, bodyweight: bodyweight, cardio: cardio, numbers: numbers)
+        } header: {
+            exerciseHeader(exercise, history, cardio: cardio)
+        }
+    }
+
+    /// De rijen van één oefening: notitie, kolomkoppen, sets, schijven en 'set toevoegen'.
+    @ViewBuilder private func exerciseRows(_ exercise: Binding<DraftExercise>, _ history: HistoryIndex,
+                                           _ pastNotes: [DayHabits],
+                                           bodyweight: Bool, cardio: Bool, numbers: [UUID: Int]) -> some View {
+        let ex = exercise.wrappedValue
+        if let previousNote = lastNote(for: ex.name, pastNotes) {
+            Label("Vorige keer: \u{201C}\(previousNote)\u{201D}", systemImage: "text.quote")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .listRowSeparator(.hidden)
+        }
+        TextField("Notitie (bijv. voelde zwaar)", text: exercise.note, axis: .vertical)
+            .font(.footnote)
+            .listRowSeparator(.hidden)
+        HStack(spacing: 12) {
+            Text("SET").frame(width: 24, alignment: .leading)
+            Text("VORIGE").frame(width: 64, alignment: .leading)
+            if cardio {
+                Text("MINUTEN").frame(width: 56)
+            } else {
+                Text(bodyweight ? "+KG" : "KG").frame(width: 56)
+                Text("REPS").frame(width: 48)
+            }
+            Spacer()
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+        .listRowSeparator(.hidden)
+
+        ForEach(exercise.sets) { $set in
+            setRow($set, number: numbers[set.id] ?? 0, exercise: ex.name,
+                   bodyweight: bodyweight, cardio: cardio, history: history,
+                   duplicate: { duplicateSet(exercise: ex.id, set: set.id) })
+        }
+        .onDelete { offsets in
+            for i in offsets {
+                if let e = ex.sets[i].savedEntry, !e.isDeleted { context.delete(e) }
+            }
+            exercise.wrappedValue.sets.remove(atOffsets: offsets)
+        }
+
+        if history.isBarbell(ex.name),
+           let top = ex.sets.filter({ !$0.warmup }).map(\.kg).max(),
+           let plates = platesPerSide(total: top) {
+            let approx = abs((20 + 2 * plates.reduce(0, +)) - top) < 0.05 ? "" : "≈ "
+            let body = plates.isEmpty ? "alleen de 20 kg stang"
+                                     : "per kant \(plates.map(\.kgText).joined(separator: " + ")) · 20 kg stang"
+            Label("\(approx)\(body)", systemImage: "scalemass")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .listRowSeparator(.hidden)
+        }
+
+        Button {
+            let last = ex.sets.last ?? DraftSet(kg: 20, reps: 8)
+            let new = DraftSet(kg: last.kg, reps: last.reps, previous: nil)
+            withAnimation(.snappy(duration: 0.2)) { exercise.wrappedValue.sets.append(new) }
+            focusedSet = new.id
+        } label: {
+            Label("Set toevoegen", systemImage: "plus")
+                .font(.footnote.bold())
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderless)
+    }
+
+    /// Kop van een oefening: naam, PR-badge, vorige sessie en het ⋯-menu.
+    @ViewBuilder private func exerciseHeader(_ exercise: Binding<DraftExercise>, _ history: HistoryIndex,
+                                             cardio: Bool) -> some View {
+        let ex = exercise.wrappedValue
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    if let group = ex.superset {
+                        Text("Superset \(group)")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(.builtTint(.green), in: Capsule())
+                            .foregroundStyle(.green)
+                    }
+                    Text(ex.name)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                }
+                if let pr = prInfo(ex, history) {
+                    Text("🏆 Nieuw record — geschat 1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                } else if let tip = ex.tip {
+                    Text(tip).font(.caption).foregroundStyle(.secondary)
+                }
+                if let prev = lastSessionSummary(ex.name, history) {
+                    Label(prev, systemImage: "clock.arrow.circlepath")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            Menu {
+                let options = swapOptions(ex)
+                if !options.isEmpty {
+                    if ex.sets.contains(where: \.done) {
+                        Text("Vervangen kan alleen vóór je eerste set")
+                    } else {
+                        Section("Vervang door") {
+                            ForEach(options, id: \.self) { alt in
+                                Button(alt, systemImage: "arrow.triangle.2.circlepath") {
+                                    swapExercise(ex.id, to: alt)
+                                }
+                            }
+                        }
+                    }
+                }
+                if !cardio {
+                    if ex.sets.contains(where: \.warmup) {
+                        Button("Warming-up weghalen", systemImage: "flame") { removeWarmup(ex.id) }
+                    } else {
+                        Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
+                    }
+                }
+                Menu("Rust: \(restLabel(ex.restSeconds ?? restSeconds))", systemImage: "timer") {
+                    Button("Standaard (\(restLabel(restSeconds)))") { setRest(ex.id, nil) }
+                    ForEach([60, 90, 120, 180], id: \.self) { sec in
+                        Button(restLabel(sec)) { setRest(ex.id, sec) }
+                    }
+                }
+                Divider()
+                Button("Verplaats omhoog", systemImage: "arrow.up") { moveExercise(ex.id, by: -1) }
+                Button("Verplaats omlaag", systemImage: "arrow.down") { moveExercise(ex.id, by: 1) }
+                Button("Oefening verwijderen", systemImage: "trash", role: .destructive) {
+                    if ex.sets.contains(where: { $0.done && !$0.warmup }) { exerciseToRemove = ex.id }
+                    else { removeExercise(ex.id) }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 20)
+            }
+            .accessibilityLabel("Acties voor \(ex.name)")
+        }
+        .textCase(nil) // ponytail: headers uppercasen anders ook het ⋯-menu
+    }
+
+    /// Werkset-nummer per set-id, in één pass. Stond eerder per rij als
+    /// `sets[...idx].filter { !$0.warmup }.count` — kwadratisch over de sets.
+    private func setNumbers(_ sets: [DraftSet]) -> [UUID: Int] {
+        var out: [UUID: Int] = [:]
+        var n = 0
+        for s in sets {
+            if !s.warmup { n += 1 }
+            out[s.id] = n
+        }
+        return out
+    }
+
     private func setLabel(_ set: DraftSet, number: Int) -> String {
         if set.warmup { return "W" }
         var s = "\(number)"
@@ -1141,7 +1324,7 @@ struct TrainingView: View {
     }
 
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, bodyweight: Bool,
-                        cardio: Bool, duplicate: @escaping () -> Void) -> some View {
+                        cardio: Bool, history: HistoryIndex, duplicate: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Menu {
                 Button("Set dupliceren", systemImage: "plus.square.on.square", action: duplicate)
@@ -1221,7 +1404,7 @@ struct TrainingView: View {
                             WorkoutStatus.shared.startRest(seconds: restFor(exercise))
                         }
                         if !set.wrappedValue.warmup, !cardio,
-                           isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps) {
+                           isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps, history) {
                             prToast = "🏆 Record — \(exercise)!"
                         }
                     } else {
@@ -1234,7 +1417,7 @@ struct TrainingView: View {
                         if let e, !e.isDeleted { context.delete(e) }
                         set.wrappedValue.savedEntry = nil
                     }
-                    updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg)
+                    updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg, history)
                 }
             } label: {
                 Image(systemName: set.wrappedValue.done ? "checkmark.circle.fill" : "circle")
@@ -1345,10 +1528,10 @@ struct SessionDetailView: View {
 
     private var cal: Calendar { .current }
     private var daySets: [SetEntry] {
-        allSets.filter { cal.isDate($0.date, inSameDayAs: day) }.sorted { $0.date < $1.date }
+        allSets.filter { dayKey($0.date) == dayKey(day) }.sorted { $0.date < $1.date }
     }
 
-    private var habitsRecord: DayHabits? { allHabits.first { cal.isDate($0.date, inSameDayAs: day) } }
+    private var habitsRecord: DayHabits? { allHabits.first { dayKey($0.date) == dayKey(day) } }
 
     private func record() -> DayHabits {
         if let h = habitsRecord { return h }
@@ -1389,7 +1572,7 @@ struct SessionDetailView: View {
 
     private var volumeDelta: Int? {
         guard let prev = previousDay else { return nil }
-        let pv = Int(allSets.filter { cal.isDate($0.date, inSameDayAs: prev) }
+        let pv = Int(allSets.filter { dayKey($0.date) == dayKey(prev) }
             .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         return pv > 0 ? volume - pv : nil
     }

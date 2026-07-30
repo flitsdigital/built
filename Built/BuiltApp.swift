@@ -203,13 +203,15 @@ struct RootView: View {
         } else if let profile = profiles.first {
             // Eigen container i.p.v. TabView: die maakt bij >5 tabs een systeem-"Meer"-tab.
             // Alle stacks blijven leven zodat navigatie-/scrollstaat per tab behouden blijft.
+            // isVisible: alleen de actieve tab rekent z'n body door. De views blijven wel
+            // in de hiërarchie staan, zodat @State (o.a. de lopende training) blijft leven.
             ZStack {
-                tabPage(0) { NavigationStack { DashboardView(profile: profile, selectedTab: $tab).tabBarClearance() } }
-                tabPage(1) { NavigationStack { TrainingView(profile: profile).tabBarClearance() } }
-                tabPage(2) { NavigationStack { FoodView(profile: profile).tabBarClearance() } }
-                tabPage(3) { NavigationStack { WeightView(profile: profile).tabBarClearance() } }
-                tabPage(4) { NavigationStack { InsightsView(profile: profile).tabBarClearance() } }
-                tabPage(5) { NavigationStack { JournalView(profile: profile).tabBarClearance() } }
+                tabPage(0) { NavigationStack { DashboardView(profile: profile, isVisible: tab == 0, selectedTab: $tab).tabBarClearance() } }
+                tabPage(1) { NavigationStack { TrainingView(profile: profile, isVisible: tab == 1).tabBarClearance() } }
+                tabPage(2) { NavigationStack { FoodView(profile: profile, isVisible: tab == 2).tabBarClearance() } }
+                tabPage(3) { NavigationStack { WeightView(isVisible: tab == 3, profile: profile).tabBarClearance() } }
+                tabPage(4) { NavigationStack { InsightsView(profile: profile, isVisible: tab == 4).tabBarClearance() } }
+                tabPage(5) { NavigationStack { JournalView(profile: profile, isVisible: tab == 5).tabBarClearance() } }
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {

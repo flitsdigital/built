@@ -43,6 +43,91 @@ extension Color {
         let v = min(max(value, 0), 1)
         return v <= 0.001 ? Color(.tertiarySystemFill) : Color.green.opacity(0.22 + 0.6 * v)
     }
+
+    /// Kleur per spiergroep — geeft een routine een gezicht, zodat je Push van Legs
+    /// herkent zonder te lezen. Duw-werk warm, trek-werk koel, benen paars.
+    static func muscle(_ name: String) -> Color {
+        switch name {
+        case "Borst", "Triceps", "Schouders": .orange
+        case "Rug", "Biceps", "Onderrug": .blue
+        case "Benen", "Hamstrings", "Bilspieren", "Kuiten": .purple
+        case "Core": .teal
+        case "Cardio": .pink
+        default: .green
+        }
+    }
+}
+
+// MARK: - Scherm-chrome
+
+/// Groot ankerpunt bovenaan een scherm: één regel context, één regel gewicht.
+/// Zonder dit begint elk scherm op `.headline` en heeft niets voorrang.
+struct BuiltScreenTitle<Trailing: View>: View {
+    let eyebrow: String
+    let title: String
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(eyebrow.uppercased())
+                    .font(.caption2.weight(.semibold))
+                    .tracking(0.8)
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.largeTitle.bold())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            Spacer()
+            trailing()
+        }
+        .padding(.top, 8)
+    }
+}
+
+extension BuiltScreenTitle where Trailing == EmptyView {
+    init(_ eyebrow: String, _ title: String) {
+        self.init(eyebrow: eyebrow, title: title) { EmptyView() }
+    }
+}
+
+/// Sectiekop buiten een List. Zelfde micro-label als de check-in-drawer al gebruikt,
+/// met ruimte voor een actie rechts.
+struct BuiltSectionHeader<Trailing: View>: View {
+    let title: String
+    @ViewBuilder var trailing: () -> Trailing
+
+    var body: some View {
+        HStack {
+            Text(title.uppercased())
+                .font(.caption2.weight(.semibold))
+                .tracking(0.8)
+                .foregroundStyle(.secondary)
+            Spacer()
+            trailing()
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+    }
+}
+
+extension BuiltSectionHeader where Trailing == EmptyView {
+    init(_ title: String) { self.init(title: title) { EmptyView() } }
+}
+
+/// Toelichting onder een kaart — vervangt de footer van een List-sectie.
+struct BuiltFootnote: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+    }
 }
 
 // MARK: - Vastgezette hoofdactie
