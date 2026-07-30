@@ -29,6 +29,8 @@ struct DashboardView: View {
     /// True zolang een horizontale veeg bezig is — blokkeert per ongeluk afvuren van knoppen eronder.
     @State private var swipeActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Weekdot groeit mee met Dynamic Type, anders past het cijfer er niet in.
+    @ScaledMetric(relativeTo: .caption2) private var dotSize: CGFloat = 34
     private let syncStatus = SyncStatus.shared
     private let health = HealthService.shared
 
@@ -289,7 +291,7 @@ struct DashboardView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(.orange.opacity(0.15), in: Capsule())
+                    .background(.builtTint(.orange), in: Capsule())
                     .animation(.snappy(duration: 0.25), value: streak)
                 }
                 NavigationLink {
@@ -348,27 +350,27 @@ struct DashboardView: View {
                 .fontWeight(sel ? .bold : .regular)
                 .foregroundStyle(sel || isToday ? .primary : .secondary)
             ZStack {
-                Circle().fill(Color(.tertiarySystemFill)).frame(width: 34, height: 34)
                 if s >= 100 {
-                    Circle().fill(.green).frame(width: 34, height: 34)
+                    Circle().fill(.green).frame(width: dotSize, height: dotSize)
                     Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white)
-                } else {
-                    Circle()
-                        .trim(from: 0, to: Double(s) / 100)
-                        .stroke(.green, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .frame(width: 30, height: 30)
-                    if s > 0 {
+                } else if s > 0 {
+                    ProgressRing(value: Double(s) / 100, lineWidth: 3.5) {
                         Text("\(s)")
-                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .font(.caption2.weight(.semibold).monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
+                    .frame(width: dotSize, height: dotSize)
+                } else {
+                    // Geen ProgressRing op 0: die houdt bewust een minimale trim aan om
+                    // vanaf te kunnen animeren, en dat leest hier als "iets gedaan".
+                    Circle().stroke(Color(.tertiarySystemFill), lineWidth: 3.5)
+                        .frame(width: dotSize, height: dotSize)
                 }
                 if sel {
-                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: 40, height: 40)
+                    Circle().strokeBorder(.green, lineWidth: 2).frame(width: dotSize + 6, height: dotSize + 6)
                 }
             }
-            .frame(width: 40, height: 40)
+            .frame(width: dotSize + 6, height: dotSize + 6)
             Text(day.formatted(.dateTime.day()))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(isToday ? AnyShapeStyle(.green) : AnyShapeStyle(.tertiary))
@@ -377,6 +379,10 @@ struct DashboardView: View {
         .contentShape(Rectangle())
         .onTapGesture { selectDay(day) }
         .animation(.snappy(duration: 0.25), value: sel)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).day().month()))
+        .accessibilityValue(s >= 100 ? "Perfecte dag" : "\(s) van 100")
+        .accessibilityAddTraits(sel ? [.isButton, .isSelected] : .isButton)
     }
 
     /// De dag-gebonden kaarten als één groep, zodat ze samen als een pagina in/uit swipen.
@@ -400,16 +406,8 @@ struct DashboardView: View {
         let s = scoreOn(selectedDay)
         return card {
             HStack(spacing: 20) {
-                ZStack {
-                    Circle()
-                        .stroke(Color(.tertiarySystemFill), lineWidth: 12)
-                    Circle()
-                        .trim(from: 0, to: Double(s) / 100)
-                        .stroke(
-                            AngularGradient(colors: [.green, .mint, .green], center: .center),
-                            style: StrokeStyle(lineWidth: 12, lineCap: .round)
-                        )
-                        .rotationEffect(.degrees(-90))
+                ProgressRing(value: Double(s) / 100, lineWidth: 12,
+                             tint: AnyShapeStyle(AngularGradient(colors: [.green, .mint, .green], center: .center))) {
                     VStack(spacing: 0) {
                         Text("\(s)")
                             .font(.system(size: 34, weight: .bold, design: .rounded))
@@ -475,21 +473,21 @@ struct DashboardView: View {
     private var checklistCard: some View {
         let h = habitsOn(selectedDay)
         return card {
-            checkRow(icon: "dumbbell.fill", color: .orange,
+            checkRow(icon: "dumbbell.fill", color: .habitTraining,
                      title: restDayOn(selectedDay) && !trainedOn(selectedDay) ? "Rustdag (volgens plan)" : "Training",
                      done: trainedOn(selectedDay) || restDayOn(selectedDay),
                      streak: streakTrained()) { selectedTab = 1 }
             if profile.tracksCreatine {
                 Divider()
-                checkRow(icon: "pills.fill", color: .teal, title: "Creatine",
+                checkRow(icon: "pills.fill", color: .habitCreatine, title: "Creatine",
                          done: h?.creatine == true, streak: streakCreatine()) { toggleHabit(\.creatine) }
             }
             Divider()
-            checkRow(icon: "scalemass.fill", color: .purple, title: weightRowTitle,
+            checkRow(icon: "scalemass.fill", color: .habitWeight, title: weightRowTitle,
                      done: weightLoggedOn(selectedDay), streak: streakWeighed()) { showWeightSheet = true }
             if profile.tracksSleep {
                 Divider()
-                checkRow(icon: "moon.fill", color: .indigo, title: sleepText,
+                checkRow(icon: "moon.fill", color: .habitSleep, title: sleepText,
                          done: h?.sleptEnough == true,
                          missed: h?.sleepHours != nil && h?.sleptEnough != true,
                          streak: streakSlept()) {
@@ -498,7 +496,7 @@ struct DashboardView: View {
             }
             if let steps = healthSteps(on: selectedDay) {
                 Divider()
-                checkRowLabel(icon: "figure.walk", color: .cyan,
+                checkRowLabel(icon: "figure.walk", color: .habitSteps,
                               title: "\(steps.formatted()) stappen", done: steps >= 8000,
                               streak: habitStreak { (healthSteps(on: $0) ?? 0) >= 8000 })
             }
@@ -506,14 +504,14 @@ struct DashboardView: View {
             NavigationLink {
                 DayDetailView(day: selectedDay, profile: profile)
             } label: {
-                checkRowLabel(icon: "book.closed", color: .gray, title: "Journal",
+                checkRowLabel(icon: "book.closed", color: .habitJournal, title: "Journal",
                               done: h?.journal.contains { !$0.text.isEmpty } ?? false,
                               streak: streakJournal())
             }
             .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
                 Divider()
-                checkRow(icon: "star.fill", color: .mint, title: habit.name,
+                checkRow(icon: "star.fill", color: .habitCustom, title: habit.name,
                          done: customDone(habit.name), streak: streakCustom(habit.name)) { toggleCustom(habit.name) }
             }
             Text("Slaaptijden, kwaliteit en langere notities: tik op Journal.")
@@ -594,33 +592,12 @@ struct DashboardView: View {
         .buttonStyle(PressableStyle())
     }
 
-    /// ponytail: pas vanaf 2 dagen — "🔥1" is geen reeks en devalueert het vlammetje.
-    @ViewBuilder private func streakBadge(_ days: Int) -> some View {
-        if days >= 2 {
-            HStack(spacing: 2) {
-                Text("🔥").font(.caption2)
-                Text("\(days)").font(.caption2.bold().monospacedDigit())
-            }
-            .padding(.horizontal, 6).padding(.vertical, 3)
-            .background(.orange.opacity(0.15), in: Capsule())
-            .foregroundStyle(.orange)
-            .contentTransition(.numericText())
-            .animation(.snappy(duration: 0.25), value: days)
-            .accessibilityLabel("\(days) dagen op rij")
-        }
-    }
+    private func streakBadge(_ days: Int) -> some View { StreakBadge(days: days) }
 
     private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
                                streak: Int = 0) -> some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(color.opacity(0.18))
-                .frame(width: 34, height: 34)
-                .overlay {
-                    Image(systemName: icon)
-                        .font(.subheadline)
-                        .foregroundStyle(color)
-                }
+            BuiltIconTile(systemName: icon, color: color)
             Text(title)
                 .foregroundStyle(done ? .secondary : .primary)
                 .strikethrough(done, color: .secondary)
@@ -645,15 +622,10 @@ struct DashboardView: View {
 
     private var proteinRing: some View {
         let p = proteinOn(selectedDay)
-        return ZStack {
-            Circle().stroke(Color(.tertiarySystemFill), lineWidth: 10)
-            Circle()
-                .trim(from: 0, to: min(1, Double(p) / Double(max(profile.proteinTarget, 1))))
-                .stroke(.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                .rotationEffect(.degrees(-90))
+        return ProgressRing(value: Double(p) / Double(max(profile.proteinTarget, 1))) {
             VStack(spacing: 0) {
                 Text("\(p)")
-                    .font(.title2.bold())
+                    .font(.title2.bold().monospacedDigit())
                     .contentTransition(.numericText())
                 Text("van \(profile.proteinTarget) g")
                     .font(.caption2)
@@ -661,17 +633,14 @@ struct DashboardView: View {
             }
         }
         .frame(width: 80, height: 80)
-        .animation(.snappy, value: p)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Eiwit")
         .accessibilityValue("\(p) van \(profile.proteinTarget) gram")
     }
 
+    /// Dunne wrapper: alleen de interne stapeling, de kaartstijl komt uit het design system.
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12, content: content)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        VStack(alignment: .leading, spacing: 12, content: content).builtCard()
     }
 
     private var sleepText: String {

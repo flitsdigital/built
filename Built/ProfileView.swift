@@ -81,7 +81,7 @@ struct ProfileView: View {
                         .font(.title2.bold())
                         .foregroundStyle(.green)
                         .frame(width: 52, height: 52)
-                        .background(.green.opacity(0.15), in: Circle())
+                        .background(.builtTint(.green), in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name.isEmpty ? "Jij" : profile.name)
                             .font(.headline)

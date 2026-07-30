@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import VisionKit
+import AVFoundation
 
 // MARK: - OpenFoodFacts (gratis, open, geen key)
 
@@ -432,6 +433,7 @@ struct FoodLogSheet: View {
     @State private var pending: PendingFood?
     @State private var scanError: String?
     @State private var manualBarcode = ""
+    @State private var cameraDenied = false
     @State private var lookingUp = false
     // Snel toevoegen
     @State private var quickLabel = ""
@@ -606,16 +608,36 @@ struct FoodLogSheet: View {
     private var scanTab: some View {
         List {
             Section {
-                if DataScannerViewController.isSupported {
-                    BarcodeScanner { code in
-                        handleBarcode(code)
-                    }
-                    .frame(height: 300)
-                    .listRowInsets(EdgeInsets())
-                } else {
-                    Label("Camera niet beschikbaar (simulator). Voer de barcode hieronder in.", systemImage: "camera.fill")
+                if !DataScannerViewController.isSupported {
+                    // Ook waar op een iPhone ouder dan de XS — vandaar geen "(simulator)",
+                    // dat gaf op zo'n toestel een misleidende verklaring.
+                    Label("Scannen wordt op dit toestel niet ondersteund. Voer de barcode hieronder in.",
+                          systemImage: "camera.fill")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                } else if cameraDenied {
+                    // Zonder deze tak zag je alleen een zwart vlak: isSupported is true
+                    // (hardware kán het), maar zonder toestemming start de scanner niet.
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Geen toegang tot de camera", systemImage: "camera.fill")
+                            .font(.subheadline.bold())
+                        Text("Built mag de camera niet gebruiken, dus scannen lukt niet. Zet 'm aan in Instellingen, of voer de barcode hieronder in.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button("Open Instellingen") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    BarcodeScanner(onScan: { handleBarcode($0) },
+                                   onFailure: { scanError = $0 })
+                        .frame(height: 300)
+                        .listRowInsets(EdgeInsets())
                 }
             } footer: {
                 Text("Richt op de streepjescode van het product. Gevonden via OpenFoodFacts.")
@@ -635,6 +657,19 @@ struct FoodLogSheet: View {
                         .font(.footnote)
                         .foregroundStyle(.orange)
                 }
+            }
+        }
+        // De app vroeg nergens om cameratoestemming; zonder dit blijft de status
+        // .notDetermined en start de scanner nooit.
+        .task {
+            guard DataScannerViewController.isSupported else { return }
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized:
+                cameraDenied = false
+            case .notDetermined:
+                cameraDenied = !(await AVCaptureDevice.requestAccess(for: .video))
+            default:
+                cameraDenied = true
             }
         }
     }
@@ -849,7 +884,6 @@ struct FoodPortionSheet: View {
                         ForEach([50, 100, 250], id: \.self) { preset in
                             Button("\(preset)") { grams = preset }
                                 .buttonStyle(.bordered)
-                                .buttonBorderShape(.capsule)
                                 .controlSize(.small)
                                 .tint(grams == preset ? .green : .secondary)
                         }
@@ -863,7 +897,6 @@ struct FoodPortionSheet: View {
                             ForEach([("½", 0.5), ("1", 1.0), ("2", 2.0)], id: \.0) { label, mult in
                                 Button(label) { grams = Int((food.servingGrams * mult).rounded()) }
                                     .buttonStyle(.bordered)
-                                    .buttonBorderShape(.capsule)
                                     .controlSize(.small)
                                     .tint(.green)
                             }
@@ -990,19 +1023,68 @@ struct FoodPortionSheet: View {
 
 // MARK: - Barcode-camera (VisionKit)
 
-struct BarcodeScanner: UIViewControllerRepresentable {
-    let onScan: (String) -> Void
+/// `startScanning()` werkt pas als de view daadwerkelijk zichtbaar is. Vanuit
+/// `makeUIViewController` aanroepen is te vroeg: het gooit, en met `try?` zag je
+/// alleen een zwart vlak. `DataScannerViewController` is niet `open`, dus geen
+/// subclass — we hosten 'm als child en starten in ónze `viewDidAppear`.
+final class ScannerHostController: UIViewController {
+    private let scanner: DataScannerViewController
+    var onStartFailure: ((Error) -> Void)?
 
-    func makeUIViewController(context: Context) -> DataScannerViewController {
-        let vc = DataScannerViewController(recognizedDataTypes: [.barcode()],
-                                           qualityLevel: .fast,
-                                           isHighlightingEnabled: true)
-        vc.delegate = context.coordinator
-        try? vc.startScanning()
-        return vc
+    init(scanner: DataScannerViewController) {
+        self.scanner = scanner
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) wordt niet gebruikt") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        addChild(scanner)
+        scanner.view.frame = view.bounds
+        scanner.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(scanner.view)
+        scanner.didMove(toParent: self)
     }
 
-    func updateUIViewController(_ vc: DataScannerViewController, context: Context) {}
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !scanner.isScanning else { return }
+        do { try scanner.startScanning() } catch { onStartFailure?(error) }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        scanner.stopScanning() // camera vrijgeven zodra je de tab verlaat
+    }
+}
+
+struct BarcodeScanner: UIViewControllerRepresentable {
+    let onScan: (String) -> Void
+    let onFailure: (String) -> Void
+
+    func makeUIViewController(context: Context) -> ScannerHostController {
+        let scanner = DataScannerViewController(recognizedDataTypes: [.barcode()],
+                                                qualityLevel: .fast,
+                                                isHighlightingEnabled: true)
+        scanner.delegate = context.coordinator
+        let host = ScannerHostController(scanner: scanner)
+        host.onStartFailure = { onFailure(Self.message(for: $0)) }
+        return host
+    }
+
+    func updateUIViewController(_ vc: ScannerHostController, context: Context) {}
+
+    /// Zeg wát er mis is; "werkt niet" is geen foutmelding.
+    private static func message(for error: Error) -> String {
+        guard let e = error as? DataScannerViewController.ScanningUnavailable else {
+            return "Scannen kon niet starten: \(error.localizedDescription)"
+        }
+        return switch e {
+        case .cameraRestricted: "Geen toegang tot de camera. Zet 'm aan in Instellingen → Built."
+        case .unsupported: "Dit toestel ondersteunt scannen niet. Voer de barcode hieronder in."
+        @unknown default: "Scannen kon niet starten. Voer de barcode hieronder in."
+        }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(onScan: onScan) }
 

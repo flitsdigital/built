@@ -777,9 +777,15 @@ struct TrainingView: View {
 
         Section {
             if routines.isEmpty {
-                Text("Nog geen routines. Begin met een template of maak er zelf een.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                ContentUnavailableView {
+                    Label("Nog geen routines", systemImage: "square.stack.3d.up")
+                } description: {
+                    Text("Een routine is een vaste set oefeningen. Begin met een template of maak er zelf een.")
+                } actions: {
+                    Button("Nieuwe routine") { showNewRoutine = true }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                }
                 Button {
                     addTemplate(Self.pplTemplate)
                 } label: {
@@ -835,6 +841,7 @@ struct TrainingView: View {
                                 .frame(width: 32, height: 32)
                                 .contentShape(.rect)
                         }
+                        .accessibilityLabel("Acties voor \(routine.name)")
                     }
                     .padding(.vertical, 4)
                 }
@@ -853,14 +860,14 @@ struct TrainingView: View {
                     Image(systemName: "plus")
                 }
                 .font(.footnote.bold())
+                .accessibilityLabel("Routine toevoegen")
             }
         }
 
         Section("Geschiedenis") {
             if pastDays.isEmpty {
-                Text("Je eerste training verschijnt hier — met volume, oefeningen en records.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                ContentUnavailableView("Nog geen trainingen", systemImage: "clock.arrow.circlepath",
+                                       description: Text("Je eerste training verschijnt hier — met volume, oefeningen en records."))
             }
             ForEach(pastDays, id: \.self) { day in
                 let daySets = sets(on: day)
@@ -1005,7 +1012,7 @@ struct TrainingView: View {
                                 Text("Superset \(group)")
                                     .font(.caption2.bold())
                                     .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(.green.opacity(0.18), in: Capsule())
+                                    .background(.builtTint(.green), in: Capsule())
                                     .foregroundStyle(.green)
                             }
                             Text(ex.name)
@@ -1068,6 +1075,7 @@ struct TrainingView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 32, height: 20)
                     }
+                    .accessibilityLabel("Acties voor \(ex.name)")
                 }
                 .textCase(nil) // ponytail: headers uppercasen anders ook het ⋯-menu
             }
@@ -1175,7 +1183,7 @@ struct TrainingView: View {
                              disabled: set.wrappedValue.done)
                     .frame(width: 56)
                     .padding(.vertical, 6)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                     .opacity(set.wrappedValue.done ? 0.55 : 1)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
@@ -1184,7 +1192,7 @@ struct TrainingView: View {
                              disabled: set.wrappedValue.done)
                     .frame(width: 56)
                     .padding(.vertical, 6)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                     .opacity(set.wrappedValue.done ? 0.55 : 1)
                 NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
                                             set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
@@ -1193,7 +1201,7 @@ struct TrainingView: View {
                              disabled: set.wrappedValue.done)
                     .frame(width: 48)
                     .padding(.vertical, 6)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                     .opacity(set.wrappedValue.done ? 0.55 : 1)
             }
             Spacer()
@@ -1237,7 +1245,7 @@ struct TrainingView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(set.wrappedValue.done ? "Set afgevinkt" : "Set afvinken")
         }
-        .listRowBackground(set.wrappedValue.done ? Color.green.opacity(0.12) : nil)
+        .listRowBackground(set.wrappedValue.done ? Color.builtTint(.green) : nil)
     }
 }
 
@@ -1259,9 +1267,9 @@ struct WorkoutSummarySheet: View {
                 Text("Sterk werk, \(name)! 💪")
                     .font(.title2.bold())
                 HStack {
-                    statTile("\(summary.minutes)", "minuten")
-                    statTile("\(summary.volume)", "kg volume")
-                    statTile("\(summary.sets)", "sets")
+                    StatTile(value: "\(summary.minutes)", label: "minuten")
+                    StatTile(value: "\(summary.volume)", label: "kg volume")
+                    StatTile(value: "\(summary.sets)", label: "sets")
                 }
                 if let prev = summary.previousVolume, prev > 0 {
                     let delta = summary.volume - prev
@@ -1278,7 +1286,7 @@ struct WorkoutSummarySheet: View {
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .background(.builtTint(.yellow), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
                 }
                 if !summary.muscles.isEmpty {
                     VStack(spacing: 6) {
@@ -1308,8 +1316,7 @@ struct WorkoutSummarySheet: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 10)
+            .builtBottomAction()
             .background(.regularMaterial)
         }
         .presentationDetents([.medium, .large])
@@ -1318,13 +1325,6 @@ struct WorkoutSummarySheet: View {
         .sensoryFeedback(.success, trigger: bounced)
     }
 
-    private func statTile(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.title2.bold().monospacedDigit())
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
 }
 
 /// Overzicht van één gedane training: duur, volume, verbeteringen — en bewerkbaar
@@ -1429,9 +1429,9 @@ struct SessionDetailView: View {
         List {
             Section {
                 HStack {
-                    statTile(durationText, "duur")
-                    statTile("\(volume)", "kg volume")
-                    statTile("\(daySets.count)", "sets")
+                    StatTile(value: durationText, label: "duur")
+                    StatTile(value: "\(volume)", label: "kg volume")
+                    StatTile(value: "\(daySets.count)", label: "sets")
                 }
                 if let d = volumeDelta {
                     Text("\(d >= 0 ? "+" : "")\(d) kg volume t.o.v. je vorige training")
@@ -1468,20 +1468,20 @@ struct SessionDetailView: View {
                                              focus: $focused, id: nil, disabled: false)
                                     .frame(width: 64)
                                     .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                                 Text("min").font(.footnote).foregroundStyle(.secondary)
                             } else {
                                 NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "+kg" : "kg",
                                              focus: $focused, id: nil, disabled: false)
                                     .frame(width: 64)
                                     .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                                 Text(exercises.isBodyweight(group.name) ? "+kg" : "kg").font(.footnote).foregroundStyle(.secondary)
                                 NumericField(value: reps(set), decimal: false, placeholder: "reps",
                                              focus: $focused, id: nil, disabled: false)
                                     .frame(width: 52)
                                     .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                                 Text("reps").font(.footnote).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -1511,13 +1511,6 @@ struct SessionDetailView: View {
         }
     }
 
-    private func statTile(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.title2.bold().monospacedDigit())
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
 }
 
 /// Preview van een routine: zie wat je gaat doen, pas het aan, of start hem meteen.
@@ -1602,8 +1595,7 @@ struct RoutineEditorView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
+                .builtBottomAction()
             }
         }
         .tabBarClearance()

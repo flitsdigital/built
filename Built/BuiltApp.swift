@@ -11,6 +11,9 @@ struct BuiltApp: App {
         WindowGroup {
             RootView()
                 .tint(.green) // ponytail: één accentkleur voor de hele app
+                // Idem voor de vorm: capsule is een environment-waarde, dus dit geldt
+                // voor élke .bordered/.borderedProminent knop, ook in sheets.
+                .buttonBorderShape(.capsule)
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
         .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self, Exercise.self])
@@ -111,7 +114,7 @@ struct RootView: View {
                     .font(.body.bold())
                     .foregroundStyle(.green)
                     .frame(width: 36, height: 36)
-                    .background(.green.opacity(0.15), in: Circle())
+                    .background(.builtTint(.green), in: Circle())
             }
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
@@ -130,24 +133,22 @@ struct RootView: View {
             }
             Button("+15s") { workoutStatus.extendRest(by: 15) }
                 .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .tint(.green)
                 .font(.caption.bold())
             Button("Skip") { workoutStatus.stopRest() }
                 .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
                 .controlSize(.small)
                 .font(.caption.bold())
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous))
         .onTapGesture { // knoppen en menu winnen van deze tap
             withAnimation(.snappy(duration: 0.3)) { tab = 1 }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
         .padding(.horizontal, 24)
     }
@@ -162,7 +163,7 @@ struct RootView: View {
                     .font(.body.bold())
                     .foregroundStyle(.green)
                     .frame(width: 36, height: 36)
-                    .background(.green.opacity(0.15), in: Circle())
+                    .background(.builtTint(.green), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Training bezig")
                         .font(.footnote.bold())
@@ -181,8 +182,8 @@ struct RootView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
             .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
         }
         .buttonStyle(PressableStyle(scale: 0.985))
@@ -270,7 +271,7 @@ struct FloatingTabBar: View {
                         if selected {
                             // ponytail: matchedGeometry laat de pill tussen tabs glijden
                             Capsule()
-                                .fill(.green.opacity(0.18))
+                                .fill(.builtTint(.green))
                                 .matchedGeometryEffect(id: "pill", in: pill)
                         }
                     }

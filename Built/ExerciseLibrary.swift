@@ -129,7 +129,7 @@ struct ExerciseRow: View {
                 .font(.body)
                 .foregroundStyle(.green)
                 .frame(width: 32, height: 32)
-                .background(.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.builtTint(.green), in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).foregroundStyle(.primary)
                 if let muscle {
@@ -349,6 +349,7 @@ struct ExerciseLibraryView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { creating = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("Nieuwe oefening")
             }
         }
         .sheet(isPresented: $creating) {

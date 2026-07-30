@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Built — Design System</title>
+<style>
+  :root {
+    --bg: #F2F2F7; --card: #FFFFFF; --label: #000;
+    --secondary: rgba(60,60,67,.6); --tertiary: rgba(60,60,67,.3);
+    --separator: rgba(60,60,67,.18);
+    --fill3: rgba(118,118,128,.12); --fill4: rgba(116,116,128,.08); --fill2: rgba(120,120,128,.16);
+    --green:#34C759; --orange:#FF9500; --yellow:#FFCC00; --teal:#30B0C7;
+    --purple:#AF52DE; --indigo:#5856D6; --cyan:#32ADE6; --mint:#00C7BE; --gray:#8E8E93;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#000; --card:#1C1C1E; --label:#FFF;
+      --secondary: rgba(235,235,245,.6); --tertiary: rgba(235,235,245,.3);
+      --separator: rgba(84,84,88,.65);
+      --fill3: rgba(118,118,128,.24); --fill4: rgba(118,118,128,.18); --fill2: rgba(120,120,128,.32);
+      --green:#30D158; --orange:#FF9F0A; --yellow:#FFD60A; --teal:#40C8E0;
+      --purple:#BF5AF2; --indigo:#5E5CE6; --cyan:#64D2FF; --mint:#63E6E2;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; padding:0 20px 80px; background:var(--bg); color:var(--label);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; }
+  header { padding: 56px 0 8px; }
+  h1 { font-size: 34px; font-weight: 700; letter-spacing:-.5px; margin:0; }
+  .lede { color:var(--secondary); margin:6px 0 0; max-width:60ch; }
+  h2 {
+    font-size: 13px; font-weight:600; letter-spacing:.9px; text-transform:uppercase;
+    color:var(--secondary); margin:48px 0 12px;
+  }
+  h3 { font-size:16px; font-weight:600; margin:24px 0 8px; }
+  .card { background:var(--card); border-radius:20px; padding:16px; }
+  .grid { display:grid; gap:12px; }
+  .g2 { grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+  .g3 { grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); }
+  .g4 { grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); }
+  code, .mono { font-family:"SF Mono",ui-monospace,Menlo,monospace; font-size:13px; }
+  code { background:var(--fill3); padding:1px 5px; border-radius:5px; }
+  .muted { color:var(--secondary); }
+  .tiny { font-size:13px; }
+  .xtiny { font-size:11px; }
+
+  /* Kleur */
+  .swatch { border-radius:14px; overflow:hidden; background:var(--card); }
+  .chip { height:64px; }
+  .swatch .meta { padding:10px 12px; }
+  .swatch .name { font-weight:600; font-size:14px; }
+  .role { display:block; color:var(--secondary); font-size:12px; margin-top:2px; }
+
+  /* Surfaces */
+  .surf { height:52px; border-radius:12px; border:1px solid var(--separator); }
+
+  /* Radius */
+  .radius-demo { height:60px; background:var(--green); opacity:.9; }
+
+  /* Type */
+  .type-row { display:flex; align-items:baseline; gap:16px; padding:9px 0; border-bottom:1px solid var(--separator); }
+  .type-row:last-child { border-bottom:0; }
+  .type-row .spec { margin-left:auto; color:var(--tertiary); font-size:12px; white-space:nowrap; }
+  .t-title2 { font-size:22px; font-weight:700; }
+  .t-title3 { font-size:20px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .t-headline { font-size:17px; font-weight:600; }
+  .t-subhead { font-size:15px; }
+  .t-footnote { font-size:13px; }
+  .t-caption { font-size:12px; }
+  .t-caption2 { font-size:11px; }
+
+  /* Spacing */
+  .sp { background:var(--green); height:22px; border-radius:3px; }
+  .sp-row { display:flex; align-items:center; gap:12px; padding:5px 0; }
+  .sp-row .lbl { width:46px; color:var(--secondary); font-size:12px; text-align:right; }
+
+  /* Componenten */
+  .row { display:flex; align-items:center; gap:12px; padding:11px 0; }
+  .row + .row { border-top:1px solid var(--separator); }
+  .icon-tile { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; font-size:15px; flex:none; }
+  .streak { display:inline-flex; align-items:center; gap:2px; background:color-mix(in srgb, var(--orange) 15%, transparent);
+            color:var(--orange); font-size:11px; font-weight:700; padding:3px 6px; border-radius:99px; }
+  .status { margin-left:auto; width:22px; height:22px; border-radius:50%; border:1.6px solid var(--tertiary); flex:none; }
+  .status.done { background:var(--green); border-color:var(--green); position:relative; }
+  .status.done::after { content:"✓"; color:#fff; font-size:13px; font-weight:700; position:absolute; inset:0; display:grid; place-items:center; }
+  .strike { text-decoration:line-through; color:var(--secondary); }
+  .pill { display:inline-block; background:var(--green); color:#fff; font-size:14px; font-weight:600;
+          padding:7px 14px; border-radius:99px; }
+  .tile { width:58px; height:58px; border-radius:18px; background:var(--fill2); display:grid; place-items:center; font-size:28px; }
+  .tile.sel { background:color-mix(in srgb, var(--green) 16%, transparent); box-shadow: inset 0 0 0 2px var(--green); }
+  .seg { display:flex; gap:4px; }
+  .seg i { flex:1; height:4px; border-radius:99px; background:var(--fill4); }
+  .seg i.on { background:var(--green); }
+  .ring { width:92px; height:92px; border-radius:50%; display:grid; place-items:center;
+          background:conic-gradient(var(--green) 0 36%, var(--fill3) 36% 100%); }
+  .ring > span { width:70px; height:70px; border-radius:50%; background:var(--card); display:grid; place-items:center;
+                 font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .dots { display:flex; gap:8px; }
+  .dot { width:30px; height:30px; border-radius:50%; background:var(--fill3); display:grid; place-items:center;
+         font-size:11px; font-weight:600; color:var(--secondary); }
+  .dot.full { background:var(--green); color:#fff; }
+  .dot.today { box-shadow: inset 0 0 0 2px var(--green); }
+  .heat { display:flex; gap:3px; }
+  .heat i { width:13px; height:13px; border-radius:3px; }
+
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.6px;
+       color:var(--secondary); font-weight:600; padding:0 12px 8px 0; }
+  td { padding:9px 12px 9px 0; border-top:1px solid var(--separator); vertical-align:top; }
+  td:first-child { white-space:nowrap; }
+  .warn { color:var(--orange); font-weight:600; }
+  .ok { color:var(--green); font-weight:600; }
+  .banner { background:color-mix(in srgb,var(--green) 12%,transparent); border-radius:14px;
+            padding:14px 16px; margin:20px 0 0; font-size:14px; }
+  .banner b { color:var(--green); }
+  .was { color:var(--secondary); text-decoration:line-through; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Built — Design System</h1>
+  <p class="lede">Vastgelegd uit de code, niet uit een moodboard. Elke waarde hieronder staat ergens in
+  <code>Built/*.swift</code>. Groen is het enige merkaccent; al het andere is Apple's semantische systeem,
+  zodat licht/donker en Dynamic Type vanzelf meebewegen.</p>
+  <div class="banner">
+    <b>Bijgewerkt na de opruimronde.</b> De componenten hieronder wórden nu ook echt gebruikt:
+    <code>builtCard()</code> op elke kaart, <code>ProgressRing</code> voor alle drie de ringen,
+    één <code>StatTile</code> in plaats van drie kopieën. Radius ging van 11 losse waarden naar
+    5 tokens, tint-dekking van 4 waarden naar 1. Zie
+    <code>design-system-verbeteringen.md</code> voor wat er nog openstaat.
+  </div>
+</header>
+
+<h2>Kleur — merkaccent</h2>
+<div class="grid g4">
+  <div class="swatch"><div class="chip" style="background:var(--green)"></div>
+    <div class="meta"><div class="name">green</div><span class="role">Merk. Gedaan, goed, actief. 92×</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--orange)"></div>
+    <div class="meta"><div class="name">orange</div><span class="role">Streak, PR, gemist. 25×</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--yellow)"></div>
+    <div class="meta"><div class="name">yellow</div><span class="role">PR-vlak (12% dekking). 7×</span></div></div>
+</div>
+
+<h2>Kleur — habit-identiteit</h2>
+<p class="tiny muted" style="margin:-4px 0 12px">Eén vaste kleur per habit-rij, zodat je 'm op kleur herkent zonder te lezen. Als token in
+<code>DesignSystem.swift</code> (<code>Color.habitCreatine</code>…), gedeeld met de widget. Altijd via
+<code>.builtTint(…)</code> — <b>één</b> dekking van 15%, was <span class="was">0.12 / 0.15 / 0.16 / 0.18</span>.</p>
+<div class="grid g4">
+  <div class="swatch"><div class="chip" style="background:var(--orange)"></div>
+    <div class="meta"><div class="name">orange</div><span class="role">Training</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--teal)"></div>
+    <div class="meta"><div class="name">teal</div><span class="role">Creatine</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--purple)"></div>
+    <div class="meta"><div class="name">purple</div><span class="role">Gewicht</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--indigo)"></div>
+    <div class="meta"><div class="name">indigo</div><span class="role">Slaap · macroFat</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--cyan)"></div>
+    <div class="meta"><div class="name">cyan</div><span class="role">Stappen</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--mint)"></div>
+    <div class="meta"><div class="name">mint</div><span class="role">Eigen habits</span></div></div>
+  <div class="swatch"><div class="chip" style="background:var(--gray)"></div>
+    <div class="meta"><div class="name">gray</div><span class="role">Journal</span></div></div>
+</div>
+
+<h2>Oppervlakken</h2>
+<div class="grid g3">
+  <div><div class="surf" style="background:var(--bg)"></div><div class="tiny muted" style="margin-top:6px"><code>systemGroupedBackground</code><br>Scherm</div></div>
+  <div><div class="surf" style="background:var(--card)"></div><div class="tiny muted" style="margin-top:6px"><code>secondarySystemGroupedBackground</code><br>Kaart · 7×</div></div>
+  <div><div class="surf" style="background:var(--fill3)"></div><div class="tiny muted" style="margin-top:6px"><code>tertiarySystemFill</code><br>Invoer, ringtrack · 20×</div></div>
+  <div><div class="surf" style="background:var(--fill2)"></div><div class="tiny muted" style="margin-top:6px"><code>secondarySystemFill</code><br>Check-in-tegel · 2×</div></div>
+  <div><div class="surf" style="background:var(--fill4)"></div><div class="tiny muted" style="margin-top:6px"><code>quaternarySystemFill</code><br>Lege heatmap · 3×</div></div>
+  <div><div class="surf" style="background:var(--card);opacity:.72;backdrop-filter:blur(8px)"></div><div class="tiny muted" style="margin-top:6px"><code>.regularMaterial</code><br>Tab bar, zwevende balken</div></div>
+</div>
+
+<h2>Radius <span class="ok">— 5 tokens</span> <span class="tiny muted" style="text-transform:none;letter-spacing:0">(was 11 losse waarden)</span></h2>
+<div class="grid g4">
+  <div><div class="radius-demo" style="border-radius:4px"></div><div class="tiny muted" style="margin-top:6px"><code>.micro</code> <b>4</b><br>heatmap-blokje</div></div>
+  <div><div class="radius-demo" style="border-radius:8px"></div><div class="tiny muted" style="margin-top:6px"><code>.small</code> <b>8</b><br>icoontegel, invoerveld</div></div>
+  <div><div class="radius-demo" style="border-radius:14px"></div><div class="tiny muted" style="margin-top:6px"><code>.medium</code> <b>14</b><br>tegel, klein vlak</div></div>
+  <div><div class="radius-demo" style="border-radius:20px"></div><div class="tiny muted" style="margin-top:6px"><code>.card</code> <b>20</b><br>kaart</div></div>
+  <div><div class="radius-demo" style="border-radius:26px"></div><div class="tiny muted" style="margin-top:6px"><code>.floating</code> <b>26</b><br>zwevende pill, tab bar</div></div>
+  <div><div class="radius-demo" style="border-radius:99px"></div><div class="tiny muted" style="margin-top:6px"><code>Capsule</code><br>badge, knop</div></div>
+</div>
+<p class="tiny muted">Weg: <span class="was">3 · 6 · 10 · 12 · 16 · 18</span>. Alles boven 12 gebruikt <code>style: .continuous</code>.</p>
+
+<h2>Typografie</h2>
+<div class="card">
+  <div class="type-row"><span class="t-title2">Goedemiddag Jordi 👋</span><span class="spec">.title2.bold()</span></div>
+  <div class="type-row"><span class="t-title3">4.320</span><span class="spec">.title3.bold().monospacedDigit()</span></div>
+  <div class="type-row"><span class="t-headline">Hoe was je dag?</span><span class="spec">.headline · 27×</span></div>
+  <div class="type-row"><span class="t-subhead">Energie</span><span class="spec">.subheadline</span></div>
+  <div class="type-row"><span class="t-footnote muted">5 korte vragen · ±20 seconden</span><span class="spec">.footnote · 47×</span></div>
+  <div class="type-row"><span class="t-caption muted">Laatst: 2 dagen geleden</span><span class="spec">.caption · 25×</span></div>
+  <div class="type-row"><span class="t-caption2 muted" style="letter-spacing:.8px">STAP 3 VAN 5</span><span class="spec">.caption2.weight(.semibold)</span></div>
+</div>
+<p class="tiny muted">Regel: elk getal dat kan veranderen krijgt <code>.monospacedDigit()</code> — anders springt de layout tijdens het tellen.</p>
+
+<h2>Ruimte</h2>
+<div class="card">
+  <div class="sp-row"><span class="lbl">2</span><div class="sp" style="width:2px"></div><span class="tiny muted">label ↔ waarde binnen een tegel · 23×</span></div>
+  <div class="sp-row"><span class="lbl">4</span><div class="sp" style="width:4px"></div><span class="tiny muted">verticale rij-lucht · 15×</span></div>
+  <div class="sp-row"><span class="lbl">8</span><div class="sp" style="width:8px"></div><span class="tiny muted">tussen verwante elementen</span></div>
+  <div class="sp-row"><span class="lbl">12</span><div class="sp" style="width:12px"></div><span class="tiny muted">standaard rij-spacing · 21×</span></div>
+  <div class="sp-row"><span class="lbl">16</span><div class="sp" style="width:16px"></div><span class="tiny muted">kaartpadding, kaart ↔ kaart</span></div>
+  <div class="sp-row"><span class="lbl">20</span><div class="sp" style="width:20px"></div><span class="tiny muted">schermrand in sheets · 9×</span></div>
+  <div class="sp-row"><span class="lbl">24</span><div class="sp" style="width:24px"></div><span class="tiny muted">ruime schermrand</span></div>
+  <div class="sp-row"><span class="lbl">64</span><div class="sp" style="width:64px"></div><span class="tiny muted"><code>tabBarClearance()</code> — vrije ruimte onder de zwevende tab bar</span></div>
+</div>
+
+<h2>Componenten</h2>
+<p class="tiny muted" style="margin:-4px 0 12px">Allemaal in <code>DesignSystem.swift</code>, met een
+<code>#Preview</code> die ze náást elkaar toont — zonder die plek ontstaat de drift die deze ronde is opgeruimd.</p>
+
+<h3>StatTile <span class="ok tiny">— was 3 losse kopieën</span></h3>
+<div class="card">
+  <div style="display:flex">
+    <div style="flex:1;text-align:center"><div class="t-title2" style="font-variant-numeric:tabular-nums">52</div><div class="t-caption muted">minuten</div></div>
+    <div style="flex:1;text-align:center"><div class="t-title2" style="font-variant-numeric:tabular-nums">4.320</div><div class="t-caption muted">kg volume</div></div>
+    <div style="flex:1;text-align:center"><div class="t-title2" style="font-variant-numeric:tabular-nums">18</div><div class="t-caption muted">sets</div></div>
+  </div>
+</div>
+<p class="tiny muted">Twee kopieën waren identiek, de derde stond op <code>.title</code> zónder <code>monospacedDigit</code> — dus de statrij in Inzicht was een andere grootte dan die in Training, en het cijfer sprong tijdens het animeren. Nu één component met een <code>large</code>-variant.</p>
+
+<h3>Habit-rij</h3>
+<div class="card">
+  <div class="row">
+    <div class="icon-tile" style="background:color-mix(in srgb,var(--orange) 18%,transparent);color:var(--orange)">🏋️</div>
+    <span class="strike">Training</span><span class="streak">🔥 3</span>
+    <span class="status done"></span>
+  </div>
+  <div class="row">
+    <div class="icon-tile" style="background:color-mix(in srgb,var(--teal) 18%,transparent);color:var(--teal)">💊</div>
+    <span>Creatine</span>
+    <span class="status"></span>
+  </div>
+  <div class="row">
+    <div class="icon-tile" style="background:color-mix(in srgb,var(--cyan) 18%,transparent);color:var(--cyan)">🚶</div>
+    <span>8.412 stappen</span><span class="streak">🔥 5</span>
+    <span class="status done"></span>
+  </div>
+</div>
+<p class="tiny muted"><code>BuiltIconTile</code> (34×34, radius 8, <code>@ScaledMetric</code>) + <code>StreakBadge</code> (pas vanaf 2 dagen).
+Gedaan = doorgestreept + secundair, niet verborgen — je wil zien wat je hebt gedaan.</p>
+
+<h3>Score-ring &amp; weekstrip</h3>
+<div class="card">
+  <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+    <div class="ring"><span>36</span></div>
+    <div class="dots">
+      <div class="dot">36</div><div class="dot">36</div><div class="dot"></div>
+      <div class="dot"></div><div class="dot full">✓</div><div class="dot">36</div><div class="dot today">36</div>
+    </div>
+  </div>
+</div>
+<p class="tiny muted">Ring: 12pt lijn, ronde uiteinden, <code>AngularGradient</code> groen→mint→groen. Track altijd <code>tertiarySystemFill</code>. Weekdot 30×30; vandaag krijgt een rand in plaats van een vulling.</p>
+
+<h3>Check-in-drawer</h3>
+<div class="card">
+  <div class="seg" style="margin-bottom:18px"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div>
+  <div style="text-align:center;margin-bottom:16px">
+    <div style="font-size:20px;font-weight:700">Hoeveel spierpijn?</div>
+    <div class="tiny muted">Van je vorige trainingen.</div>
+  </div>
+  <div style="display:flex;gap:6px;justify-content:center">
+    <div class="tile">✅</div><div class="tile">🙂</div><div class="tile sel">😬</div><div class="tile">😖</div><div class="tile">🥵</div>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-top:10px" class="tiny" ><span class="muted">Geen</span><span class="muted">Veel</span></div>
+</div>
+<p class="tiny muted">Eén vraag per stap, 58–76pt raakvlakken, ankerlabels onder de uitersten, auto-doorschuiven na 240 ms.</p>
+
+<h3>Jaar-heatmap</h3>
+<div class="card">
+  <div class="heat">
+    <i style="background:var(--fill4)"></i><i style="background:color-mix(in srgb,var(--green) 30%,transparent)"></i>
+    <i style="background:color-mix(in srgb,var(--green) 45%,transparent)"></i><i style="background:color-mix(in srgb,var(--green) 60%,transparent)"></i>
+    <i style="background:color-mix(in srgb,var(--green) 75%,transparent)"></i>
+    <i style="background:var(--green);display:grid;place-items:center;color:#fff;font-size:8px;font-weight:900">✓</i>
+    <i style="background:var(--fill4)"></i><i style="background:color-mix(in srgb,var(--green) 45%,transparent)"></i>
+  </div>
+</div>
+<p class="tiny muted"><code>Color.muscleTint(v)</code> — 0 wordt grijs, daarboven groen op <code>0.22 + 0.6·v</code> dekking. Zelfde functie voedt de spierkaart.
+Een volle dag krijgt daarnaast een <b>✓</b>: bij deuteranopie is "veel gedaan" anders niet te onderscheiden van "weinig gedaan".</p>
+
+<h3>Knoppen &amp; badges <span class="ok tiny">— altijd capsule</span></h3>
+<div class="card">
+  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span class="pill">Start</span>
+    <span class="pill" style="background:transparent;color:var(--green);box-shadow:inset 0 0 0 1.5px var(--green)">+15s</span>
+    <span class="streak" style="font-size:13px;padding:5px 10px">🔥 12</span>
+    <span style="background:color-mix(in srgb,var(--green) 15%,transparent);color:var(--green);font-size:11px;font-weight:700;padding:2px 6px;border-radius:99px">Superset A</span>
+    <span style="background:var(--green);color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:99px">PR</span>
+  </div>
+  <div style="display:flex;gap:12px;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid var(--separator)">
+    <div style="flex:1">
+      <div class="xtiny muted" style="text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Was</div>
+      <div style="background:var(--green);color:#fff;font-weight:600;font-size:14px;padding:10px 0;border-radius:10px;text-align:center">Log 139 kcal</div>
+    </div>
+    <div style="flex:1">
+      <div class="xtiny" style="text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;color:var(--green);font-weight:600">Nu</div>
+      <div style="background:var(--green);color:#fff;font-weight:600;font-size:14px;padding:10px 0;border-radius:99px;text-align:center">Log 139 kcal</div>
+    </div>
+  </div>
+</div>
+<h3>Vastgezette hoofdactie <span class="ok tiny">— was 3× andere marges</span></h3>
+<div class="card" style="padding:0;overflow:hidden">
+  <div class="tiny muted" style="padding:16px 16px 0">…einde van het scherm…</div>
+  <div style="padding:12px 20px 20px">
+    <div style="background:var(--green);color:#fff;font-weight:600;font-size:15px;padding:14px 0;border-radius:99px;text-align:center">▶ Start deze training</div>
+  </div>
+  <div style="margin:0 16px 14px;padding:8px 12px;border-radius:99px;background:var(--fill3);text-align:center;font-size:12px" class="muted">zwevende tab bar</div>
+</div>
+<p class="tiny muted"><code>builtBottomAction()</code> — <code>controlSize(.large)</code>, horizontaal 20,
+boven 12, onder 20. <code>.large</code> omdat <code>.borderedProminent</code> standaard krap is voor
+een primaire actie; de onderrand van 20 omdat de knop anders tegen de tab bar plakt.
+Stond eerder op drie plekken met <span class="was">(20, v10) · (24, v10) · (20, b18)</span>.</p>
+
+<p class="tiny muted"><code>.buttonBorderShape(.capsule)</code> staat op de app-root naast <code>.tint(.green)</code>.
+Het is een environment-waarde, dus elke <code>.bordered</code> en <code>.borderedProminent</code> knop
+is een capsule — ook in sheets, drawers en navigatie. <b>Nergens lokaal herhalen</b>: dat was juist
+waarom 6 van de 17 knoppen rond waren en 11 niet. Eigen knopachtergronden gebruiken
+<code>in: Capsule()</code>, nooit een <code>RoundedRectangle</code>.</p>
+
+<h2>Beweging</h2>
+<div class="card">
+<table>
+  <tr><th>Curve</th><th>Waar</th></tr>
+  <tr><td><code>.snappy(0.2)</code></td><td>Micro: selectie, vinkje, waarde-wissel · 8×</td></tr>
+  <tr><td><code>.snappy(0.25)</code></td><td>Standaard: rij in/uit, set toevoegen · 13×</td></tr>
+  <tr><td><code>.snappy(0.3)</code></td><td>Groot: stapwissel, training starten · 14×</td></tr>
+  <tr><td><code>.smooth(0.5)</code></td><td>Ring vullen — traag genoeg om te volgen</td></tr>
+  <tr><td><code>.spring(0.3, bounce: 0.1)</code></td><td>Dag wisselen op het dashboard</td></tr>
+  <tr><td><code>.interactiveSpring(0.3, 0.82)</code></td><td>Content die de vinger volgt tijdens swipen</td></tr>
+  <tr><td><code>.easeOut(0.16)</code></td><td><code>PressableStyle</code> — 0.97 normaal, 0.985 voor grote vlakken</td></tr>
+</table>
+</div>
+<p class="tiny muted">Alles respecteert <code>accessibilityReduceMotion</code>: bewegen wordt faden.</p>
+
+<h2>Haptiek</h2>
+<div class="card">
+<table>
+  <tr><th>Signaal</th><th>Moment</th></tr>
+  <tr><td><code>.success</code></td><td>Perfecte dag, nieuw PR, check-in compleet · 6×</td></tr>
+  <tr><td><code>.increase</code></td><td>Waarde omhoog · 3×</td></tr>
+  <tr><td><code>.selection</code></td><td>Stap in de check-in · 2×</td></tr>
+  <tr><td><code>.impact</code></td><td>Set afgevinkt tijdens trainen</td></tr>
+</table>
+</div>
+<p class="tiny muted">Regel: haptiek is voor zeldzame momenten. Een PR mag trillen, een lijstje scrollen niet.</p>
+
+<h2>Lege staten</h2>
+<div class="card" style="text-align:center;padding:28px 16px">
+  <div style="font-size:34px;opacity:.35">🗂️</div>
+  <div style="font-weight:600;margin-top:8px">Nog geen routines</div>
+  <div class="tiny muted" style="max-width:34ch;margin:4px auto 14px">Een routine is een vaste set oefeningen. Begin met een template of maak er zelf een.</div>
+  <span class="pill">Nieuwe routine</span>
+</div>
+<p class="tiny muted">Altijd <code>ContentUnavailableView</code>: icoon, kop, één regel uitleg en waar mogelijk een knop.
+Een lege staat is de belangrijkste conversie van dat scherm, geen mededeling in grijze tekst.</p>
+
+<h2>Toegankelijkheid</h2>
+<div class="card">
+<table>
+  <tr><th>Regel</th><th>Hoe</th></tr>
+  <tr><td>Maten schalen mee</td><td><code>@ScaledMetric</code> op icoontegel, weekdot en check-in-tegels — óók op de emoji, want die schalen van zichzelf niet mee</td></tr>
+  <tr><td>Elke icoonknop heeft een naam</td><td><code>.accessibilityLabel</code> op ⋯-menu's, chevrons en +-knoppen</td></tr>
+  <tr><td>Nooit kleur alleen</td><td>✓ / ⃠ / leeg bolletje naast groen/oranje; vinkje in volle heatmapdagen</td></tr>
+  <tr><td>Samengestelde waarden als één element</td><td>Ring en weekdot: <code>children: .ignore</code> + eigen label en waarde</td></tr>
+  <tr><td>Beweging is optioneel</td><td><code>accessibilityReduceMotion</code> maakt van bewegen faden</td></tr>
+</table>
+</div>
+
+<h2>Schrijfstijl</h2>
+<div class="card">
+<table>
+  <tr><th>Principe</th><th>Voorbeeld</th></tr>
+  <tr><td>Nederlands, je-vorm</td><td>"Vink een set af om te kunnen afronden."</td></tr>
+  <tr><td>Zeg wat er gebeurt, niet wat het is</td><td>"Tik om aan te passen" &gt; "Bewerken"</td></tr>
+  <tr><td>Lege staat = uitnodiging</td><td>"Je eerste training verschijnt hier — met volume, oefeningen en records."</td></tr>
+  <tr><td>Getal + eenheid + context</td><td>"+320 kg volume t.o.v. je vorige training"</td></tr>
+  <tr><td>Nooit straffen</td><td>Streak verschijnt pas vanaf 1; "🔥 0" bestaat niet</td></tr>
+</table>
+</div>
+
+</div>
+</body>
+</html>

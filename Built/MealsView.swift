@@ -306,9 +306,8 @@ struct MealsView: View {
         List {
             Section {
                 if meals.isEmpty {
-                    Text("Nog geen maaltijden. Voeg je vaste maaltijden of recepten toe voor snel loggen.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView("Nog geen maaltijden", systemImage: "fork.knife",
+                                           description: Text("Voeg je vaste maaltijden of recepten toe, dan log je ze voortaan met één tik."))
                 }
                 ForEach(meals) { m in
                     NavigationLink {

@@ -154,7 +154,7 @@ struct WeightView: View {
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: 36, height: 44)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .clipShape(RoundedRectangle(cornerRadius: BuiltRadius.small))
                         } else {
                             Image(systemName: "camera")
                                 .foregroundStyle(.secondary)
@@ -261,7 +261,7 @@ struct WeightView: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                     }
             }
         }

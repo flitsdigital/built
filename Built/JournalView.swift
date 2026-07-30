@@ -346,9 +346,8 @@ struct DayDetailView: View {
 
             Section {
                 if journalEntries.isEmpty {
-                    Text("Nog geen notities. Schrijf hoe je dag ging.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView("Nog geen notities", systemImage: "text.quote",
+                                           description: Text("Schrijf hoe je dag ging — dat leest later terug als een logboek."))
                 }
                 ForEach(journalEntries) { entry in
                     VStack(alignment: .leading, spacing: 4) {
@@ -456,6 +455,7 @@ struct DayDetailView: View {
                     }
                 } label: {
                     Image(systemName: "chevron.left")
+                        .accessibilityLabel("Vorige dag")
                 }
                 Button {
                     withAnimation(.smooth(duration: 0.2)) {
@@ -463,6 +463,7 @@ struct DayDetailView: View {
                     }
                 } label: {
                     Image(systemName: "chevron.right")
+                        .accessibilityLabel("Volgende dag")
                 }
                 .disabled(cal.isDateInToday(day))
             }

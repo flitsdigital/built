@@ -46,6 +46,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - BuiltWidget
+      - Built/DesignSystem.swift   # zelfde kleuren/maten als de app
       - Built/WidgetSnapshot.swift
       - Built/WorkoutActivity.swift
       - Built/RestControlIntent.swift

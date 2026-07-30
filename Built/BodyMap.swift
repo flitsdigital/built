@@ -42,7 +42,7 @@ struct BodyMapView: View {
             switch zone.shape {
             case .ellipse: Ellipse().fill(c)
             case .capsule: Capsule().fill(c)
-            case .rounded: RoundedRectangle(cornerRadius: 6, style: .continuous).fill(c)
+            case .rounded: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous).fill(c)
             }
         }
         .frame(width: zone.rect.width * size.width, height: zone.rect.height * size.height)

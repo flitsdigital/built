@@ -12,6 +12,12 @@ struct CheckInSheet: View {
     @Query private var allHabits: [DayHabits]
     @State private var step = 0
     @State private var goingBack = false
+    // Emoji schalen niet mee met Dynamic Type; @ScaledMetric doet dat alsnog, anders
+    // krijgt wie grote letters nodig heeft juist hier de kleinste doelen.
+    @ScaledMetric(relativeTo: .largeTitle) private var tileWide: CGFloat = 76
+    @ScaledMetric(relativeTo: .largeTitle) private var tileNarrow: CGFloat = 58
+    @ScaledMetric(relativeTo: .largeTitle) private var glyphWide: CGFloat = 40
+    @ScaledMetric(relativeTo: .largeTitle) private var glyphNarrow: CGFloat = 32
 
     private struct Question {
         let title: String
@@ -155,7 +161,8 @@ struct CheckInSheet: View {
 
             Spacer(minLength: 16)
 
-            HStack(spacing: q.icons.count > 3 ? 6 : 16) {
+            let dense = q.icons.count > 3
+            HStack(spacing: dense ? 6 : 16) {
                 ForEach(Array(q.icons.enumerated()), id: \.offset) { i, icon in
                     let level = i + 1
                     let selected = value(q) == level
@@ -163,13 +170,13 @@ struct CheckInSheet: View {
                         select(q, level)
                     } label: {
                         Text(icon)
-                            .font(.system(size: q.icons.count > 3 ? 32 : 40))
-                            .frame(width: q.icons.count > 3 ? 58 : 76,
-                                   height: q.icons.count > 3 ? 58 : 76)
-                            .background(selected ? Color.green.opacity(0.16) : Color(.secondarySystemFill),
-                                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .font(.system(size: dense ? glyphNarrow : glyphWide))
+                            .frame(width: dense ? tileNarrow : tileWide,
+                                   height: dense ? tileNarrow : tileWide)
+                            .background(selected ? .builtTint(.green) : Color(.secondarySystemFill),
+                                        in: RoundedRectangle(cornerRadius: BuiltRadius.medium + 4, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                RoundedRectangle(cornerRadius: BuiltRadius.medium + 4, style: .continuous)
                                     .strokeBorder(.green, lineWidth: selected ? 2 : 0)
                             }
                             .grayscale(selected ? 0 : 0.7)
@@ -177,6 +184,7 @@ struct CheckInSheet: View {
                     }
                     .buttonStyle(PressableStyle(scale: 0.92))
                     .accessibilityLabel("\(q.title) — \(level) van \(q.icons.count)")
+                    .accessibilityAddTraits(selected ? [.isSelected] : [])
                 }
             }
             .animation(.snappy(duration: 0.2), value: value(q))
@@ -217,7 +225,7 @@ struct CheckInSheet: View {
                     .font(.subheadline.bold())
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 12).padding(.vertical, 5)
-                    .background(.orange.opacity(0.15), in: Capsule())
+                    .background(.builtTint(.orange), in: Capsule())
                     .padding(.top, 6)
             } else {
                 Text("Morgen weer — dan begint je reeks te tellen.")
@@ -233,7 +241,7 @@ struct CheckInSheet: View {
                     Text(v > 0 ? q.icons[v - 1] : "–")
                         .font(.system(size: 24))
                         .frame(width: 48, height: 48)
-                        .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous))
                         .grayscale(v > 0 ? 0 : 1)
                         .opacity(v > 0 ? 1 : 0.4)
                 }
@@ -251,8 +259,7 @@ struct CheckInSheet: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.green)
-            .padding(.horizontal, 20)
-            .padding(.bottom, 18)
+            .builtBottomAction()
         }
         .sensoryFeedback(.success, trigger: onSummary)
     }

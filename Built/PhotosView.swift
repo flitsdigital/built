@@ -122,7 +122,7 @@ struct PhotosView: View {
                     .scaledToFill()
                     .frame(maxWidth: .infinity)
                     .frame(height: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: BuiltRadius.medium))
             }
             Text(photo.date.formatted(.dateTime.day().month().year()))
                 .font(.caption2)
@@ -141,6 +141,6 @@ struct PhotosView: View {
             }
         }
         .frame(width: 100, height: 130)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: BuiltRadius.small))
     }
 }

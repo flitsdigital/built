@@ -109,7 +109,7 @@ struct OnboardingView: View {
 
     private func inputCard<C: View>(@ViewBuilder _ content: () -> C) -> some View {
         VStack(spacing: 0, content: content)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
             .padding(.horizontal, 20)
     }
 
@@ -301,7 +301,7 @@ struct OnboardingView: View {
                 .foregroundStyle(.green)
         }
         .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
         .opacity(planRevealed ? 1 : 0)
         .offset(y: planRevealed || reduceMotion ? 0 : 14)
         .animation(.snappy(duration: 0.4).delay(0.15 + Double(index) * 0.08), value: planRevealed)

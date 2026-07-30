@@ -317,15 +317,15 @@ struct InsightsView: View {
         List {
             Section("Deze week") {
                 HStack {
-                    statTile(value: "\(trainingDays)/\(profile.trainingsPerWeek)", label: "trainingen")
+                    StatTile(value: "\(trainingDays)/\(profile.trainingsPerWeek)", label: "trainingen", large: true)
                     Divider()
-                    statTile(value: "\(proteinDays)/7", label: "eiwit-dagen")
+                    StatTile(value: "\(proteinDays)/7", label: "eiwit-dagen", large: true)
                 }
                 HStack {
-                    statTile(value: weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—",
-                             label: "trend/week")
+                    StatTile(value: weekDelta.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—",
+                             label: "trend/week", large: true)
                     Divider()
-                    statTile(value: "\(perfectLast7)/7", label: "perfecte dagen")
+                    StatTile(value: "\(perfectLast7)/7", label: "perfecte dagen", large: true)
                 }
                 Button {
                     showReview = true
@@ -379,10 +379,10 @@ struct InsightsView: View {
 
             Section {
                 HStack {
-                    statTile(value: "\(perfectLast30)", label: "van 30 dagen")
+                    StatTile(value: "\(perfectLast30)", label: "van 30 dagen", large: true)
                     Divider()
-                    statTile(value: streak > 0 ? "🔥 \(streak)" : "—",
-                             label: streak > 0 ? "huidige reeks" : "start vandaag je reeks")
+                    StatTile(value: streak > 0 ? "🔥 \(streak)" : "—",
+                             label: streak > 0 ? "huidige reeks" : "start vandaag je reeks", large: true)
                 }
                 heatmap
             } header: {
@@ -508,12 +508,12 @@ struct InsightsView: View {
                         Button {
                             selectedDayBox = DayBox(day: day)
                         } label: {
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: BuiltRadius.micro)
                                 .fill(perfectDay(day) ? Color.green : Color(.quaternarySystemFill))
                                 .frame(height: 26)
                                 .overlay {
                                     if cal.isDateInToday(day) {
-                                        RoundedRectangle(cornerRadius: 4)
+                                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
                                             .strokeBorder(.green, lineWidth: 1.5)
                                     }
                                 }
@@ -541,17 +541,26 @@ struct InsightsView: View {
                                     Button {
                                         selectedDayBox = DayBox(day: day)
                                     } label: {
-                                        RoundedRectangle(cornerRadius: 3)
+                                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
                                             .fill(Color.muscleTint(fill(day)))
                                             .frame(width: 13, height: 13)
                                             .overlay {
+                                                // Vorm naast kleur: bij kleurenblindheid is
+                                                // "alles gehaald" anders niet te onderscheiden.
+                                                if fill(day) >= 0.999 {
+                                                    Image(systemName: "checkmark")
+                                                        .font(.system(size: 8, weight: .black))
+                                                        .foregroundStyle(.white)
+                                                }
                                                 if cal.isDateInToday(day) {
-                                                    RoundedRectangle(cornerRadius: 3).strokeBorder(.green, lineWidth: 1.5)
+                                                    RoundedRectangle(cornerRadius: BuiltRadius.micro)
+                                                        .strokeBorder(.green, lineWidth: 1.5)
                                                 }
                                             }
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityLabel(day.formatted(date: .abbreviated, time: .omitted))
+                                    .accessibilityValue("\(Int(fill(day) * 100))% van je habits")
                                 }
                             }
                         }
@@ -589,15 +598,6 @@ struct InsightsView: View {
         .animation(.smooth(duration: 0.3), value: volumeWeeks)
     }
 
-    private func statTile(value: String, label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.title.bold())
-            Text(label).font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
-    }
-
     private var weekGrid: some View {
         let days = daysBack(7).reversed().map { $0 }
         return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
@@ -619,12 +619,12 @@ struct InsightsView: View {
                         Button {
                             selectedDayBox = DayBox(day: d)
                         } label: {
-                            RoundedRectangle(cornerRadius: 4)
+                            RoundedRectangle(cornerRadius: BuiltRadius.micro)
                                 .fill(factor.done(d) ? Color.green : Color(.quaternarySystemFill))
                                 .frame(width: 22, height: 22)
                                 .overlay {
                                     if cal.isDateInToday(d) {
-                                        RoundedRectangle(cornerRadius: 4)
+                                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
                                             .strokeBorder(.green.opacity(0.7), lineWidth: 1.5)
                                     }
                                 }
@@ -750,7 +750,7 @@ struct WeeklyReviewSheet: View {
                     .font(.subheadline.bold())
                     .padding(12)
                     .frame(maxWidth: .infinity)
-                    .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .background(.builtTint(.yellow), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
             }
             Text(verdict)
                 .font(.subheadline)
@@ -777,7 +777,7 @@ struct WeeklyReviewSheet: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
     }
 }
 

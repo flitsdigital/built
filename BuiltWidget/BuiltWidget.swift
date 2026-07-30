@@ -131,7 +131,7 @@ struct WorkoutLiveActivity: Widget {
                         .font(.body.bold())
                         .foregroundStyle(.green)
                         .frame(width: 40, height: 40)
-                        .background(.green.opacity(0.15), in: Circle())
+                        .background(.builtTint(.green), in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
                         Text(context.state.exercise ?? "Training bezig")
                             .font(.footnote.bold())
