@@ -76,16 +76,21 @@ enum OFF {
         }
     }
 
-    /// search-a-licious: populariteit-gesorteerd, NL bovenaan.
+    /// search-a-licious: eigen backend, los van de cgi-servers — en in de praktijk de
+    /// snelste en stabielste van de drie.
+    ///
+    /// Geen `sort_by`: op `-popularity_key` sorteren overstemt de tekstmatch volledig
+    /// ("Volle melk" gaf dan Geröstete Mandel en Skyr Nature). De standaard-sortering
+    /// is relevantie, en die geeft wél de juiste producten.
     private static func sal(_ query: String) async -> [Product]? {
         var c = URLComponents(string: "https://search.openfoodfacts.org/search")!
         c.queryItems = [.init(name: "q", value: query), .init(name: "langs", value: "nl,en"),
-                        .init(name: "sort_by", value: "-popularity_key"), .init(name: "page_size", value: "20"),
+                        .init(name: "page_size", value: "20"),
                         .init(name: "fields", value: fields)]
         guard let url = c.url, let (data, resp) = try? await session.data(from: url),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let r = try? JSONDecoder().decode(SaLResponse.self, from: data) else { return nil }
-        return r.hits.compactMap(product(from:))
+        return r.hits.items.compactMap(product(from:))
     }
 
     private static func cgi(_ base: String, _ query: String) async -> [Product]? {
@@ -96,7 +101,7 @@ enum OFF {
         guard let url = c.url, let (data, resp) = try? await session.data(from: url),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let r = try? JSONDecoder().decode(SearchResponse.self, from: data) else { return nil }
-        return r.products.compactMap(product(from:))
+        return r.products.items.compactMap(product(from:))
     }
 
     // MARK: - Barcode (met retry)
@@ -118,12 +123,12 @@ enum OFF {
     // MARK: - Response-parsing
 
     private struct LookupResponse: Decodable { var product: RawProduct? }
-    private struct SearchResponse: Decodable { var products: [RawProduct] }
-    private struct SaLResponse: Decodable { var hits: [RawProduct] }
+    private struct SearchResponse: Decodable { var products: Lenient<RawProduct> }
+    private struct SaLResponse: Decodable { var hits: Lenient<RawProduct> }
     private struct RawProduct: Decodable {
         var code: String?
         var product_name: String?
-        var brands: String?
+        var brands: FlexibleString?
         var image_front_small_url: String?
         var serving_quantity: FlexibleDouble?
         var product_quantity: FlexibleDouble?
@@ -136,6 +141,37 @@ enum OFF {
         init(from decoder: Decoder) throws {
             let c = try decoder.singleValueContainer()
             value = (try? c.decode(Double.self)) ?? (try? c.decode(String.self)).flatMap(Double.init)
+        }
+    }
+
+    /// `brands` is een string ("Alpro") op de cgi-endpoints, maar een array (["Alpro"])
+    /// op search-a-licious. Met `String?` klapte die hele response eruit, waardoor de
+    /// snelste en stabielste van de drie backends in de praktijk nooit werd gebruikt.
+    struct FlexibleString: Decodable {
+        let value: String
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if let s = try? c.decode(String.self) { value = s }
+            else if let a = try? c.decode([String].self) { value = a.joined(separator: ", ") }
+            else { value = "" }
+        }
+    }
+
+    /// Slaat losse producten over die OFF in een onverwacht formaat teruggeeft, i.p.v.
+    /// de hele lijst te laten falen op één rotte appel.
+    struct Lenient<T: Decodable>: Decodable {
+        let items: [T]
+        /// Leest niets en slaagt dus altijd — gebruikt om een onleesbaar element over
+        /// te slaan, want een mislukte `decode` schuift de index niet op.
+        private struct Skip: Decodable { init(from decoder: Decoder) throws {} }
+
+        init(from decoder: Decoder) throws {
+            var c = try decoder.unkeyedContainer()
+            var out: [T] = []
+            while !c.isAtEnd {
+                if let v = try? c.decode(T.self) { out.append(v) } else { _ = try? c.decode(Skip.self) }
+            }
+            items = out
         }
     }
 
@@ -169,7 +205,7 @@ enum OFF {
             guard let v, v >= 1, v <= upper else { return 0 }
             return v
         }
-        return Product(name: name, brand: raw.brands ?? "", barcode: raw.code ?? "",
+        return Product(name: name, brand: raw.brands?.value ?? "", barcode: raw.code ?? "",
                        protein100: n.proteins ?? 0, kcal100: n.kcal ?? 0,
                        carbs100: n.carbs ?? 0, fat100: n.fat ?? 0,
                        imageURL: raw.image_front_small_url ?? "",
