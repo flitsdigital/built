@@ -41,6 +41,7 @@ alter table public.routines add column if not exists targets jsonb not null defa
 alter table public.routines add column if not exists supersets jsonb not null default '{}';
 alter table public.routines add column if not exists rest_by_exercise jsonb not null default '{}';
 alter table public.profiles add column if not exists schedule jsonb not null default '{}';
+alter table public.profiles add column if not exists tracks_food boolean not null default true;
 
 create table if not exists public.exercises (
   id uuid primary key default gen_random_uuid(),
@@ -79,6 +80,7 @@ create table if not exists public.set_entries (
 );
 alter table public.set_entries add column if not exists dropset boolean not null default false;
 alter table public.set_entries add column if not exists failure boolean not null default false;
+alter table public.set_entries add column if not exists seconds int not null default 0;
 
 create table if not exists public.day_habits (
   id uuid primary key default gen_random_uuid(),
@@ -91,7 +93,11 @@ create table if not exists public.day_habits (
   wake_time timestamptz,
   sleep_quality int not null default 0,
   journal jsonb not null default '[]',
-  workout_note text not null default ''
+  workout_note text not null default '',
+  energy int not null default 0,
+  mood int not null default 0,
+  soreness int not null default 0,
+  stress int not null default 0
 );
 
 create table if not exists public.routines (
@@ -162,7 +168,7 @@ begin
   end if;
 
   if jsonb_typeof(payload->'profile') = 'object' then
-    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days, kcal_target, schedule)
+    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days, kcal_target, schedule, tracks_food)
     values (
       uid,
       payload#>>'{profile,name}',
@@ -177,7 +183,8 @@ begin
       coalesce((payload#>>'{profile,tracks_sleep}')::boolean, true),
       coalesce(payload#>'{profile,training_days}', '[]'::jsonb),
       coalesce((payload#>>'{profile,kcal_target}')::int, 0),
-      coalesce(payload#>'{profile,schedule}', '{}'::jsonb)
+      coalesce(payload#>'{profile,schedule}', '{}'::jsonb),
+      coalesce((payload#>>'{profile,tracks_food}')::boolean, true)
     )
     on conflict (user_id) do update set
       name = excluded.name,
@@ -192,7 +199,8 @@ begin
       tracks_sleep = excluded.tracks_sleep,
       training_days = excluded.training_days,
       kcal_target = excluded.kcal_target,
-      schedule = excluded.schedule;
+      schedule = excluded.schedule,
+      tracks_food = excluded.tracks_food;
   end if;
 
   delete from public.weight_entries where user_id = uid;
@@ -208,17 +216,20 @@ begin
     from jsonb_array_elements(coalesce(payload->'proteins', '[]'::jsonb)) e;
 
   delete from public.set_entries where user_id = uid;
-  insert into public.set_entries (user_id, date, exercise, weight_kg, reps, dropset, failure)
+  insert into public.set_entries (user_id, date, exercise, weight_kg, reps, dropset, failure, seconds)
     select uid, (e->>'date')::timestamptz, e->>'exercise', (e->>'weight_kg')::float8, (e->>'reps')::int,
-           coalesce((e->>'dropset')::boolean, false), coalesce((e->>'failure')::boolean, false)
+           coalesce((e->>'dropset')::boolean, false), coalesce((e->>'failure')::boolean, false),
+           coalesce((e->>'seconds')::int, 0)
     from jsonb_array_elements(coalesce(payload->'sets', '[]'::jsonb)) e;
 
   delete from public.day_habits where user_id = uid;
-  insert into public.day_habits (user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note)
+  insert into public.day_habits (user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress)
     select uid, (e->>'date')::timestamptz, (e->>'creatine')::boolean, (e->>'slept_enough')::boolean,
            coalesce(e->>'note', ''), (e->>'bed_time')::timestamptz, (e->>'wake_time')::timestamptz,
            coalesce((e->>'sleep_quality')::int, 0),
-           coalesce(e->'journal', '[]'::jsonb), coalesce(e->>'workout_note', '')
+           coalesce(e->'journal', '[]'::jsonb), coalesce(e->>'workout_note', ''),
+           coalesce((e->>'energy')::int, 0), coalesce((e->>'mood')::int, 0),
+           coalesce((e->>'soreness')::int, 0), coalesce((e->>'stress')::int, 0)
     from jsonb_array_elements(coalesce(payload->'habits', '[]'::jsonb)) e;
 
   delete from public.routines where user_id = uid;

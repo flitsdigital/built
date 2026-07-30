@@ -23,6 +23,8 @@ targets:
       properties:
         com.apple.security.application-groups: [group.com.jordiklavers.Built]
         com.apple.developer.applesignin: [Default]
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
     info:
       path: Built/Info.plist
       properties:
@@ -32,6 +34,7 @@ targets:
         NSSupportsLiveActivities: true
         NSCameraUsageDescription: Voor het scannen van barcodes op producten.
         NSCalendarsFullAccessUsageDescription: Om je weekplanning in je agenda te zetten en te synchroniseren.
+        NSHealthShareUsageDescription: Om je dagelijkse stappen te tonen en te vergelijken met je training, slaap en energie.
         CFBundleURLTypes:
           - CFBundleURLSchemes: [built]
     settings:

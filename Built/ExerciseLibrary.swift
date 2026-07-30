@@ -19,8 +19,8 @@ final class Exercise {
     }
 
     static let muscles = ["Borst", "Rug", "Schouders", "Biceps", "Triceps",
-                          "Benen", "Hamstrings", "Bilspieren", "Kuiten", "Core", "Onderrug", "Overig"]
-    static let types = ["Barbell", "Dumbbell", "Machine", "Kabel", "Bodyweight", "Kettlebell", "Band", "Overig"]
+                          "Benen", "Hamstrings", "Bilspieren", "Kuiten", "Core", "Onderrug", "Cardio", "Overig"]
+    static let types = ["Barbell", "Dumbbell", "Machine", "Kabel", "Bodyweight", "Kettlebell", "Band", "Cardio", "Overig"]
 
     static let typeIcon = [
         "Barbell": "figure.strengthtraining.traditional",
@@ -30,6 +30,7 @@ final class Exercise {
         "Bodyweight": "figure.core.training",
         "Kettlebell": "figure.cross.training",
         "Band": "figure.flexibility",
+        "Cardio": "figure.run",
         "Overig": "dumbbell",
     ]
 
@@ -44,6 +45,15 @@ final class Exercise {
                 known.insert(name)
             }
         }
+        // Cardio kwam later — eenmalig bijplaatsen, ook bij bestaande installs.
+        if !UserDefaults.standard.bool(forKey: "seededCardio") {
+            UserDefaults.standard.set(true, forKey: "seededCardio")
+            for name in cardioSeed where !known.contains(name) {
+                context.insert(Exercise(name: name, muscle: "Cardio", type: "Cardio"))
+                known.insert(name)
+            }
+        }
+
         // Vrije-tekst-oefeningen uit historie en routines opnemen als "Overig"
         let usedInSets = (try? context.fetch(FetchDescriptor<SetEntry>()))?.map(\.exercise) ?? []
         let usedInRoutines = (try? context.fetch(FetchDescriptor<Routine>()))?.flatMap(\.exercises) ?? []
@@ -52,6 +62,9 @@ final class Exercise {
             known.insert(name)
         }
     }
+
+    private static let cardioSeed = ["Loopband", "Hardlopen", "Fietsen", "Hometrainer",
+                                     "Roeimachine", "Crosstrainer", "Stairmaster", "Wandelen"]
 
     private static let seed: [(String, String, String)] = [
         ("Bench Press", "Borst", "Barbell"),
@@ -96,6 +109,10 @@ extension Array where Element == Exercise {
     /// Barbell-oefening? Dan tonen we de schijven-per-kant.
     func isBarbell(_ name: String) -> Bool {
         first { $0.name == name }?.type == "Barbell"
+    }
+    /// Cardio? Dan log je duur i.p.v. kg × reps.
+    func isCardio(_ name: String) -> Bool {
+        first { $0.name == name }?.type == "Cardio"
     }
 }
 

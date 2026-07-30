@@ -220,6 +220,32 @@ struct DayDetailView: View {
             })
     }
 
+    /// Vijf emoji als schaal; nogmaals tikken op dezelfde waarde wist 'm.
+    private func checkInPicker(_ label: String, _ icons: [String],
+                               _ keyPath: ReferenceWritableKeyPath<DayHabits, Int>) -> some View {
+        let value = habitsRecord?[keyPath: keyPath] ?? 0
+        return HStack {
+            Text(label).frame(width: 76, alignment: .leading)
+            Spacer()
+            ForEach(1...5, id: \.self) { level in
+                Button {
+                    let r = record()
+                    r[keyPath: keyPath] = r[keyPath: keyPath] == level ? 0 : level
+                } label: {
+                    Text(icons[level - 1])
+                        .font(.system(size: 21))
+                        .grayscale(value == level ? 0 : 1)
+                        .opacity(value == level ? 1 : 0.35)
+                        .frame(width: 36, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(label) \(level) van 5")
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: value)
+    }
+
     // MARK: - Journal (meerdere notities per dag)
 
     private var journalEntries: [JournalNote] {
@@ -271,6 +297,23 @@ struct DayDetailView: View {
                     ForEach(customHabits) { habit in
                         Toggle(habit.name, isOn: customBinding(habit.name))
                     }
+                }
+            }
+
+            Section {
+                checkInPicker("Energie", ["😵", "🥱", "🙂", "💪", "⚡️"], \.energy)
+                checkInPicker("Stemming", ["😞", "😕", "😐", "🙂", "😄"], \.mood)
+                checkInPicker("Spierpijn", ["✅", "🙂", "😬", "😖", "🥵"], \.soreness)
+                checkInPicker("Stress", ["😌", "🙂", "😐", "😰", "🤯"], \.stress)
+            } header: {
+                Text("Check-in")
+            } footer: {
+                Text("Hoe die dag voelde. Nogmaals tikken op dezelfde waarde wist 'm. Dit voedt de correlaties in Inzicht.")
+            }
+
+            if let steps = HealthService.shared.steps(on: day) {
+                Section("Health") {
+                    LabeledContent("Stappen", value: steps.formatted())
                 }
             }
 
@@ -368,7 +411,7 @@ struct DayDetailView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.name).font(.headline)
-                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) }.joined(separator: "  "))
+                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }

@@ -16,6 +16,7 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private var cal: Calendar { .current }
     private let managedIDs = ["morning-0", "morning-1", "morning-2",
                               "evening-0", "evening-1", "evening-2",
+                              "checkin-0", "checkin-1", "checkin-2",
                               "streak", "review",
                               // elke weekdag kan een trainingsherinnering hebben (eigen trainingsdagen)
                               "week-1", "week-2", "week-3", "week-4", "week-5", "week-6", "week-7"]
@@ -52,6 +53,8 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         var weighedToday = false
         var sleepOpen = false
         var trainedToday = false
+        var checkedInToday = false
+        var tracksFood = true
         var streak = 0
         var perfectToday = false
         var trainingsThisWeek = 0
@@ -72,8 +75,10 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
 
         var s = DayState()
         let todayProtein = proteins.filter { cal.isDateInToday($0.date) }.map(\.grams).reduce(0, +)
-        s.proteinRemaining = max(profile.proteinTarget - todayProtein, 0)
+        s.tracksFood = profile.tracksFood
+        s.proteinRemaining = profile.tracksFood ? max(profile.proteinTarget - todayProtein, 0) : 0
         let todayHabits = habits.first { cal.isDateInToday($0.date) }
+        s.checkedInToday = todayHabits?.checkedIn == true
         s.creatineOpen = profile.tracksCreatine && todayHabits?.creatine != true
         s.weighedToday = weights.contains { cal.isDateInToday($0.date) }
         s.sleepOpen = profile.tracksSleep && todayHabits?.sleptEnough != true
@@ -89,11 +94,11 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         s.streak = DayCheck.streak(proteins: proteins, weights: weights, habits: habits,
                                    target: profile.proteinTarget,
                                    requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                                   sets: sets, trainingDays: profile.trainingDays)
+                                   sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
         s.perfectToday = DayCheck.perfect(.now, proteins: proteins, weights: weights, habits: habits,
                                           target: profile.proteinTarget,
                                           requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                                          sets: sets, trainingDays: profile.trainingDays)
+                                          sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
         return s
     }
 
@@ -115,7 +120,7 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         center.removePendingNotificationRequests(withIdentifiers: managedIDs)
         let anyEnabled = flag("notifMorningOn", default: false) || flag("notifEveningOn", default: false)
             || flag("notifStreakOn", default: true) || flag("notifWeekOn", default: true)
-            || flag("notifReviewOn", default: true)
+            || flag("notifReviewOn", default: true) || flag("notifCheckInOn", default: true)
         guard anyEnabled, let state = computeState() else { return }
 
         Task {
@@ -180,6 +185,18 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
                 oneShot(id: "week-\(weekday)", title: "Trainingsweek 🏋️",
                         body: body,
                         at: fire, action: "training")
+            }
+        }
+
+        // Dag-check-in: de melding is wat de data binnenhaalt. Stil als je 'm al invulde.
+        if flag("notifCheckInOn", default: true) {
+            for offset in 0..<3 {
+                guard let day = cal.date(byAdding: .day, value: offset, to: today),
+                      let fire = cal.date(bySettingHour: 21, minute: 0, second: 0, of: day) else { continue }
+                if offset == 0, s.checkedInToday { continue }
+                oneShot(id: "checkin-\(offset)", title: "Hoe was je dag? 📓",
+                        body: "Energie, stemming, spierpijn, stress — vier tikken.",
+                        at: fire, action: "checkin")
             }
         }
 

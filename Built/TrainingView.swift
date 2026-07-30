@@ -11,6 +11,8 @@ struct DraftSet: Identifiable {
     var warmup = false
     var dropset = false
     var failure = false
+    /// Duur voor cardio in seconden; 0 = krachtset.
+    var seconds = 0
 }
 
 struct DraftExercise: Identifiable {
@@ -37,6 +39,7 @@ struct SavedWorkout: Codable, Equatable {
         var warmup: Bool?
         var dropset: Bool?
         var failure: Bool?
+        var seconds: Int?
     }
     struct SavedExercise: Codable, Equatable {
         var name: String
@@ -64,6 +67,13 @@ struct WorkoutSummary: Identifiable {
     let prs: [(exercise: String, new: Double, old: Double)]
     var previousVolume: Int?
     var muscles: [String: Double] = [:]
+    /// "Bench Press: 60×8  60×8" per oefening — voor het deelbericht.
+    var lines: [String] = []
+
+    var shareText: String {
+        workoutShareText(title: "Training van \(Date.now.formatted(.dateTime.weekday(.wide).day().month()))",
+                         duration: "\(minutes) min", volume: volume, sets: sets, lines: lines, prs: prs)
+    }
 }
 
 struct TrainingView: View {
@@ -202,6 +212,14 @@ struct TrainingView: View {
         let bw = exercises.isBodyweight(name)
         let goalSets = target.map { max($0.first ?? 3, 1) }
         let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
+        // Cardio: één blok met een duur. Doel-reps zijn hier minuten.
+        if exercises.isCardio(name) {
+            let minutes = goalReps ?? last.compactMap { $0.seconds > 0 ? $0.seconds / 60 : nil }.max() ?? 20
+            let tip = last.isEmpty ? "Log je minuten — kg en reps blijven leeg."
+                                   : "Vorige keer \(last.map { $0.seconds / 60 }.max() ?? 0) min."
+            return DraftExercise(name: name, tip: tip,
+                                 sets: [DraftSet(kg: 0, reps: 0, seconds: minutes * 60)])
+        }
         guard !last.isEmpty else {
             let n = goalSets ?? 3
             let reps = goalReps ?? 8
@@ -226,7 +244,7 @@ struct TrainingView: View {
             let reps = goalReps ?? (bw ? min((prev?.reps ?? 8) + 1, 30)
                                        : (allEnough ? 8 : min((prev?.reps ?? 8) + 1, 12)))
             return DraftSet(kg: kg, reps: reps,
-                            previous: prev.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) })
+                            previous: prev.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) })
         })
     }
 
@@ -255,7 +273,7 @@ struct TrainingView: View {
         let last = lastSession(for: name)
         guard !last.isEmpty else { return nil }
         let bw = exercises.isBodyweight(name)
-        return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) }.joined(separator: "  ")
+        return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
     }
 
     private func restLabel(_ seconds: Int) -> String {
@@ -265,6 +283,17 @@ struct TrainingView: View {
     private func setRest(_ id: UUID, _ seconds: Int?) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
         workout[i].restSeconds = seconds
+    }
+
+    /// Zelfde set er nog eens onder — kg/reps/duur en de vlaggetjes mee, maar nog niet afgevinkt.
+    private func duplicateSet(exercise id: UUID, set setID: UUID) {
+        guard let e = workout.firstIndex(where: { $0.id == id }),
+              let s = workout[e].sets.firstIndex(where: { $0.id == setID }) else { return }
+        let old = workout[e].sets[s]
+        let copy = DraftSet(kg: old.kg, reps: old.reps, previous: old.previous,
+                            warmup: old.warmup, dropset: old.dropset, failure: old.failure,
+                            seconds: old.seconds)
+        withAnimation(.snappy(duration: 0.25)) { workout[e].sets.insert(copy, at: s + 1) }
     }
 
     private func moveExercise(_ id: UUID, by offset: Int) {
@@ -304,7 +333,7 @@ struct TrainingView: View {
         guard active else { return nil }
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
             .init(name: ex.name, tip: ex.tip, note: ex.note,
-                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure) },
+                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) },
                   originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }, alternatives: alternatives.isEmpty ? nil : alternatives,
            restEndsAt: workoutStatus.restEndsAt,
@@ -319,7 +348,7 @@ struct TrainingView: View {
         startedAt = saved.startedAt
         workout = saved.exercises.map { ex in
             DraftExercise(name: ex.name, tip: ex.tip,
-                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false) },
+                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false, seconds: $0.seconds ?? 0) },
                           note: ex.note, originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }
         alternatives = saved.alternatives ?? [:]
@@ -465,7 +494,13 @@ struct TrainingView: View {
             sets: doneCount,
             prs: workout.compactMap { ex in prInfo(ex).map { (ex.name, $0.new, $0.old) } },
             previousVolume: previousVolume,
-            muscles: sessionMuscles()
+            muscles: sessionMuscles(),
+            lines: workout.compactMap { ex in
+                let done = ex.sets.filter { $0.done && !$0.warmup }
+                guard !done.isEmpty else { return nil }
+                let bw = exercises.isBodyweight(ex.name)
+                return "\(ex.name): " + done.map { setNotation(kg: $0.kg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+            }
         )
         withAnimation(.snappy(duration: 0.3)) {
             active = false
@@ -581,7 +616,11 @@ struct TrainingView: View {
             WorkoutSummarySheet(summary: s, name: profile.name)
         }
         .navigationDestination(item: $editingRoutine) { routine in
-            RoutineEditorView(routine: routine)
+            RoutineEditorView(routine: routine) { r in
+                editingRoutine = nil
+                startWorkout(with: r.exercises, alternatives: r.alternatives, targets: r.targets,
+                             supersets: r.supersets, restByExercise: r.restByExercise)
+            }
         }
         .sheet(isPresented: $showExercisePicker) {
             ExercisePickerSheet(exclude: Set(workout.map(\.name))) { name in
@@ -754,14 +793,10 @@ struct TrainingView: View {
             }
             ForEach(routines) { routine in
                 Button {
-                    if routine.exercises.isEmpty {
-                        editingRoutine = routine
-                    } else {
-                        startWorkout(with: routine.exercises, alternatives: routine.alternatives, targets: routine.targets, supersets: routine.supersets, restByExercise: routine.restByExercise)
-                    }
+                    editingRoutine = routine // preview: bekijken, bewerken of starten
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: routine.exercises.isEmpty ? "square.and.pencil" : "play.circle.fill")
+                        Image(systemName: routine.exercises.isEmpty ? "square.and.pencil" : "list.bullet.rectangle")
                             .font(.title)
                             .foregroundStyle(.green)
                         VStack(alignment: .leading, spacing: 2) {
@@ -778,6 +813,13 @@ struct TrainingView: View {
                         }
                         Spacer()
                         Menu {
+                            if !routine.exercises.isEmpty {
+                                Button("Start meteen", systemImage: "play.fill") {
+                                    startWorkout(with: routine.exercises, alternatives: routine.alternatives,
+                                                 targets: routine.targets, supersets: routine.supersets,
+                                                 restByExercise: routine.restByExercise)
+                                }
+                            }
                             Button("Wijzig routine", systemImage: "pencil") { editingRoutine = routine }
                             Button("Verwijder routine", systemImage: "trash", role: .destructive) {
                                 // Ruim de weekplanning op zodat een dode naam niet in agenda/meldingen blijft spoken
@@ -840,7 +882,7 @@ struct TrainingView: View {
                         }
                         ForEach(byExercise(daySets), id: \.name) { group in
                             let bw = exercises.isBodyweight(group.name)
-                            Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw) }.joined(separator: "  "))
+                            Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -904,8 +946,12 @@ struct TrainingView: View {
                 HStack(spacing: 12) {
                     Text("SET").frame(width: 24, alignment: .leading)
                     Text("VORIGE").frame(width: 64, alignment: .leading)
-                    Text(exercises.isBodyweight(ex.name) ? "+KG" : "KG").frame(width: 56)
-                    Text("REPS").frame(width: 48)
+                    if exercises.isCardio(ex.name) {
+                        Text("MINUTEN").frame(width: 56)
+                    } else {
+                        Text(exercises.isBodyweight(ex.name) ? "+KG" : "KG").frame(width: 56)
+                        Text("REPS").frame(width: 48)
+                    }
                     Spacer()
                 }
                 .lineLimit(1)
@@ -917,7 +963,9 @@ struct TrainingView: View {
                 ForEach($ex.sets) { $set in
                     let idx = ex.sets.firstIndex { $0.id == set.id } ?? 0
                     setRow($set, number: ex.sets[...idx].filter { !$0.warmup }.count, exercise: ex.name,
-                           bodyweight: exercises.isBodyweight(ex.name))
+                           bodyweight: exercises.isBodyweight(ex.name),
+                           cardio: exercises.isCardio(ex.name),
+                           duplicate: { duplicateSet(exercise: ex.id, set: set.id) })
                 }
                 .onDelete { offsets in
                     for i in offsets {
@@ -995,10 +1043,12 @@ struct TrainingView: View {
                                 }
                             }
                         }
-                        if ex.sets.contains(where: \.warmup) {
-                            Button("Warming-up weghalen", systemImage: "flame") { removeWarmup(ex.id) }
-                        } else {
-                            Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
+                        if !exercises.isCardio(ex.name) {
+                            if ex.sets.contains(where: \.warmup) {
+                                Button("Warming-up weghalen", systemImage: "flame") { removeWarmup(ex.id) }
+                            } else {
+                                Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
+                            }
                         }
                         Menu("Rust: \(restLabel(ex.restSeconds ?? restSeconds))", systemImage: "timer") {
                             Button("Standaard (\(restLabel(restSeconds)))") { setRest(ex.id, nil) }
@@ -1082,21 +1132,26 @@ struct TrainingView: View {
         return s
     }
 
-    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, bodyweight: Bool) -> some View {
+    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, bodyweight: Bool,
+                        cardio: Bool, duplicate: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Menu {
-                Button { set.wrappedValue.warmup = false } label: {
-                    Label("Normale set", systemImage: set.wrappedValue.warmup ? "circle" : "checkmark")
-                }
-                Button { set.wrappedValue.warmup = true } label: {
-                    Label("Warming-up", systemImage: set.wrappedValue.warmup ? "checkmark" : "flame")
-                }
-                Divider()
-                Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
-                    set.wrappedValue.dropset.toggle()
-                }
-                Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
-                    set.wrappedValue.failure.toggle()
+                Button("Set dupliceren", systemImage: "plus.square.on.square", action: duplicate)
+                if !cardio {
+                    Divider()
+                    Button { set.wrappedValue.warmup = false } label: {
+                        Label("Normale set", systemImage: set.wrappedValue.warmup ? "circle" : "checkmark")
+                    }
+                    Button { set.wrappedValue.warmup = true } label: {
+                        Label("Warming-up", systemImage: set.wrappedValue.warmup ? "checkmark" : "flame")
+                    }
+                    Divider()
+                    Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
+                        set.wrappedValue.dropset.toggle()
+                    }
+                    Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
+                        set.wrappedValue.failure.toggle()
+                    }
                 }
             } label: {
                 Text(setLabel(set.wrappedValue, number: number))
@@ -1112,22 +1167,35 @@ struct TrainingView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 64, alignment: .leading)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
-            NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "+kg" : "kg",
-                         focus: $focusedSet, id: set.wrappedValue.id,
-                         disabled: set.wrappedValue.done)
-                .frame(width: 56)
-                .padding(.vertical, 6)
-                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                .opacity(set.wrappedValue.done ? 0.55 : 1)
-            NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
-                                        set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
-                         decimal: false, placeholder: "reps",
-                         focus: $focusedSet, id: nil,
-                         disabled: set.wrappedValue.done)
-                .frame(width: 48)
-                .padding(.vertical, 6)
-                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                .opacity(set.wrappedValue.done ? 0.55 : 1)
+            if cardio {
+                NumericField(value: Binding(get: { Double(set.wrappedValue.seconds / 60) },
+                                            set: { set.wrappedValue.seconds = Int(min($0.rounded(), 600)) * 60 }),
+                             decimal: false, placeholder: "min",
+                             focus: $focusedSet, id: set.wrappedValue.id,
+                             disabled: set.wrappedValue.done)
+                    .frame(width: 56)
+                    .padding(.vertical, 6)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+                Text("min").font(.footnote).foregroundStyle(.secondary)
+            } else {
+                NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "+kg" : "kg",
+                             focus: $focusedSet, id: set.wrappedValue.id,
+                             disabled: set.wrappedValue.done)
+                    .frame(width: 56)
+                    .padding(.vertical, 6)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+                NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
+                                            set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
+                             decimal: false, placeholder: "reps",
+                             focus: $focusedSet, id: nil,
+                             disabled: set.wrappedValue.done)
+                    .frame(width: 48)
+                    .padding(.vertical, 6)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+            }
             Spacer()
             Button {
                 withAnimation(.snappy(duration: 0.25)) {
@@ -1135,15 +1203,16 @@ struct TrainingView: View {
                     if set.wrappedValue.done {
                         if !set.wrappedValue.warmup {
                             let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
-                                             dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure)
+                                             dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
+                                             seconds: set.wrappedValue.seconds)
                             context.insert(e)
                             set.wrappedValue.savedEntry = e
                         }
-                        // Warming-up en tussen-superset-sets: geen (of minimale) rust
-                        if !set.wrappedValue.warmup, shouldRest(after: exercise) {
+                        // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
+                        if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
                             WorkoutStatus.shared.startRest(seconds: restFor(exercise))
                         }
-                        if !set.wrappedValue.warmup,
+                        if !set.wrappedValue.warmup, !cardio,
                            isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps) {
                             prToast = "🏆 Record — \(exercise)!"
                         }
@@ -1152,6 +1221,7 @@ struct TrainingView: View {
                         let e = set.wrappedValue.savedEntry ?? sets.first {
                             $0.exercise == exercise && $0.date >= startedAt
                                 && $0.weightKg == set.wrappedValue.kg && $0.reps == set.wrappedValue.reps
+                                && $0.seconds == set.wrappedValue.seconds
                         }
                         if let e, !e.isDeleted { context.delete(e) }
                         set.wrappedValue.savedEntry = nil
@@ -1221,14 +1291,23 @@ struct WorkoutSummarySheet: View {
             .padding(.bottom, 8)
         }
         .safeAreaInset(edge: .bottom) {
-            Button {
-                dismiss()
-            } label: {
-                Text("Klaar")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
+            HStack(spacing: 12) {
+                ShareLink(item: summary.shareText) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.headline)
+                        .frame(height: 22)
+                        .padding(.horizontal, 6)
+                }
+                .buttonStyle(.bordered)
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Klaar")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
             .padding(.horizontal, 24)
             .padding(.vertical, 10)
             .background(.regularMaterial)
@@ -1332,6 +1411,19 @@ struct SessionDetailView: View {
     private func reps(_ set: SetEntry) -> Binding<Double> {
         Binding(get: { Double(set.reps) }, set: { set.reps = Int(min($0.rounded(), 9999)) })
     }
+    private func minutes(_ set: SetEntry) -> Binding<Double> {
+        Binding(get: { Double(set.seconds / 60) }, set: { set.seconds = Int(min($0.rounded(), 600)) * 60 })
+    }
+
+    private var shareText: String {
+        workoutShareText(title: "Training van \(day.formatted(.dateTime.weekday(.wide).day().month()))",
+                         duration: durationText, volume: volume, sets: daySets.count,
+                         lines: byExercise.map { group in
+                             let bw = exercises.isBodyweight(group.name)
+                             return "\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+                         },
+                         prs: prs)
+    }
 
     var body: some View {
         List {
@@ -1371,18 +1463,27 @@ struct SessionDetailView: View {
                                 .font(.subheadline.monospacedDigit().bold())
                                 .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                                 .frame(width: 40, alignment: .leading)
-                            NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "+kg" : "kg",
-                                         focus: $focused, id: nil, disabled: false)
-                                .frame(width: 64)
-                                .padding(.vertical, 6)
-                                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                            Text(exercises.isBodyweight(group.name) ? "+kg" : "kg").font(.footnote).foregroundStyle(.secondary)
-                            NumericField(value: reps(set), decimal: false, placeholder: "reps",
-                                         focus: $focused, id: nil, disabled: false)
-                                .frame(width: 52)
-                                .padding(.vertical, 6)
-                                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
-                            Text("reps").font(.footnote).foregroundStyle(.secondary)
+                            if exercises.isCardio(group.name) {
+                                NumericField(value: minutes(set), decimal: false, placeholder: "min",
+                                             focus: $focused, id: nil, disabled: false)
+                                    .frame(width: 64)
+                                    .padding(.vertical, 6)
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                                Text("min").font(.footnote).foregroundStyle(.secondary)
+                            } else {
+                                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "+kg" : "kg",
+                                             focus: $focused, id: nil, disabled: false)
+                                    .frame(width: 64)
+                                    .padding(.vertical, 6)
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                                Text(exercises.isBodyweight(group.name) ? "+kg" : "kg").font(.footnote).foregroundStyle(.secondary)
+                                NumericField(value: reps(set), decimal: false, placeholder: "reps",
+                                             focus: $focused, id: nil, disabled: false)
+                                    .frame(width: 52)
+                                    .padding(.vertical, 6)
+                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                                Text("reps").font(.footnote).foregroundStyle(.secondary)
+                            }
                             Spacer()
                         }
                     }
@@ -1392,7 +1493,8 @@ struct SessionDetailView: View {
                     Button {
                         if let last = group.sets.last {
                             context.insert(SetEntry(date: last.date.addingTimeInterval(1),
-                                                    exercise: group.name, weightKg: last.weightKg, reps: last.reps))
+                                                    exercise: group.name, weightKg: last.weightKg, reps: last.reps,
+                                                    seconds: last.seconds))
                         }
                     } label: {
                         Label("Set toevoegen", systemImage: "plus")
@@ -1403,7 +1505,10 @@ struct SessionDetailView: View {
         .tabBarClearance()
         .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { EditButton() }
+        .toolbar {
+            ShareLink(item: shareText)
+            EditButton()
+        }
     }
 
     private func statTile(_ value: String, _ label: String) -> some View {
@@ -1415,20 +1520,32 @@ struct SessionDetailView: View {
     }
 }
 
+/// Preview van een routine: zie wat je gaat doen, pas het aan, of start hem meteen.
 struct RoutineEditorView: View {
     @Bindable var routine: Routine
+    /// nil = alleen bewerken (bijv. vanuit onboarding); anders verschijnt de startknop.
+    var onStart: ((Routine) -> Void)?
     @Environment(\.modelContext) private var context
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
+    @Query private var exercises: [Exercise]
     @State private var showPicker = false
 
     private func subtitle(for name: String) -> String {
         var parts: [String] = []
         if let t = routine.targets[name], t.count > 1 {
-            parts.append("\(t[0]) × \(t[1])")
+            parts.append(exercises.isCardio(name) ? "\(t[1]) min" : "\(t[0]) × \(t[1])")
         }
+        if let group = routine.supersets[name] { parts.append("Superset \(group)") }
         let alts = routine.alternatives[name] ?? []
         if !alts.isEmpty { parts.append("Alt: \(alts.joined(separator: ", "))") }
         return parts.joined(separator: "  ·  ")
+    }
+
+    /// Wat je in totaal gaat doen — de kern van de preview.
+    private var totals: String {
+        let count = routine.exercises.count
+        let setCount = routine.exercises.reduce(0) { $0 + (routine.targets[$1]?.first ?? 3) }
+        return "\(count) oefening\(count == 1 ? "" : "en") · \(setCount) sets"
     }
 
     var body: some View {
@@ -1468,9 +1585,25 @@ struct RoutineEditorView: View {
                     Label("Oefening toevoegen", systemImage: "plus")
                 }
             } header: {
-                Text("Oefeningen — sleep om de volgorde te bepalen")
+                Text(routine.exercises.isEmpty ? "Oefeningen" : "\(totals) — sleep om de volgorde te bepalen")
             } footer: {
                 Text("Tik op een oefening voor sets × reps en alternatieven. Tijdens de training wissel je via het ⋯-menu als een toestel bezet is.")
+            }
+        }
+        // Volgorde telt: de startknop eerst, dan de tab-bar-ruimte eronder.
+        .safeAreaInset(edge: .bottom) {
+            if let onStart, !routine.exercises.isEmpty {
+                Button {
+                    onStart(routine)
+                } label: {
+                    Label("Start deze training", systemImage: "play.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
             }
         }
         .tabBarClearance()
@@ -1490,26 +1623,36 @@ struct RoutineExerciseEditor: View {
     @Bindable var routine: Routine
     let exercise: String
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
+    @Query private var exercises: [Exercise]
     @State private var showAltPicker = false
 
-    private var target: [Int] { routine.targets[exercise] ?? [3, 8] }
+    private var cardio: Bool { exercises.isCardio(exercise) }
+    private var target: [Int] { routine.targets[exercise] ?? (cardio ? [1, 20] : [3, 8]) }
     private func setTarget(sets s: Int, reps r: Int) { routine.targets[exercise] = [s, r] }
 
     var body: some View {
         List {
             Section {
-                Stepper("Sets: \(target[0])", value: Binding(
-                    get: { target[0] },
-                    set: { setTarget(sets: $0, reps: target[1]) }
-                ), in: 1...10)
-                Stepper("Reps: \(target[1])", value: Binding(
-                    get: { target[1] },
-                    set: { setTarget(sets: target[0], reps: $0) }
-                ), in: 1...30)
+                if cardio {
+                    Stepper("Minuten: \(target[1])", value: Binding(
+                        get: { target[1] },
+                        set: { setTarget(sets: 1, reps: $0) }
+                    ), in: 1...180, step: 5)
+                } else {
+                    Stepper("Sets: \(target[0])", value: Binding(
+                        get: { target[0] },
+                        set: { setTarget(sets: $0, reps: target[1]) }
+                    ), in: 1...10)
+                    Stepper("Reps: \(target[1])", value: Binding(
+                        get: { target[1] },
+                        set: { setTarget(sets: target[0], reps: $0) }
+                    ), in: 1...30)
+                }
             } header: {
                 Text("Doel")
             } footer: {
-                Text("Bij het starten van de routine krijg je \(target[0]) sets van \(target[1]) reps voorgezet.")
+                Text(cardio ? "Bij het starten van de routine staat \(target[1]) minuten klaar."
+                            : "Bij het starten van de routine krijg je \(target[0]) sets van \(target[1]) reps voorgezet.")
             }
 
             Section {

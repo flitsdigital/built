@@ -26,7 +26,122 @@ struct InsightsView: View {
     private func perfectDay(_ day: Date) -> Bool {
         DayCheck.perfect(day, proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
                          requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                         sets: sets, trainingDays: profile.trainingDays)
+                         sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+    }
+
+    // MARK: - Correlaties
+    //
+    // Geen statistiek, gewoon twee gemiddeldes naast elkaar: dagen mét X versus dagen
+    // zónder X. Dat is wat je wil weten ("slaap ik beter → train ik zwaarder?") en het
+    // is uitlegbaar. ponytail: pas tonen vanaf 5 dagen per groep, anders is het ruis.
+
+    private func dayVolume(_ day: Date) -> Double {
+        sets.filter { cal.isDate($0.date, inSameDayAs: day) }
+            .map { $0.weightKg * Double($0.reps) }.reduce(0, +)
+    }
+
+    private struct Correlation: Identifiable {
+        let id = UUID()
+        let text: String
+        let delta: Double   // + = de "mét"-groep scoort hoger
+    }
+
+    /// Splitst de laatste 120 dagen op `split` en vergelijkt het gemiddelde van `value`.
+    private func compare(_ label: String, unit: String, days: Int = 120,
+                         split: (Date) -> Bool, splitLabel: (with: String, without: String),
+                         value: (Date) -> Double?) -> Correlation? {
+        var withV: [Double] = [], withoutV: [Double] = []
+        for day in daysBack(days) {
+            guard let v = value(day) else { continue }
+            if split(day) { withV.append(v) } else { withoutV.append(v) }
+        }
+        guard withV.count >= 5, withoutV.count >= 5 else { return nil }
+        let a = withV.reduce(0, +) / Double(withV.count)
+        let b = withoutV.reduce(0, +) / Double(withoutV.count)
+        guard b > 0 || a > 0 else { return nil }
+        let pct = b > 0 ? (a - b) / b * 100 : 0
+        guard abs(pct) >= 5 else { return nil } // te klein om iets te betekenen
+        let fmt = { (d: Double) in unit == "%" ? "\(Int(d))" : d.kgText }
+        return Correlation(
+            text: "\(label): \(fmt(a))\(unit) na \(splitLabel.with), \(fmt(b))\(unit) na \(splitLabel.without)",
+            delta: pct)
+    }
+
+    private func avgCheckIn(_ keyPath: KeyPath<DayHabits, Int>, on day: Date) -> Double? {
+        guard let v = habit(day)?[keyPath: keyPath], v > 0 else { return nil }
+        return Double(v)
+    }
+
+    private var correlations: [Correlation] {
+        var out: [Correlation?] = []
+        // Slaap → volume, energie
+        out.append(compare("Trainingsvolume", unit: " kg",
+                           split: { (habit($0)?.sleepHours ?? 0) >= 7.5 },
+                           splitLabel: ("7,5+ uur slaap", "kortere nachten"),
+                           value: { let v = dayVolume($0); return v > 0 ? v : nil }))
+        out.append(compare("Energie", unit: "/5",
+                           split: { (habit($0)?.sleepHours ?? 0) >= 7.5 },
+                           splitLabel: ("7,5+ uur slaap", "kortere nachten"),
+                           value: { avgCheckIn(\.energy, on: $0) }))
+        // Training → stemming, stress
+        out.append(compare("Stemming", unit: "/5",
+                           split: { trained($0) },
+                           splitLabel: ("trainingsdagen", "rustdagen"),
+                           value: { avgCheckIn(\.mood, on: $0) }))
+        out.append(compare("Stress", unit: "/5",
+                           split: { trained($0) },
+                           splitLabel: ("trainingsdagen", "rustdagen"),
+                           value: { avgCheckIn(\.stress, on: $0) }))
+        // Stappen → energie en slaap
+        out.append(compare("Energie", unit: "/5",
+                           split: { (HealthService.shared.steps(on: $0) ?? 0) >= 8000 },
+                           splitLabel: ("8.000+ stappen", "rustigere dagen"),
+                           value: { avgCheckIn(\.energy, on: $0) }))
+        out.append(compare("Stappen", unit: "",
+                           split: { trained($0) },
+                           splitLabel: ("trainingsdagen", "rustdagen"),
+                           value: { HealthService.shared.steps(on: $0).map(Double.init) }))
+        // Spierpijn → volume van de dag ervoor is te complex; houd het bij eiwit
+        if profile.tracksFood {
+            out.append(compare("Trainingsvolume", unit: " kg",
+                               split: { proteinDone($0) },
+                               splitLabel: ("eiwitdoel gehaald", "eiwitdoel gemist"),
+                               value: { let v = dayVolume($0); return v > 0 ? v : nil }))
+        }
+        return out.compactMap { $0 }.sorted { abs($0.delta) > abs($1.delta) }
+    }
+
+    // MARK: - Jaar-heatmap
+
+    /// 53 weken × 7 dagen, oudste week links — GitHub-stijl, in één blik een jaar terug.
+    private var yearWeeks: [[Date]] {
+        let today = cal.startOfDay(for: .now)
+        // begin bij de maandag van 52 weken geleden, zodat elke kolom een hele week is
+        guard let from = cal.date(byAdding: .day, value: -364, to: today) else { return [] }
+        let weekdayOffset = (cal.component(.weekday, from: from) + 5) % 7 // 0 = maandag
+        guard let start = cal.date(byAdding: .day, value: -weekdayOffset, to: from) else { return [] }
+        var weeks: [[Date]] = []
+        var cursor = start
+        while cursor <= today {
+            var week: [Date] = []
+            for i in 0..<7 {
+                if let d = cal.date(byAdding: .day, value: i, to: cursor) { week.append(d) }
+            }
+            weeks.append(week)
+            guard let next = cal.date(byAdding: .day, value: 7, to: cursor) else { break }
+            cursor = next
+        }
+        return weeks
+    }
+
+    /// Vervulling van een dag (0…1) voor de kleurintensiteit van de heatmap.
+    private func fill(_ day: Date) -> Double {
+        var done = 0.0, total = 0.0
+        for f in factors {
+            total += 1
+            if f.done(day) { done += 1 }
+        }
+        return total > 0 ? done / total : 0
     }
 
     private func daysBack(_ n: Int) -> [Date] {
@@ -38,14 +153,14 @@ struct InsightsView: View {
     private var streak: Int {
         DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                        sets: sets, trainingDays: profile.trainingDays)
+                        sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
     }
 
     private var factors: [(name: String, done: (Date) -> Bool)] {
         var out: [(name: String, done: (Date) -> Bool)] =
-            [("Eiwit", proteinDone),
-             ("Training", trained),
+            [("Training", trained),
              ("Gewicht", weighed)]
+        if profile.tracksFood { out.insert(("Eiwit", proteinDone), at: 0) }
         if profile.tracksCreatine { out.append(("Creatine", { habit($0)?.creatine == true })) }
         if profile.tracksSleep { out.append(("Slaap", { habit($0)?.sleptEnough == true })) }
         for custom in customHabits {
@@ -276,6 +391,36 @@ struct InsightsView: View {
                 Text("De laatste vijf weken — tik op een dag voor het logboek.")
             }
 
+            Section {
+                yearHeatmap
+            } header: {
+                Text("Je jaar")
+            } footer: {
+                Text("Elke kolom is een week, elk blokje een dag — voller groen = meer habits gehaald. Tik op een dag voor het logboek.")
+            }
+
+            Section {
+                if correlations.isEmpty {
+                    Text("Vul je dag-check-in een paar weken in — dan zie je hier wat écht verband houdt met je energie, stemming en training.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(correlations) { c in
+                    Label {
+                        Text(c.text).font(.subheadline)
+                    } icon: {
+                        Image(systemName: c.delta >= 0 ? "arrow.up.right" : "arrow.down.right")
+                            .foregroundStyle(c.delta >= 0 ? .green : .orange)
+                    }
+                }
+            } header: {
+                Text("Verbanden")
+            } footer: {
+                if !correlations.isEmpty {
+                    Text("Gemiddeldes over de laatste 120 dagen, alleen getoond bij 5+ dagen per groep en 5%+ verschil. Verband is geen oorzaak.")
+                }
+            }
+
             Section("Habits per dag") {
                 weekGrid
             }
@@ -379,6 +524,44 @@ struct InsightsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Een jaar in één blik. Horizontaal scrollbaar, nieuwste week rechts.
+    private var yearHeatmap: some View {
+        let today = cal.startOfDay(for: .now)
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 3) {
+                    ForEach(Array(yearWeeks.enumerated()), id: \.offset) { index, week in
+                        VStack(spacing: 3) {
+                            ForEach(week, id: \.self) { day in
+                                if day > today {
+                                    Color.clear.frame(width: 13, height: 13)
+                                } else {
+                                    Button {
+                                        selectedDayBox = DayBox(day: day)
+                                    } label: {
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(Color.muscleTint(fill(day)))
+                                            .frame(width: 13, height: 13)
+                                            .overlay {
+                                                if cal.isDateInToday(day) {
+                                                    RoundedRectangle(cornerRadius: 3).strokeBorder(.green, lineWidth: 1.5)
+                                                }
+                                            }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel(day.formatted(date: .abbreviated, time: .omitted))
+                                }
+                            }
+                        }
+                        .id(index)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .onAppear { proxy.scrollTo(yearWeeks.count - 1, anchor: .trailing) }
+        }
     }
 
     private var volumeChart: some View {

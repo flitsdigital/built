@@ -16,6 +16,7 @@ struct DashboardView: View {
 
     @State private var showWeightSheet = false
     @State private var showSleepSheet = false
+    @State private var showCheckIn = false
     @State private var showWeeklyReview = false
     @AppStorage("lastReviewWeek") private var lastReviewWeek = 0
     @State private var appeared = false
@@ -29,6 +30,7 @@ struct DashboardView: View {
     @State private var swipeActive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let syncStatus = SyncStatus.shared
+    private let health = HealthService.shared
 
     private var cal: Calendar { .current }
     private var today: Date { cal.startOfDay(for: .now) }
@@ -45,9 +47,15 @@ struct DashboardView: View {
     }
 
     /// Vervulling van een dag (0…100), zelfde weging als de Groei Score.
+    /// Zonder eten-tracking vervallen de 30 eiwitpunten en schaalt de rest mee,
+    /// anders is 100 onbereikbaar en liegt de score over je dag.
     private func scoreOn(_ day: Date) -> Int {
-        var raw = min(30, Int(30.0 * Double(proteinOn(day)) / Double(max(profile.proteinTarget, 1))))
-        var maxPoints = 70
+        var raw = 0
+        var maxPoints = 40
+        if profile.tracksFood {
+            maxPoints += 30
+            raw += min(30, Int(30.0 * Double(proteinOn(day)) / Double(max(profile.proteinTarget, 1))))
+        }
         if trainedOn(day) || restDayOn(day) { raw += 25 }
         if weightLoggedOn(day) { raw += 15 }
         let h = habitsOn(day)
@@ -84,7 +92,19 @@ struct DashboardView: View {
     private var streak: Int {
         DayCheck.streak(proteins: proteins, weights: weights, habits: habits, target: profile.proteinTarget,
                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                        sets: sets, trainingDays: profile.trainingDays)
+                        sets: sets, trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+    }
+
+    // MARK: - Streak per habit (🔥5 naast de rij)
+
+    private func streakTrained() -> Int { habitStreak { trainedOn($0) || restDayOn($0) } }
+    private func streakWeighed() -> Int { habitStreak { weightLoggedOn($0) } }
+    private func streakCreatine() -> Int { habitStreak { habitsOn($0)?.creatine == true } }
+    private func streakSlept() -> Int { habitStreak { habitsOn($0)?.sleptEnough == true } }
+    private func streakJournal() -> Int { habitStreak { d in habitsOn(d)?.journal.contains { !$0.text.isEmpty } == true } }
+    private func streakCheckIn() -> Int { habitStreak { habitsOn($0)?.checkedIn == true } }
+    private func streakCustom(_ name: String) -> Int {
+        habitStreak { d in habitLogs.contains { $0.name == name && cal.isDate($0.date, inSameDayAs: d) } }
     }
 
     private var proteinRemaining: Int { max(profile.proteinTarget - proteinOn(selectedDay), 0) }
@@ -177,6 +197,7 @@ struct DashboardView: View {
                 .allowsHitTesting(false)
         }
         .toolbar(.hidden, for: .navigationBar)
+        .task { await health.refreshIfEnabled() }
         .onAppear {
             appeared = true
             writeSnapshot()
@@ -199,6 +220,10 @@ struct DashboardView: View {
                 selectedTab = 2
             case "training":
                 selectedTab = 1
+            case "checkin":
+                selectedTab = 0
+                selectedDay = today // check-in gaat altijd over vandaag
+                showCheckIn = true
             case "review":
                 showWeeklyReview = true
             default:
@@ -210,6 +235,7 @@ struct DashboardView: View {
         .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: selectedDay) }
         .sheet(isPresented: $showSleepSheet) { SleepSheet(day: selectedDay) }
+        .sheet(isPresented: $showCheckIn) { CheckInSheet(day: selectedDay) }
     }
 
     // MARK: - Kaarten
@@ -290,7 +316,7 @@ struct DashboardView: View {
                        trained: trainedOn(today), creatine: h?.creatine == true,
                        weighed: weightLoggedOn(today), slept: h?.sleptEnough == true,
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
-                       restDay: restDayOn(today)).save()
+                       restDay: restDayOn(today), showFood: profile.tracksFood).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -357,8 +383,9 @@ struct DashboardView: View {
     private var dayCards: some View {
         VStack(spacing: 16) {
             scoreCard
-            proteinCard
-            checklistCard
+            checklistCard          // habits eerst — dat is de kern
+            checkInCard
+            if profile.tracksFood { proteinCard } // eten is extra
         }
         .id(selectedDay)
         .transition(reduceMotion
@@ -450,41 +477,101 @@ struct DashboardView: View {
         return card {
             checkRow(icon: "dumbbell.fill", color: .orange,
                      title: restDayOn(selectedDay) && !trainedOn(selectedDay) ? "Rustdag (volgens plan)" : "Training",
-                     done: trainedOn(selectedDay) || restDayOn(selectedDay)) { selectedTab = 1 }
+                     done: trainedOn(selectedDay) || restDayOn(selectedDay),
+                     streak: streakTrained()) { selectedTab = 1 }
             if profile.tracksCreatine {
                 Divider()
                 checkRow(icon: "pills.fill", color: .teal, title: "Creatine",
-                         done: h?.creatine == true) { toggleHabit(\.creatine) }
+                         done: h?.creatine == true, streak: streakCreatine()) { toggleHabit(\.creatine) }
             }
             Divider()
             checkRow(icon: "scalemass.fill", color: .purple, title: weightRowTitle,
-                     done: weightLoggedOn(selectedDay)) { showWeightSheet = true }
+                     done: weightLoggedOn(selectedDay), streak: streakWeighed()) { showWeightSheet = true }
             if profile.tracksSleep {
                 Divider()
                 checkRow(icon: "moon.fill", color: .indigo, title: sleepText,
                          done: h?.sleptEnough == true,
-                         missed: h?.sleepHours != nil && h?.sleptEnough != true) {
+                         missed: h?.sleepHours != nil && h?.sleptEnough != true,
+                         streak: streakSlept()) {
                     showSleepSheet = true
                 }
+            }
+            if let steps = healthSteps(on: selectedDay) {
+                Divider()
+                checkRowLabel(icon: "figure.walk", color: .cyan,
+                              title: "\(steps.formatted()) stappen", done: steps >= 8000,
+                              streak: habitStreak { (healthSteps(on: $0) ?? 0) >= 8000 })
             }
             Divider()
             NavigationLink {
                 DayDetailView(day: selectedDay, profile: profile)
             } label: {
                 checkRowLabel(icon: "book.closed", color: .gray, title: "Journal",
-                              done: h?.journal.contains { !$0.text.isEmpty } ?? false)
+                              done: h?.journal.contains { !$0.text.isEmpty } ?? false,
+                              streak: streakJournal())
             }
             .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
                 Divider()
                 checkRow(icon: "star.fill", color: .mint, title: habit.name,
-                         done: customDone(habit.name)) { toggleCustom(habit.name) }
+                         done: customDone(habit.name), streak: streakCustom(habit.name)) { toggleCustom(habit.name) }
             }
             Text("Slaaptijden, kwaliteit en langere notities: tik op Journal.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
     }
+
+    // MARK: - Dag-check-in
+
+    /// Ingevuld = compacte samenvatting; leeg = uitnodiging. De vragen zelf staan in
+    /// de drawer, met grote knoppen — één vraag tegelijk leest makkelijker dan vier rijtjes.
+    private var checkInCard: some View {
+        let h = habitsOn(selectedDay)
+        let answers: [(String, Int)] = [("😵🥱🙂💪⚡️", h?.energy ?? 0), ("😞😕😐🙂😄", h?.mood ?? 0),
+                                        ("✅🙂😬😖🥵", h?.soreness ?? 0), ("😌🙂😐😰🤯", h?.stress ?? 0),
+                                        ("😴🙂😃", h?.sleepQuality ?? 0)]
+        return Button {
+            if !swipeActive { showCheckIn = true }
+        } label: {
+            card {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 8) {
+                            Text("Hoe was je dag?")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            streakBadge(streakCheckIn())
+                        }
+                        Text(h?.checkedIn == true ? "Tik om aan te passen" : "5 korte vragen · ±20 seconden")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if h?.checkedIn == true {
+                        HStack(spacing: 3) {
+                            ForEach(Array(answers.enumerated()), id: \.offset) { _, a in
+                                let icons = Array(a.0.map(String.init))
+                                Text(a.1 > 0 ? icons[a.1 - 1] : "·")
+                                    .font(.system(size: 17))
+                                    .grayscale(a.1 > 0 ? 0 : 1)
+                                    .opacity(a.1 > 0 ? 1 : 0.3)
+                            }
+                        }
+                    } else {
+                        Text("Start")
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(.green, in: Capsule())
+                    }
+                }
+            }
+        }
+        .buttonStyle(PressableStyle(scale: 0.985))
+    }
+
+    private func healthSteps(on day: Date) -> Int? { health.steps(on: day) }
 
     private func customDone(_ name: String) -> Bool {
         habitLogs.contains { $0.name == name && cal.isDate($0.date, inSameDayAs: selectedDay) }
@@ -499,14 +586,32 @@ struct DashboardView: View {
     }
 
     /// done = gehaald (groen ✓), missed = wel gelogd maar niet gehaald (oranje ⃠), anders open (leeg bolletje).
-    private func checkRow(icon: String, color: Color, title: String, done: Bool, missed: Bool = false, action: @escaping () -> Void) -> some View {
+    private func checkRow(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
+                          streak: Int = 0, action: @escaping () -> Void) -> some View {
         Button { if !swipeActive { action() } } label: {
-            checkRowLabel(icon: icon, color: color, title: title, done: done, missed: missed)
+            checkRowLabel(icon: icon, color: color, title: title, done: done, missed: missed, streak: streak)
         }
         .buttonStyle(PressableStyle())
     }
 
-    private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false) -> some View {
+    /// ponytail: pas vanaf 2 dagen — "🔥1" is geen reeks en devalueert het vlammetje.
+    @ViewBuilder private func streakBadge(_ days: Int) -> some View {
+        if days >= 2 {
+            HStack(spacing: 2) {
+                Text("🔥").font(.caption2)
+                Text("\(days)").font(.caption2.bold().monospacedDigit())
+            }
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(.orange.opacity(0.15), in: Capsule())
+            .foregroundStyle(.orange)
+            .contentTransition(.numericText())
+            .animation(.snappy(duration: 0.25), value: days)
+            .accessibilityLabel("\(days) dagen op rij")
+        }
+    }
+
+    private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
+                               streak: Int = 0) -> some View {
         HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 8)
                 .fill(color.opacity(0.18))
@@ -519,6 +624,8 @@ struct DashboardView: View {
             Text(title)
                 .foregroundStyle(done ? .secondary : .primary)
                 .strikethrough(done, color: .secondary)
+                .lineLimit(1)
+            streakBadge(streak)
             Spacer()
             Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
                 .font(.title3)

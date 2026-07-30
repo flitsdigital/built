@@ -21,7 +21,8 @@ struct RecordsView: View {
     private var records: [Record] {
         let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
         var out: [Record] = []
-        for (name, group) in Dictionary(grouping: sets, by: \.exercise) {
+        // ponytail: cardio kent geen 1RM/gewicht — hoort niet op de PR-muur
+        for (name, group) in Dictionary(grouping: sets, by: \.exercise) where !exercises.isCardio(name) {
             let e1rm = group.map { epley($0.weightKg, $0.reps) }.max() ?? 0
             let topWeight = group.map(\.weightKg).max() ?? 0
             let byDay = Dictionary(grouping: group) { cal.startOfDay(for: $0.date) }

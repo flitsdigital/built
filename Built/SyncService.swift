@@ -42,6 +42,7 @@ enum Sync {
         var training_days: [Int]
         var kcal_target: Int
         var schedule: [String: String]
+        var tracks_food: Bool? = true
     }
     private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
     private struct ProteinRow: Codable {
@@ -58,6 +59,7 @@ enum Sync {
         var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
         // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var dropset: Bool? = false; var failure: Bool? = false
+        var seconds: Int? = 0
     }
     private struct HabitsRow: Codable {
         var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
@@ -65,6 +67,10 @@ enum Sync {
         // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var journal: [JournalNote]? = []
         var workout_note: String? = ""
+        var energy: Int? = 0
+        var mood: Int? = 0
+        var soreness: Int? = 0
+        var stress: Int? = 0
     }
     private struct RoutineRow: Codable {
         var user_id: UUID; var name: String; var exercises: [String]
@@ -130,7 +136,7 @@ enum Sync {
                                    trainings_per_week: profile.trainingsPerWeek,
                                    tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep,
                                    training_days: profile.trainingDays, kcal_target: profile.kcalTarget,
-                                   schedule: profile.schedule)
+                                   schedule: profile.schedule, tracks_food: profile.tracksFood)
         }
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
@@ -139,11 +145,12 @@ enum Sync {
                               kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
             .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps,
-                          dropset: $0.dropset, failure: $0.failure) }
+                          dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
             .map { HabitsRow(user_id: uid, date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
                              note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality,
-                             journal: $0.journal, workout_note: $0.workoutNote) }
+                             journal: $0.journal, workout_note: $0.workoutNote,
+                             energy: $0.energy, mood: $0.mood, soreness: $0.soreness, stress: $0.stress) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
             .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises,
                               alternatives: $0.alternatives, targets: $0.targets,
@@ -226,6 +233,7 @@ enum Sync {
         profile.trainingDays = profileRow.training_days
         profile.kcalTarget = profileRow.kcal_target
         profile.schedule = profileRow.schedule
+        profile.tracksFood = profileRow.tracks_food ?? true
         context.insert(profile)
 
         for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
@@ -234,7 +242,8 @@ enum Sync {
                                         kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal))
         }
         for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps,
-                                                    dropset: r.dropset ?? false, failure: r.failure ?? false)) }
+                                                    dropset: r.dropset ?? false, failure: r.failure ?? false,
+                                                    seconds: r.seconds ?? 0)) }
         for r in habitRows {
             let h = DayHabits(date: r.date, creatine: r.creatine, sleptEnough: r.slept_enough)
             h.note = r.note
@@ -243,6 +252,10 @@ enum Sync {
             h.sleepQuality = r.sleep_quality
             h.journal = r.journal ?? []
             h.workoutNote = r.workout_note ?? ""
+            h.energy = r.energy ?? 0
+            h.mood = r.mood ?? 0
+            h.soreness = r.soreness ?? 0
+            h.stress = r.stress ?? 0
             context.insert(h)
         }
         for r in routineRows {

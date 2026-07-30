@@ -138,6 +138,8 @@ final class Profile {
     var trainingsPerWeek: Int
     var tracksCreatine: Bool = true
     var tracksSleep: Bool = true
+    /// Eten bijhouden. Uit = eiwit telt niet mee voor score/streak en verdwijnt van het dashboard.
+    var tracksFood: Bool = true
     /// Handmatig calorie-doel; 0 = automatisch berekenen uit lengte/gewicht/doel.
     var kcalTarget: Int = 0
     /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
@@ -248,11 +250,24 @@ func epley(_ weight: Double, _ reps: Int) -> Double {
     reps <= 1 ? weight : weight * (1 + Double(reps) / 30)
 }
 
-/// Set-notatie voor overzichten. Bodyweight zonder extra gewicht toont alleen reps
-/// (bijv. "×8"); met extra gewicht "+5×8"; anders het gewone "40×8".
-func setNotation(kg: Double, reps: Int, bodyweight: Bool) -> String {
+/// Set-notatie voor overzichten. Cardio toont de duur ("25 min"); bodyweight zonder
+/// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; anders "40×8".
+func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0) -> String {
+    if seconds > 0 { return "\(seconds / 60) min" }
     guard bodyweight else { return "\(kg.kgText)×\(reps)" }
     return kg > 0 ? "+\(kg.kgText)×\(reps)" : "×\(reps)"
+}
+
+/// Platte tekst van een afgeronde training om te delen — werkt in elke app.
+func workoutShareText(title: String, duration: String, volume: Int, sets: Int,
+                      lines: [String], prs: [(exercise: String, new: Double, old: Double)]) -> String {
+    var out = ["💪 \(title)", "\(duration) · \(volume) kg volume · \(sets) sets", ""]
+    out += lines
+    if !prs.isEmpty {
+        out.append("")
+        out += prs.map { "🏆 \($0.exercise): e1RM \($0.new.kgText) kg (was \($0.old.kgText))" }
+    }
+    return out.joined(separator: "\n")
 }
 
 /// Effectieve last voor volume/spierkaart: bodyweight-oefeningen tellen mee met
@@ -380,14 +395,17 @@ final class SetEntry {
     var reps: Int
     var dropset: Bool = false
     var failure: Bool = false
+    /// Duur voor cardio-oefeningen in seconden; 0 = gewone krachtset.
+    var seconds: Int = 0
     init(date: Date = .now, exercise: String, weightKg: Double, reps: Int,
-         dropset: Bool = false, failure: Bool = false) {
+         dropset: Bool = false, failure: Bool = false, seconds: Int = 0) {
         self.date = date
         self.exercise = exercise
         self.weightKg = weightKg
         self.reps = reps
         self.dropset = dropset
         self.failure = failure
+        self.seconds = seconds
     }
 }
 
@@ -420,6 +438,11 @@ final class DayHabits {
     var bedTime: Date?
     var wakeTime: Date?
     var sleepQuality: Int = 0 // 0 = niet ingevuld, 1-3 = slecht/oké/goed
+    /// Dag-check-in, allemaal 0 = niet ingevuld, 1–5 = laag…hoog.
+    var energy: Int = 0
+    var mood: Int = 0
+    var soreness: Int = 0
+    var stress: Int = 0
     /// Journal: meerdere getimede notities per dag.
     var journal: [JournalNote] = []
     /// Algemene notitie bij de training van die dag (los van de per-oefening notities).
@@ -436,6 +459,23 @@ final class DayHabits {
         if h < 0 { h += 24 }
         return h
     }
+
+    /// Dag-check-in ingevuld? Eén van de vier is genoeg — anders voelt het als huiswerk.
+    var checkedIn: Bool { energy > 0 || mood > 0 || soreness > 0 || stress > 0 }
+}
+
+/// Aaneengesloten dagen tot vandaag waarop `done` geldt; vandaag mag nog open staan.
+/// ponytail: zelfde vorm als DayCheck.streak, maar voor één losse habit.
+func habitStreak(_ done: (Date) -> Bool) -> Int {
+    let cal = Calendar.current
+    var count = 0
+    for n in 0..<365 {
+        guard let day = cal.date(byAdding: .day, value: -n, to: cal.startOfDay(for: .now)) else { break }
+        if done(day) { count += 1 }
+        else if n == 0 { continue } // vandaag mag nog open staan
+        else { break }
+    }
+    return count
 }
 
 extension Array where Element == WeightEntry {
@@ -463,9 +503,10 @@ enum DayCheck {
     /// Met geplande trainingsdagen telt training/rustdag-volgens-plan mee (North Star).
     static func perfect(_ day: Date, proteins: [ProteinEntry], weights: [WeightEntry], habits: [DayHabits],
                         target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
-                        sets: [SetEntry] = [], trainingDays: [Int] = []) -> Bool {
+                        sets: [SetEntry] = [], trainingDays: [Int] = [], requireFood: Bool = true) -> Bool {
         let cal = Calendar.current
-        let proteinDone = proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= target
+        let proteinDone = !requireFood
+            || proteins.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.grams).reduce(0, +) >= target
         let weighed = weights.contains { cal.isDate($0.date, inSameDayAs: day) }
         let h = habits.first { cal.isDate($0.date, inSameDayAs: day) }
         let creatineOK = !requireCreatine || h?.creatine == true
@@ -479,14 +520,14 @@ enum DayCheck {
 
     static func streak(proteins: [ProteinEntry], weights: [WeightEntry], habits: [DayHabits],
                        target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
-                       sets: [SetEntry] = [], trainingDays: [Int] = []) -> Int {
+                       sets: [SetEntry] = [], trainingDays: [Int] = [], requireFood: Bool = true) -> Int {
         let cal = Calendar.current
         var count = 0
         for n in 0..<365 {
             guard let day = cal.date(byAdding: .day, value: -n, to: cal.startOfDay(for: .now)) else { break }
             if perfect(day, proteins: proteins, weights: weights, habits: habits, target: target,
                        requireCreatine: requireCreatine, requireSleep: requireSleep,
-                       sets: sets, trainingDays: trainingDays) { count += 1 }
+                       sets: sets, trainingDays: trainingDays, requireFood: requireFood) { count += 1 }
             else if n == 0 { continue } // vandaag mag nog open staan
             else { break }
         }

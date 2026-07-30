@@ -17,6 +17,8 @@ struct ProfileView: View {
     @AppStorage("notifWeekOn") private var notifWeekOn = true
     @AppStorage("notifReviewOn") private var notifReviewOn = true
     @AppStorage("notifRestOn") private var notifRestOn = true
+    @AppStorage("healthStepsOn") private var healthOn = false
+    @AppStorage("notifCheckInOn") private var notifCheckInOn = true
 
     @State private var showAddScale = false
     @State private var scaleName = ""
@@ -42,7 +44,7 @@ struct ProfileView: View {
     ]
 
     private var activeNotifs: Int {
-        [notifMorningOn, notifEveningOn, notifStreakOn, notifWeekOn, notifReviewOn, notifRestOn]
+        [notifMorningOn, notifEveningOn, notifStreakOn, notifWeekOn, notifReviewOn, notifRestOn, notifCheckInOn]
             .filter { $0 }.count
     }
 
@@ -189,10 +191,29 @@ struct ProfileView: View {
             Section {
                 Toggle("Creatine bijhouden", isOn: $profile.tracksCreatine)
                 Toggle("Slaap bijhouden", isOn: $profile.tracksSleep)
+                Toggle("Eten bijhouden", isOn: $profile.tracksFood)
             } header: {
                 Text("Kern-habits")
             } footer: {
-                Text("Je Groei Score telt nu: eiwit, wegen, training\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""). Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen.")
+                Text("Je Groei Score telt nu: wegen, training\(profile.tracksFood ? ", eiwit" : "")\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""). Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen. Eten uit? Dan blijft de Eten-tab gewoon werken, maar staat hij niet meer op je dashboard.")
+            }
+
+            Section {
+                Toggle("Stappen uit Health", isOn: Binding(
+                    get: { healthOn },
+                    set: { on in
+                        healthOn = on
+                        if on { Task { await HealthService.shared.requestAndRefresh() } }
+                        else { HealthService.shared.disable() }
+                    }
+                ))
+                .disabled(!HealthService.shared.isAvailable)
+            } header: {
+                Text("Health")
+            } footer: {
+                Text(HealthService.shared.isAvailable
+                     ? "Leest alleen je dagelijkse stappen — nul werk voor jou, en het voedt de correlaties in Inzicht. Zonder Apple Watch is dit het enige zinvolle dat je iPhone bijhoudt."
+                     : "Health is niet beschikbaar op dit toestel.")
             }
 
             Section("Eigen habits") {
@@ -684,6 +705,7 @@ struct NotificationsSettingsView: View {
     @AppStorage("notifWeekOn") private var weekOn = true
     @AppStorage("notifReviewOn") private var reviewOn = true
     @AppStorage("notifRestOn") private var restOn = true
+    @AppStorage("notifCheckInOn") private var checkInOn = true
 
     private func timeBinding(_ minutes: Binding<Int>) -> Binding<Date> {
         Binding(
@@ -708,10 +730,11 @@ struct NotificationsSettingsView: View {
                 if eveningOn {
                     DatePicker("Tijd", selection: timeBinding($eveningTime), displayedComponents: .hourAndMinute)
                 }
+                Toggle("Dag-check-in (21:00)", isOn: $checkInOn)
             } header: {
                 Text("Dagelijks")
             } footer: {
-                Text("Stil bij succes: al gewogen of dag al binnen → geen melding. De avondcheck vertelt precies wat er nog openstaat, met knoppen om direct te loggen.")
+                Text("Stil bij succes: al gewogen of dag al binnen → geen melding. De avondcheck vertelt precies wat er nog openstaat, met knoppen om direct te loggen. De check-in vraagt naar energie, stemming, spierpijn en stress — dat voedt je correlaties in Inzicht.")
             }
 
             Section {

@@ -14,6 +14,7 @@ struct WidgetSnapshot: Codable {
     var showCreatine: Bool? = true
     var showSleep: Bool? = true
     var restDay: Bool? = false
+    var showFood: Bool? = true
 
     static let appGroup = "group.com.jordiklavers.Built"
 
