@@ -9,7 +9,6 @@ struct ProfileView: View {
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
 
     @AppStorage("restSeconds") private var restSeconds = 120
-    @AppStorage("lastSync") private var lastBackup = 0.0
     // Zelfde keys als NotificationsSettingsView → status-badge blijft live kloppen
     @AppStorage("notifMorningOn") private var notifMorningOn = false
     @AppStorage("notifEveningOn") private var notifEveningOn = false
@@ -307,9 +306,14 @@ struct ProfileView: View {
                 }
 
                 Section {
-                    LabeledContent("Automatische sync", value: lastBackup > 0
-                        ? "Laatst: \(Date(timeIntervalSinceReferenceDate: lastBackup).formatted(date: .abbreviated, time: .shortened))"
-                        : "Nog niet gesynct")
+                    LabeledContent("Automatische sync", value: syncStatus.lastSuccess
+                        .map { "Laatst: \($0.formatted(date: .abbreviated, time: .shortened))" }
+                        ?? "Nog niet gesynct")
+                    if let last = syncStatus.lastSuccess, syncStatus.isStale {
+                        Text("Laatst gelukt \(last.formatted(.relative(presentation: .named))). Met verbinding gaat het vanzelf verder; \"Sync nu\" probeert het meteen.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     if let error = syncStatus.lastError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote)
@@ -528,7 +532,6 @@ struct ProfileView: View {
         Task {
             do {
                 try await Sync.push(context)
-                lastBackup = Date.now.timeIntervalSinceReferenceDate
                 backupMessage = "Gesynct ✓"
             } catch {
                 backupMessage = "Mislukt: \(error.localizedDescription)"

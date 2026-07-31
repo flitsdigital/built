@@ -24,6 +24,22 @@ final class SyncStatus {
     static let shared = SyncStatus()
     var lastError: String?
     var lastSyncAt: Date?
+
+    /// Laatste geslaagde sync, ook van vóór deze app-start: `lastSyncAt` begint bij
+    /// elke start op nil, de timestamp in UserDefaults overleeft dat.
+    var lastSuccess: Date? {
+        if let lastSyncAt { return lastSyncAt }
+        let stamp = UserDefaults.standard.double(forKey: "lastSync")
+        return stamp > 0 ? Date(timeIntervalSinceReferenceDate: stamp) : nil
+    }
+
+    /// Langer dan een dag geleden gesynct. Een mislukte push zet geen foutmelding als
+    /// het toestel simpelweg offline is, dus dit is vaak het enige signaal dat er iets
+    /// klemt. Nooit gesynct telt niet mee — dat is gewoon een verse install.
+    var isStale: Bool {
+        guard let lastSuccess else { return false }
+        return Date.now.timeIntervalSince(lastSuccess) > 24 * 60 * 60
+    }
 }
 
 // Supabase is de source of truth: de app pusht wijzigingen automatisch en een lege
@@ -212,6 +228,8 @@ enum Sync {
         }
         lastPushedHash = try hash(p)
         pushAllowed = true // expliciete push = bewuste overschrijving
+        pushFailures = 0
+        retryPushAfter = nil
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = .now
         UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
@@ -241,90 +259,94 @@ enum Sync {
         let customRows: [CustomHabitRow] = try await db.from("custom_habits").select().eq("user_id", value: uid).execute().value
         let logRows: [HabitLogRow] = try await db.from("habit_logs").select().eq("user_id", value: uid).execute().value
 
-        try wipeLocal(context)
+        // Wissen en terugzetten in één transactie: wordt de app er middenin afgeschoten,
+        // dan blijft de oude lokale staat staan i.p.v. een half gevulde database.
+        try context.transaction {
+            try wipeLocal(context)
 
-        let profile = Profile(name: profileRow.name, age: profileRow.age, heightCm: profileRow.height_cm,
-                              startWeight: profileRow.start_weight, goalWeight: profileRow.goal_weight,
-                              goalDate: profileRow.goal_date, trainingsPerWeek: profileRow.trainings_per_week)
-        profile.startDate = profileRow.start_date
-        profile.tracksCreatine = profileRow.tracks_creatine
-        profile.tracksSleep = profileRow.tracks_sleep
-        profile.trainingDays = profileRow.training_days
-        profile.kcalTarget = profileRow.kcal_target
-        profile.schedule = profileRow.schedule
-        profile.tracksFood = profileRow.tracks_food ?? true
-        context.insert(profile)
+            let profile = Profile(name: profileRow.name, age: profileRow.age, heightCm: profileRow.height_cm,
+                                  startWeight: profileRow.start_weight, goalWeight: profileRow.goal_weight,
+                                  goalDate: profileRow.goal_date, trainingsPerWeek: profileRow.trainings_per_week)
+            profile.startDate = profileRow.start_date
+            profile.tracksCreatine = profileRow.tracks_creatine
+            profile.tracksSleep = profileRow.tracks_sleep
+            profile.trainingDays = profileRow.training_days
+            profile.kcalTarget = profileRow.kcal_target
+            profile.schedule = profileRow.schedule
+            profile.tracksFood = profileRow.tracks_food ?? true
+            context.insert(profile)
 
-        for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
-        for r in proteins {
-            context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label,
-                                        kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal,
-                                        amount: r.amount ?? 0,
-                                        unit: FoodUnit(rawValue: r.unit ?? "g") ?? .gram))
+            for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
+            for r in proteins {
+                context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label,
+                                            kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal,
+                                            amount: r.amount ?? 0,
+                                            unit: FoodUnit(rawValue: r.unit ?? "g") ?? .gram))
+            }
+            for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps,
+                                                        dropset: r.dropset ?? false, failure: r.failure ?? false,
+                                                        seconds: r.seconds ?? 0)) }
+            for r in habitRows {
+                let h = DayHabits(date: r.date, creatine: r.creatine, sleptEnough: r.slept_enough)
+                h.note = r.note
+                h.bedTime = r.bed_time
+                h.wakeTime = r.wake_time
+                h.sleepQuality = r.sleep_quality
+                h.journal = r.journal ?? []
+                h.workoutNote = r.workout_note ?? ""
+                h.energy = r.energy ?? 0
+                h.mood = r.mood ?? 0
+                h.soreness = r.soreness ?? 0
+                h.stress = r.stress ?? 0
+                h.exerciseNotes = r.exercise_notes ?? [:]
+                context.insert(h)
+            }
+            for r in routineRows {
+                let routine = Routine(name: r.name, exercises: r.exercises)
+                routine.alternatives = r.alternatives
+                routine.targets = r.targets
+                routine.supersets = r.supersets
+                routine.restByExercise = r.rest_by_exercise
+                routine.createdAt = r.created_at
+                context.insert(routine)
+            }
+            for r in mealRows {
+                let meal = Meal(name: r.name, protein: r.protein, kcal: r.kcal)
+                meal.createdAt = r.created_at
+                meal.servings = r.servings
+                meal.ingredients = r.ingredients
+                meal.favorite = r.favorite
+                context.insert(meal)
+            }
+            for r in foodRows {
+                let f = FoodProduct(name: r.name, brand: r.brand, barcode: r.barcode,
+                                    protein100: r.protein100, kcal100: r.kcal100,
+                                    carbs100: r.carbs100, fat100: r.fat100)
+                f.favorite = r.favorite
+                f.imageURL = r.image_url
+                f.servingGrams = r.serving_grams
+                f.servingName = r.serving_name
+                f.createdAt = r.created_at
+                f.unit = r.unit ?? FoodUnit.gram.rawValue
+                f.lastAmount = r.last_amount ?? 0
+                f.categories = r.categories ?? ""
+                context.insert(f)
+            }
+            for r in exerciseRows {
+                let ex = Exercise(name: r.name, muscle: r.muscle, type: r.type)
+                ex.createdAt = r.created_at
+                context.insert(ex)
+            }
+            for r in scaleRows {
+                context.insert(Scale(name: r.name))
+            }
+            for r in customRows {
+                let habit = CustomHabit(name: r.name)
+                habit.createdAt = r.created_at
+                context.insert(habit)
+            }
+            for r in logRows { context.insert(HabitLog(name: r.name, date: r.date)) }
         }
-        for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps,
-                                                    dropset: r.dropset ?? false, failure: r.failure ?? false,
-                                                    seconds: r.seconds ?? 0)) }
-        for r in habitRows {
-            let h = DayHabits(date: r.date, creatine: r.creatine, sleptEnough: r.slept_enough)
-            h.note = r.note
-            h.bedTime = r.bed_time
-            h.wakeTime = r.wake_time
-            h.sleepQuality = r.sleep_quality
-            h.journal = r.journal ?? []
-            h.workoutNote = r.workout_note ?? ""
-            h.energy = r.energy ?? 0
-            h.mood = r.mood ?? 0
-            h.soreness = r.soreness ?? 0
-            h.stress = r.stress ?? 0
-            h.exerciseNotes = r.exercise_notes ?? [:]
-            context.insert(h)
-        }
-        for r in routineRows {
-            let routine = Routine(name: r.name, exercises: r.exercises)
-            routine.alternatives = r.alternatives
-            routine.targets = r.targets
-            routine.supersets = r.supersets
-            routine.restByExercise = r.rest_by_exercise
-            routine.createdAt = r.created_at
-            context.insert(routine)
-        }
-        for r in mealRows {
-            let meal = Meal(name: r.name, protein: r.protein, kcal: r.kcal)
-            meal.createdAt = r.created_at
-            meal.servings = r.servings
-            meal.ingredients = r.ingredients
-            meal.favorite = r.favorite
-            context.insert(meal)
-        }
-        for r in foodRows {
-            let f = FoodProduct(name: r.name, brand: r.brand, barcode: r.barcode,
-                                protein100: r.protein100, kcal100: r.kcal100,
-                                carbs100: r.carbs100, fat100: r.fat100)
-            f.favorite = r.favorite
-            f.imageURL = r.image_url
-            f.servingGrams = r.serving_grams
-            f.servingName = r.serving_name
-            f.createdAt = r.created_at
-            f.unit = r.unit ?? FoodUnit.gram.rawValue
-            f.lastAmount = r.last_amount ?? 0
-            f.categories = r.categories ?? ""
-            context.insert(f)
-        }
-        for r in exerciseRows {
-            let ex = Exercise(name: r.name, muscle: r.muscle, type: r.type)
-            ex.createdAt = r.created_at
-            context.insert(ex)
-        }
-        for r in scaleRows {
-            context.insert(Scale(name: r.name))
-        }
-        for r in customRows {
-            let habit = CustomHabit(name: r.name)
-            habit.createdAt = r.created_at
-            context.insert(habit)
-        }
-        for r in logRows { context.insert(HabitLog(name: r.name, date: r.date)) }
 
         lastPushedHash = try hash(collect(context, uid: uid))
         pushAllowed = true
@@ -365,6 +387,8 @@ enum Sync {
         try? await client?.auth.signOut()
         pushAllowed = false
         lastPushedHash = nil
+        pushFailures = 0
+        retryPushAfter = nil // ander account = schone lei, niet wachten op een oude storing
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = nil
         UserDefaults.standard.removeObject(forKey: "lastSync")
@@ -493,6 +517,11 @@ enum Sync {
     /// complete database, op de main thread, ook als er niets veranderd was.
     private static var dirty = true
 
+    /// Bij een mislukte push wachten we langer dan de vaste 20 seconden. Zonder deze
+    /// rem blijft een langdurige storing (offline, server plat) elke ronde hameren.
+    private static var pushFailures = 0
+    private static var retryPushAfter: Date?
+
     /// Laat de sync-lus weten dat er iets te pushen valt.
     static func markDirty() { dirty = true }
 
@@ -520,11 +549,20 @@ enum Sync {
 
     static func pushIfChanged(_ context: ModelContext) async {
         guard pushAllowed, dirty else { return }
-        dirty = false
-        guard let uid = try? await userID(),
-              let p = try? collect(context, uid: uid),
-              let h = try? hash(p),
-              h != lastPushedHash else { return }
-        try? await push(context)
+        if let retryPushAfter, Date.now < retryPushAfter { return }
+        do {
+            let uid = try await userID()
+            let h = try hash(collect(context, uid: uid))
+            // Niets veranderd t.o.v. de server: schoon, dus de vlag mag uit.
+            guard h != lastPushedHash else { dirty = false; return }
+            try await push(context)
+            // Pas hier uit: bij een fout blijft 'dirty' staan zodat de lus het opnieuw
+            // probeert, ook als de gebruiker daarna niets meer wijzigt.
+            dirty = false
+        } catch {
+            pushFailures += 1
+            retryPushAfter = .now.addingTimeInterval(min(20 * pow(2, Double(pushFailures)), 600))
+            SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
+        }
     }
 }

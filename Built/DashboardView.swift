@@ -238,6 +238,18 @@ struct DashboardView: View {
             .animation(.easeOut(duration: 0.3).delay(Double(index) * 0.05), value: appeared)
     }
 
+    /// Stipje op het profiel-icoon: er is een fout, óf er is al een dag niets
+    /// doorgekomen — dat laatste voelt de gebruiker anders pas op een nieuw toestel.
+    private var syncNeedsAttention: Bool {
+        syncStatus.lastError != nil || syncStatus.isStale
+    }
+
+    private var syncLabel: String {
+        if syncStatus.lastError != nil { return "Profiel, synchronisatie-fout" }
+        if syncStatus.isStale { return "Profiel, langer dan een dag niet gesynct" }
+        return "Profiel"
+    }
+
     private func header(_ idx: DayIndex, streak: Int) -> some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
@@ -288,11 +300,18 @@ struct DashboardView: View {
                         Image(systemName: "person.crop.circle")
                             .font(.title)
                             .foregroundStyle(.secondary)
-                        if syncStatus.lastError != nil {
-                            Circle().fill(.orange).frame(width: 10, height: 10)
+                        if syncNeedsAttention {
+                            // Ring in de achtergrondkleur: zonder die scheiding valt het
+                            // stipje weg tegen het profiel-icoon eronder.
+                            Circle()
+                                .fill(.orange)
+                                .frame(width: 11, height: 11)
+                                .padding(2)
+                                .background(Color(.systemGroupedBackground), in: Circle())
+                                .offset(x: 2, y: -2)
                         }
                     }
-                    .accessibilityLabel(syncStatus.lastError != nil ? "Profiel, synchronisatie-fout" : "Profiel")
+                    .accessibilityLabel(syncLabel)
                 }
             }
         }

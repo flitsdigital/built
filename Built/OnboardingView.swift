@@ -28,6 +28,25 @@ struct OnboardingView: View {
     private var rate: Double { (goalWeight - weight) / weeks }
     private var proteinTarget: Int { Int((goalWeight * 1.6).rounded()) }
 
+    // Buiten deze grenzen levert het rekenwerk (Mifflin-St Jeor, eiwitdoel,
+    // weektempo) stilletjes onzin op die overal doorwerkt. Ruim genomen.
+    private let ageRange = 14...100
+    private let heightRange = 120...230
+    private let weightRange = 30.0...300.0
+
+    private var weightValid: Bool { weightRange.contains(weight) }
+    private var goalWeightValid: Bool { weightRange.contains(goalWeight) }
+
+    /// Meer dan 30% verschil met je startgewicht is zelden haalbaar — wel melden,
+    /// niet blokkeren: het is je eigen lichaam.
+    private var goalWeightExtreme: Bool {
+        weightValid && goalWeightValid && abs(goalWeight - weight) / weight > 0.3
+    }
+
+    private var weightRangeText: String {
+        "\(Int(weightRange.lowerBound)) en \(Int(weightRange.upperBound)) kg"
+    }
+
     private let weekdayOptions: [(day: Int, label: String)] = [
         (2, "Ma"), (3, "Di"), (4, "Wo"), (5, "Do"), (6, "Vr"), (7, "Za"), (1, "Zo"),
     ]
@@ -113,6 +132,14 @@ struct OnboardingView: View {
             .padding(.horizontal, 20)
     }
 
+    private func hint(_ text: String, warning: Bool = false) -> some View {
+        Label(text, systemImage: warning ? "exclamationmark.triangle.fill" : "info.circle")
+            .font(.footnote)
+            .foregroundStyle(warning ? Color.orange : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+    }
+
     private func primaryButton(_ label: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
@@ -158,11 +185,11 @@ struct OnboardingView: View {
         VStack(spacing: 24) {
             title("Over jou", "Hiermee rekenen we je plan uit.")
             inputCard {
-                Stepper("Leeftijd: \(age)", value: $age, in: 14...80)
+                Stepper("Leeftijd: \(age)", value: $age, in: ageRange)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 Divider().padding(.leading, 16)
-                Stepper("Lengte: \(height) cm", value: $height, in: 120...220)
+                Stepper("Lengte: \(height) cm", value: $height, in: heightRange)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 Divider().padding(.leading, 16)
@@ -178,8 +205,11 @@ struct OnboardingView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
             }
+            if !weightValid {
+                hint("Vul een gewicht tussen \(weightRangeText) in.")
+            }
             Spacer()
-            primaryButton("Volgende", disabled: weight < 20) { go(2) }
+            primaryButton("Volgende", disabled: !weightValid) { go(2) }
         }
     }
 
@@ -209,6 +239,11 @@ struct OnboardingView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
             }
+            if !goalWeightValid {
+                hint("Vul een doelgewicht tussen \(weightRangeText) in.")
+            } else if goalWeightExtreme {
+                hint("Dat scheelt meer dan 30% met je huidige gewicht. Mag, maar reken op een lange adem.", warning: true)
+            }
             VStack(alignment: .leading, spacing: 10) {
                 Text("Vaste trainingsdagen (optioneel)")
                     .font(.footnote)
@@ -236,7 +271,7 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             Spacer()
-            primaryButton("Maak mijn plan", disabled: goalWeight < 20) {
+            primaryButton("Maak mijn plan", disabled: !goalWeightValid) {
                 planRevealed = false
                 go(3)
             }

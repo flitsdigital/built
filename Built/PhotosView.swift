@@ -3,7 +3,9 @@ import SwiftData
 import PhotosUI
 
 // Progress foto's (PRD feature 7): maandelijks front/zij/rug, met automatische
-// eerste-vs-laatste vergelijking per hoek. Foto's blijven lokaal (niet in Supabase).
+// eerste-vs-laatste vergelijking per hoek. Foto's blijven lokaal (niet in Supabase),
+// dus exporteren is hier de back-uproute — en dat zeggen we één keer hardop, zodat
+// niemand er pas achter komt op het moment dat ze weg zijn.
 struct PhotosView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \PhotoEntry.date, order: .reverse) private var photos: [PhotoEntry]
@@ -11,12 +13,40 @@ struct PhotosView: View {
     @State private var angle = "front"
     @State private var pickerItem: PhotosPickerItem?
     @State private var saveError: String?
+    // Eén keer melden is genoeg; daarna volstaat de vaste regel in de footer. Een
+    // melding die elke keer terugkomt lees je na twee keer niet meer.
+    @AppStorage("photosLocalNoticeSeen") private var localNoticeSeen = false
 
     private let angles = [("front", "Voor"), ("side", "Zij"), ("back", "Rug")]
     private var filtered: [PhotoEntry] { photos.filter { $0.angle == angle } }
 
+    // Altijd alle hoeken: een back-up van alleen "Voor" is geen back-up. Ontbrekende
+    // bestanden eruit, want een SwiftData-rij kan een gewist bestand overleven.
+    private var exportURLs: [URL] {
+        photos.map(\.fileURL).filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
     var body: some View {
         List {
+            // Pas tonen zodra er iets te verliezen valt — op een leeg scherm is het ruis.
+            if !localNoticeSeen, !photos.isEmpty {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Alleen op dit toestel", systemImage: "iphone")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Je foto's gaan niet mee met de sync. Op een nieuw toestel of na een herinstallatie staan ze er niet meer. Exporteer ze af en toe naar Foto's of iCloud Drive, dan heb je ze veilig.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Button("Begrepen") {
+                            withAnimation { localNoticeSeen = true }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
             Section {
                 Picker("Hoek", selection: $angle) {
                     ForEach(angles, id: \.0) { key, label in
@@ -64,9 +94,9 @@ struct PhotosView: View {
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Label("Foto toevoegen", systemImage: "plus")
                 }
-                if !photos.isEmpty {
-                    ShareLink(items: photos.map(\.fileURL)) {
-                        Label("Foto's exporteren", systemImage: "square.and.arrow.up")
+                if !exportURLs.isEmpty {
+                    ShareLink(items: exportURLs) {
+                        Label("Alle \(exportURLs.count) foto's exporteren", systemImage: "square.and.arrow.up")
                     }
                 }
                 if let saveError {
@@ -77,7 +107,7 @@ struct PhotosView: View {
             } header: {
                 Text("Alle foto's")
             } footer: {
-                Text("Foto's blijven alleen op dit toestel — ze worden niet naar de server gesynct. Maak een back-up via Foto's exporteren of iCloud-toestelback-up.")
+                Text("Foto's blijven alleen op dit toestel — ze worden niet naar de server gesynct. Maak een back-up via de exportknop hierboven of via je iCloud-toestelback-up.")
             }
         }
         .tabBarClearance()
