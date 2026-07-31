@@ -713,13 +713,19 @@ enum DayCheck {
     }
 
     /// Gewogen vervulling, 0…100.
+    ///
+    /// 100 is gereserveerd voor een écht complete dag. Zonder die grens rondde
+    /// 99,7% af naar 100 en zei het dashboard "Perfecte dag 🏆" terwijl `perfect`
+    /// false was — je streak liep dan niet door en de heatmap kleurde de dag niet.
+    /// Vanaf ~98,3% van je eiwitdoel was dat al bereikbaar.
     static func score(_ day: Date, index: DayIndex, profile: Profile,
                       customHabits: [String] = []) -> Int {
         let f = factors(day, index: index, profile: profile, customHabits: customHabits)
         let total = f.reduce(0) { $0 + $1.weight }
         guard total > 0 else { return 0 }
         let earned = f.reduce(0.0) { $0 + Double($1.weight) * $1.progress }
-        return Int((earned / Double(total) * 100).rounded())
+        let raw = Int((earned / Double(total) * 100).rounded())
+        return f.allSatisfy(\.done) ? raw : min(raw, 99)
     }
 
     /// Perfecte dag = alles binnen, en dus per definitie score 100.

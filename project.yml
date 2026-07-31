@@ -62,3 +62,36 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.jordiklavers.Built.widget
       TARGETED_DEVICE_FAMILY: 1
+  BuiltTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - BuiltTests
+    dependencies:
+      - target: Built
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      TARGETED_DEVICE_FAMILY: 1
+      # De app is de host: alleen zo kan `@testable import Built` bij de rekenlogica.
+      TEST_HOST: $(BUILT_PRODUCTS_DIR)/Built.app/Built
+      TEST_TARGET_NAME: Built
+# Zonder dit blok genereert xcodegen geen schemes, en `xcodebuild -scheme Built` faalt op
+# een verse checkout. Ze staan hier dus expliciet, inclusief de testactie.
+schemes:
+  Built:
+    build:
+      targets:
+        Built: all
+        BuiltTests: [test]
+    test:
+      targets:
+        - BuiltTests
+      # dayKey en Calendar.current lezen de tijdzone van het proces. Vastzetten, anders
+      # slagen de DST-tests alleen op een machine die zelf op Amsterdam staat.
+      environmentVariables:
+        TZ: Europe/Amsterdam
+  BuiltWidget:
+    build:
+      targets:
+        BuiltWidget: all
