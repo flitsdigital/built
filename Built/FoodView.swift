@@ -327,7 +327,7 @@ struct FoodView: View {
             }
             .listRowSeparator(.hidden)
 
-            ForEach(mealOrder, id: \.self) { meal in
+            ForEach(mealSlots, id: \.self) { meal in
                 mealSection(meal)
             }
 
@@ -449,7 +449,7 @@ struct FoodView: View {
                         .frame(width: 40, height: 40)
                         .background(Color(.tertiarySystemFill), in: Circle())
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(mealNames[meal] ?? meal)
+                        Text(mealSlotNames[meal] ?? meal)
                             .font(.headline)
                             .foregroundStyle(.primary)
                         Text(list.isEmpty ? "Nog niets gelogd" : "\(protein) g eiwit · \(kcal) kcal")
@@ -580,7 +580,7 @@ struct FoodLogSheet: View {
                 default: searchTab
                 }
             }
-            .navigationTitle("Loggen — \(mealNames[meal] ?? meal)")
+            .navigationTitle("Loggen — \(mealSlotNames[meal] ?? meal)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

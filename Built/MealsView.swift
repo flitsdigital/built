@@ -1,8 +1,10 @@
 import SwiftUI
 import SwiftData
 
-let mealOrder = ["breakfast", "lunch", "dinner", "snack"]
-let mealNames = ["breakfast": "Ontbijt", "lunch": "Lunch", "dinner": "Diner", "snack": "Snacks"]
+/// Maaltijdmómenten. Let op: het `Meal`-model hiernaast is iets anders — dat is een
+/// recept (in de UI "Recepten"). Zelfde woord, twee betekenissen; vandaar "slot".
+let mealSlots = ["breakfast", "lunch", "dinner", "snack"]
+let mealSlotNames = ["breakfast": "Ontbijt", "lunch": "Lunch", "dinner": "Diner", "snack": "Snacks"]
 
 
 /// Eén sheet voor alles: eigen maaltijd toevoegen, een suggestie aanpassen,
@@ -85,8 +87,8 @@ struct ProteinEntrySheet: View {
                     }
                 }
                 Picker("Maaltijd", selection: $meal) {
-                    ForEach(mealOrder, id: \.self) { m in
-                        Text(mealNames[m] ?? m).tag(m)
+                    ForEach(mealSlots, id: \.self) { m in
+                        Text(mealSlotNames[m] ?? m).tag(m)
                     }
                 }
                 .pickerStyle(.segmented)

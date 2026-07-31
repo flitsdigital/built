@@ -29,9 +29,7 @@ struct InsightsView: View {
     }
 
     private func perfectDay(_ day: Date, _ idx: DayIndex) -> Bool {
-        DayCheck.perfect(day, index: idx, target: profile.proteinTarget,
-                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                         trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+        DayCheck.perfect(day, index: idx, profile: profile, customHabits: customHabits.map(\.name))
     }
 
     // MARK: - Correlaties
@@ -134,14 +132,11 @@ struct InsightsView: View {
         return weeks
     }
 
-    /// Vervulling van een dag (0…1) voor de kleurintensiteit van de heatmap.
-    /// Neemt `factors` als parameter: die lijst is per render constant, dus 'm hier
-    /// opnieuw opbouwen zou 371× hetzelfde werk zijn.
-    private func fill(_ day: Date, _ factors: [(name: String, done: (Date) -> Bool)]) -> Double {
-        guard !factors.isEmpty else { return 0 }
-        var done = 0.0
-        for f in factors where f.done(day) { done += 1 }
-        return done / Double(factors.count)
+    /// Kleurintensiteit van de jaar-heatmap: exact dezelfde score als op het dashboard,
+    /// alleen als 0…1. Eerder telde hij factoren ongewogen én zag hij een geplande
+    /// rustdag als gemist, waardoor dezelfde dag hier anders kleurde dan daar.
+    private func fill(_ day: Date, _ idx: DayIndex) -> Double {
+        Double(DayCheck.score(day, index: idx, profile: profile, customHabits: customHabits.map(\.name))) / 100
     }
 
     private func daysBack(_ n: Int) -> [Date] {
@@ -151,23 +146,14 @@ struct InsightsView: View {
     private func perfectLast30(_ idx: DayIndex) -> Int { daysBack(30).filter { perfectDay($0, idx) }.count }
 
     private func streak(_ idx: DayIndex) -> Int {
-        DayCheck.streak(index: idx, target: profile.proteinTarget,
-                        requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                        trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+        DayCheck.streak(index: idx, profile: profile, customHabits: customHabits.map(\.name))
     }
 
-    private func factors(_ idx: DayIndex) -> [(name: String, done: (Date) -> Bool)] {
-        var out: [(name: String, done: (Date) -> Bool)] =
-            [("Training", { idx.trained($0) }),
-             ("Gewicht", { idx.weighed($0) })]
-        if profile.tracksFood { out.insert(("Eiwit", { proteinDone($0, idx) }), at: 0) }
-        if profile.tracksCreatine { out.append(("Creatine", { idx.habits($0)?.creatine == true })) }
-        if profile.tracksSleep { out.append(("Slaap", { idx.habits($0)?.sleptEnough == true })) }
-        for custom in customHabits {
-            let name = custom.name
-            out.append((name, { idx.logged(name, on: $0) }))
-        }
-        return out
+    /// Namen van de factoren, voor de rijen van het habits-raster. De waarden per dag
+    /// komen uit dezelfde `DayCheck.factors` als de score.
+    private func factorNames(_ idx: DayIndex) -> [String] {
+        DayCheck.factors(.now, index: idx, profile: profile,
+                         customHabits: customHabits.map(\.name)).map(\.name)
     }
 
     // MARK: - Week review
@@ -320,7 +306,7 @@ struct InsightsView: View {
         // Elk blok hieronder krijgt het resultaat door i.p.v. het zelf te herberekenen.
         let idx = makeIndex()
         let stats = makeLiftStats()
-        let factors = factors(idx)
+        let factorNames = factorNames(idx)
         let plateaus = plateauedLifts(stats)
         let correlations = correlations(idx)
         return ScrollView {
@@ -330,9 +316,9 @@ struct InsightsView: View {
                 bodyMapBlock
                 coachBlock(idx, plateaus: plateaus)
                 perfectDaysBlock(idx)
-                yearBlock(factors)
+                yearBlock(idx)
                 correlationsBlock(correlations)
-                habitsBlock(factors)
+                habitsBlock(idx, factorNames)
                 volumeBlock
                 plateauBlock(plateaus)
                 strengthBlock(stats)
@@ -452,9 +438,9 @@ struct InsightsView: View {
         BuiltFootnote("De laatste vijf weken — tik op een dag voor het logboek.")
     }
 
-    @ViewBuilder private func yearBlock(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
+    @ViewBuilder private func yearBlock(_ idx: DayIndex) -> some View {
         BuiltSectionHeader("Je jaar")
-        yearHeatmap(factors).builtCard()
+        yearHeatmap(idx).builtCard()
         BuiltFootnote("Elke kolom is een week, elk blokje een dag — voller groen = meer habits gehaald. Tik op een dag voor het logboek.")
     }
 
@@ -481,9 +467,9 @@ struct InsightsView: View {
         }
     }
 
-    @ViewBuilder private func habitsBlock(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
+    @ViewBuilder private func habitsBlock(_ idx: DayIndex, _ names: [String]) -> some View {
         BuiltSectionHeader("Habits per dag")
-        weekGrid(factors).builtCard()
+        weekGrid(idx, names).builtCard()
     }
 
     @ViewBuilder private var volumeBlock: some View {
@@ -589,7 +575,7 @@ struct InsightsView: View {
     }
 
     /// Een jaar in één blik. Horizontaal scrollbaar, nieuwste week rechts.
-    private func yearHeatmap(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
+    private func yearHeatmap(_ idx: DayIndex) -> some View {
         let today = cal.startOfDay(for: .now)
         // Weken én vullingen één keer berekenen. `fill` stond hier drie keer per dag
         // (kleur, vinkje, accessibility) en `yearWeeks` werd ook nog eens los opgevraagd.
@@ -597,7 +583,7 @@ struct InsightsView: View {
         let todayKey = dayKey(today)
         let fills = Dictionary(uniqueKeysWithValues: weeks.flatMap { $0 }
             .filter { $0 <= today }
-            .map { (dayKey($0), fill($0, factors)) })
+            .map { (dayKey($0), fill($0, idx)) })
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 3) {
@@ -669,8 +655,14 @@ struct InsightsView: View {
         .animation(.smooth(duration: 0.3), value: volumeWeeks)
     }
 
-    private func weekGrid(_ factors: [(name: String, done: (Date) -> Bool)]) -> some View {
+    private func weekGrid(_ idx: DayIndex, _ names: [String]) -> some View {
         let days = daysBack(7).reversed().map { $0 }
+        // Per dag dezelfde factorlijst als de score; op naam gematcht zodat de rijen kloppen.
+        let doneByDay = Dictionary(uniqueKeysWithValues: days.map { day in
+            (dayKey(day), Set(DayCheck.factors(day, index: idx, profile: profile,
+                                               customHabits: customHabits.map(\.name))
+                .filter(\.done).map(\.name)))
+        })
         return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
                 Text("")
@@ -680,9 +672,9 @@ struct InsightsView: View {
                         .foregroundStyle(cal.isDateInToday(d) ? .primary : .secondary)
                 }
             }
-            ForEach(factors, id: \.name) { factor in
+            ForEach(names, id: \.self) { name in
                 GridRow {
-                    Text(factor.name)
+                    Text(name)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .gridColumnAlignment(.leading)
@@ -691,7 +683,7 @@ struct InsightsView: View {
                             selectedDayBox = DayBox(day: d)
                         } label: {
                             RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                .fill(factor.done(d) ? Color.green : Color(.quaternarySystemFill))
+                                .fill(doneByDay[dayKey(d)]?.contains(name) == true ? Color.green : Color(.quaternarySystemFill))
                                 .frame(width: 22, height: 22)
                                 .overlay {
                                     if cal.isDateInToday(d) {
@@ -777,9 +769,7 @@ struct WeeklyReviewSheet: View {
 
     private func perfectDays(_ idx: DayIndex) -> Int {
         lastSevenDays.filter {
-            DayCheck.perfect($0, index: idx, target: profile.proteinTarget,
-                             requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                             trainingDays: profile.trainingDays)
+            DayCheck.perfect($0, index: idx, profile: profile)
         }.count
     }
 

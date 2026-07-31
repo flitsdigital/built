@@ -211,7 +211,7 @@ struct RootView: View {
                 tabPage(2) { NavigationStack { FoodView(profile: profile, isVisible: tab == 2).tabBarClearance() } }
                 tabPage(3) { NavigationStack { WeightView(isVisible: tab == 3, profile: profile).tabBarClearance() } }
                 tabPage(4) { NavigationStack { InsightsView(profile: profile, isVisible: tab == 4).tabBarClearance() } }
-                tabPage(5) { NavigationStack { JournalView(profile: profile, isVisible: tab == 5).tabBarClearance() } }
+                tabPage(5) { NavigationStack { LogbookView(profile: profile, isVisible: tab == 5).tabBarClearance() } }
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {

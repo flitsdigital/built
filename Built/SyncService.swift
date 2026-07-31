@@ -77,6 +77,7 @@ enum Sync {
         var mood: Int? = 0
         var soreness: Int? = 0
         var stress: Int? = 0
+        var exercise_notes: [String: String]? = [:]
     }
     private struct RoutineRow: Codable {
         var user_id: UUID; var name: String; var exercises: [String]
@@ -88,6 +89,8 @@ enum Sync {
         var created_at: Date; var servings: Double; var ingredients: [Ingredient]
         var favorite: Bool
     }
+    // `scales.correction` bestaat wel in Postgres maar niet in het model; sync_push
+    // laat 'm daarom op z'n default staan i.p.v. altijd 0 mee te sturen.
     private struct ScaleRow: Codable { var user_id: UUID; var name: String }
     private struct CustomHabitRow: Codable { var user_id: UUID; var name: String; var created_at: Date }
     private struct ExerciseRow: Codable { var user_id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date }
@@ -164,7 +167,8 @@ enum Sync {
             .map { HabitsRow(user_id: uid, date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
                              note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality,
                              journal: $0.journal, workout_note: $0.workoutNote,
-                             energy: $0.energy, mood: $0.mood, soreness: $0.soreness, stress: $0.stress) }
+                             energy: $0.energy, mood: $0.mood, soreness: $0.soreness, stress: $0.stress,
+                             exercise_notes: $0.exerciseNotes) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
             .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises,
                               alternatives: $0.alternatives, targets: $0.targets,
@@ -273,6 +277,7 @@ enum Sync {
             h.mood = r.mood ?? 0
             h.soreness = r.soreness ?? 0
             h.stress = r.stress ?? 0
+            h.exerciseNotes = r.exercise_notes ?? [:]
             context.insert(h)
         }
         for r in routineRows {

@@ -104,7 +104,9 @@ create table if not exists public.day_habits (
   energy int not null default 0,
   mood int not null default 0,
   soreness int not null default 0,
-  stress int not null default 0
+  stress int not null default 0,
+  -- Notitie per oefening; verving de geparsede "Naam: tekst"-regels in `note`.
+  exercise_notes jsonb not null default '{}'::jsonb
 );
 
 create table if not exists public.routines (
@@ -231,13 +233,14 @@ begin
     from jsonb_array_elements(coalesce(payload->'sets', '[]'::jsonb)) e;
 
   delete from public.day_habits where user_id = uid;
-  insert into public.day_habits (user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress)
+  insert into public.day_habits (user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes)
     select uid, (e->>'date')::timestamptz, (e->>'creatine')::boolean, (e->>'slept_enough')::boolean,
            coalesce(e->>'note', ''), (e->>'bed_time')::timestamptz, (e->>'wake_time')::timestamptz,
            coalesce((e->>'sleep_quality')::int, 0),
            coalesce(e->'journal', '[]'::jsonb), coalesce(e->>'workout_note', ''),
            coalesce((e->>'energy')::int, 0), coalesce((e->>'mood')::int, 0),
-           coalesce((e->>'soreness')::int, 0), coalesce((e->>'stress')::int, 0)
+           coalesce((e->>'soreness')::int, 0), coalesce((e->>'stress')::int, 0),
+           coalesce(e->'exercise_notes', '{}'::jsonb)
     from jsonb_array_elements(coalesce(payload->'habits', '[]'::jsonb)) e;
 
   delete from public.routines where user_id = uid;

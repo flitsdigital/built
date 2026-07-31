@@ -297,6 +297,8 @@ struct TrainingView: View {
     private func lastNote(for exercise: String, _ pastNotes: [DayHabits]) -> String? {
         let prefix = exercise + ": "
         for record in pastNotes {
+            if let note = record.exerciseNotes[exercise], !note.isEmpty { return note }
+            // Terugval voor notities van vóór `exerciseNotes`.
             for line in record.note.components(separatedBy: "\n") where line.hasPrefix(prefix) {
                 let note = String(line.dropFirst(prefix.count))
                 if !note.isEmpty { return note }
@@ -490,14 +492,13 @@ struct TrainingView: View {
         let notes = workout
             .map { ($0.name, $0.note.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.1.isEmpty }
-            .map { "\($0.0): \($0.1)" }
         guard !notes.isEmpty else { return }
         let record = habits.first { cal.isDateInToday($0.date) } ?? {
             let h = DayHabits()
             context.insert(h)
             return h
         }()
-        record.note = ([record.note] + notes).filter { !$0.isEmpty }.joined(separator: "\n")
+        for (name, text) in notes { record.exerciseNotes[name] = text }
     }
 
     /// Algemene sessie-notitie op de dag bewaren (los van de per-oefening notities).
@@ -613,7 +614,8 @@ struct TrainingView: View {
         let history = makeHistory()
         let prCount = prCount(history)
         // Dagnotities één keer sorteren i.p.v. per oefening in de kop.
-        let pastNotes = habits.filter { !cal.isDateInToday($0.date) && !$0.note.isEmpty }
+        let pastNotes = habits
+            .filter { !cal.isDateInToday($0.date) && !($0.exerciseNotes.isEmpty && $0.note.isEmpty) }
             .sorted { $0.date > $1.date }
         return screen(history, pastNotes)
         .navigationTitle("Training")

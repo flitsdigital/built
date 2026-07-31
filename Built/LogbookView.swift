@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-struct JournalView: View {
+struct LogbookView: View {
     let profile: Profile
     /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
     /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
@@ -14,7 +14,7 @@ struct JournalView: View {
     enum Filter: String, CaseIterable {
         case all = "Alles"
         case training = "Trainingsdagen"
-        case notes = "Met notitie"
+        case notes = "Met check-in"
     }
 
     @State private var filter: Filter = .all
@@ -43,7 +43,7 @@ struct JournalView: View {
         case .training:
             return idx.trained(day)
         case .notes:
-            return note(day, idx) != nil
+            return idx.habits(day)?.checkedIn == true
         }
     }
 
@@ -68,18 +68,22 @@ struct JournalView: View {
         return parts.isEmpty ? "Niets gelogd" : parts.joined(separator: " · ")
     }
 
-    private func note(_ day: Date, _ idx: DayIndex) -> String? {
-        let texts = (idx.habits(day)?.journal ?? [])
-            .sorted { $0.createdAt > $1.createdAt }
-            .map(\.text).filter { !$0.isEmpty }
-        guard let latest = texts.first else { return nil }
-        return texts.count > 1 ? "\(latest)  (+\(texts.count - 1))" : latest
+    /// De dag-check-in als emoji-regel. Dit ís het dagverhaal geworden: losse
+    /// notities zijn eruit, de vijf vragen vertellen het beter en kosten minder.
+    private func checkInIcons(_ day: Date, _ idx: DayIndex) -> String? {
+        guard let h = idx.habits(day), h.checkedIn else { return nil }
+        let scales = ["😵🥱🙂💪⚡️", "😞😕😐🙂😄", "✅🙂😬😖🥵", "😌🙂😐😰🤯", "😴🙂😃"]
+        let values = [h.energy, h.mood, h.soreness, h.stress, h.sleepQuality]
+        let icons = zip(scales, values).compactMap { scale, v -> String? in
+            guard v > 0 else { return nil }
+            let chars = Array(scale.map(String.init))
+            return v <= chars.count ? chars[v - 1] : nil
+        }
+        return icons.isEmpty ? nil : icons.joined(separator: " ")
     }
 
     private func isPerfect(_ day: Date, _ idx: DayIndex) -> Bool {
-        DayCheck.perfect(day, index: idx, target: profile.proteinTarget,
-                         requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                         trainingDays: profile.trainingDays)
+        DayCheck.perfect(day, index: idx, profile: profile)
     }
 
     var body: some View {
@@ -136,7 +140,10 @@ struct JournalView: View {
 
     private func dayRow(_ day: Date, _ idx: DayIndex) -> some View {
         let summary = summary(day, idx)
-        let empty = summary == "Niets gelogd"
+        let icons = checkInIcons(day, idx)
+        // Een ingevulde check-in ís iets gelogd; anders stond er "Niets gelogd" met
+        // de emoji's er pal onder.
+        let empty = summary == "Niets gelogd" && icons == nil
         let isToday = cal.isDateInToday(day)
         return NavigationLink {
             DayDetailView(day: day, profile: profile)
@@ -156,23 +163,19 @@ struct JournalView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(isToday ? "Vandaag" : summary)
-                        .font(.subheadline.weight(isToday ? .semibold : .regular))
-                        .foregroundStyle(empty ? .secondary : .primary)
+                    if isToday || summary != "Niets gelogd" || icons == nil {
+                        Text(isToday ? "Vandaag" : summary)
+                            .font(.subheadline.weight(isToday ? .semibold : .regular))
+                            .foregroundStyle(empty ? .secondary : .primary)
+                    }
                     if isToday {
                         Text(summary)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    if let note = note(day, idx) {
-                        HStack(spacing: 6) {
-                            Rectangle().fill(.green.opacity(0.5)).frame(width: 3)
-                            Text(note)
-                                .font(.footnote)
-                                .italic()
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
+                    if let icons {
+                        Text(icons)
+                            .font(.system(size: 15))
                     }
                 }
                 Spacer(minLength: 0)
@@ -287,36 +290,6 @@ struct DayDetailView: View {
         .animation(.snappy(duration: 0.2), value: value)
     }
 
-    // MARK: - Journal (meerdere notities per dag)
-
-    private var journalEntries: [JournalNote] {
-        (habitsRecord?.journal ?? []).sorted { $0.createdAt < $1.createdAt }
-    }
-
-    private func journalBinding(_ id: UUID) -> Binding<String> {
-        Binding(
-            get: { habitsRecord?.journal.first { $0.id == id }?.text ?? "" },
-            set: { newText in
-                let r = record()
-                if let i = r.journal.firstIndex(where: { $0.id == id }) { r.journal[i].text = newText }
-            })
-    }
-
-    private func addJournalEntry() {
-        let stamp = cal.isDateInToday(day) ? Date.now : noon
-        withAnimation(.snappy(duration: 0.2)) { record().journal.append(JournalNote(text: "", createdAt: stamp)) }
-    }
-
-    private func deleteJournalEntries(_ offsets: IndexSet) {
-        let ids = offsets.map { journalEntries[$0].id }
-        record().journal.removeAll { ids.contains($0.id) }
-    }
-
-    /// Lege entries opruimen bij het verlaten, zodat een per ongeluk toegevoegde notitie niet blijft staan.
-    private func pruneEmptyJournal() {
-        habitsRecord?.journal.removeAll { $0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    }
-
     var body: some View {
         List {
             Section("Habits") {
@@ -385,34 +358,11 @@ struct DayDetailView: View {
                 }
             }
 
-            Section {
-                if journalEntries.isEmpty {
-                    ContentUnavailableView("Nog geen notities", systemImage: "text.quote",
-                                           description: Text("Schrijf hoe je dag ging — dat leest later terug als een logboek."))
-                }
-                ForEach(journalEntries) { entry in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(entry.createdAt.formatted(date: .omitted, time: .shortened))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        TextField("Schrijf iets…", text: journalBinding(entry.id), axis: .vertical)
-                            .lineLimit(1...12)
-                    }
-                    .padding(.vertical, 2)
-                }
-                .onDelete(perform: deleteJournalEntries)
-                Button { addJournalEntry() } label: {
-                    Label("Notitie toevoegen", systemImage: "square.and.pencil")
-                }
-            } header: {
-                Text("Journal")
-            }
-
             Section("Eiwit — \(proteins.map(\.grams).reduce(0, +)) / \(profile.proteinTarget) g") {
-                ForEach(mealOrder, id: \.self) { meal in
+                ForEach(mealSlots, id: \.self) { meal in
                     let list = proteins.filter { $0.mealKey == meal }
                     if !list.isEmpty {
-                        Text(mealNames[meal] ?? meal)
+                        Text(mealSlotNames[meal] ?? meal)
                             .font(.caption.bold())
                             .foregroundStyle(.secondary)
                             .listRowSeparator(.hidden)
@@ -485,7 +435,6 @@ struct DayDetailView: View {
             }
         }
         .tabBarClearance()
-        .onDisappear(perform: pruneEmptyJournal)
         .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(date: .abbreviated, time: .omitted))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

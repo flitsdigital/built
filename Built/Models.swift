@@ -556,6 +556,11 @@ final class DayHabits {
     var stress: Int = 0
     /// Journal: meerdere getimede notities per dag.
     var journal: [JournalNote] = []
+    /// Notitie per oefening. Stond eerder als `"Bench Press: voelde zwaar"`-regels in
+    /// `note` gepropt en werd er op prefix weer uit geparsed — een relatie vermomd als
+    /// tekst, die brak op een oefeningsnaam met een dubbele punt. `note` blijft staan
+    /// voor wat er al in zit.
+    var exerciseNotes: [String: String] = [:]
     /// Algemene notitie bij de training van die dag (los van de per-oefening notities).
     var workoutNote: String = ""
     init(date: Date = .now, creatine: Bool = false, sleptEnough: Bool = false) {
@@ -664,33 +669,71 @@ extension Array where Element == WeightEntry {
 }
 
 enum DayCheck {
-    /// Perfecte dag = de dagelijkse factoren die de gebruiker bijhoudt.
-    /// Met geplande trainingsdagen telt training/rustdag-volgens-plan mee (North Star).
-    static func perfect(_ day: Date, index: DayIndex,
-                        target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
-                        trainingDays: [Int] = [], requireFood: Bool = true) -> Bool {
-        let proteinDone = !requireFood || index.protein(day) >= target
-        let weighed = index.weighed(day)
-        let h = index.habits(day)
-        let creatineOK = !requireCreatine || h?.creatine == true
-        let sleepOK = !requireSleep || h?.sleptEnough == true
-        var trainingOK = true
-        if trainingDays.contains(Calendar.current.component(.weekday, from: day)) {
-            trainingOK = index.trained(day)
-        }
-        return proteinDone && weighed && creatineOK && sleepOK && trainingOK
+    /// Eén meetpunt van een dag: hoeveel hij weegt en hoe ver hij binnen is.
+    struct Factor: Identifiable {
+        let name: String
+        let weight: Int
+        /// 0…1. Eiwit telt naar rato, de rest is alles-of-niets.
+        let progress: Double
+        var id: String { name }
+        var done: Bool { progress > 0.999 }
     }
 
-    static func streak(index: DayIndex,
-                       target: Int, requireCreatine: Bool = true, requireSleep: Bool = true,
-                       trainingDays: [Int] = [], requireFood: Bool = true) -> Int {
+    /// De enige definitie van "hoe goed was deze dag".
+    ///
+    /// Score, perfecte dag, streak en beide heatmaps leiden hier allemaal uit af.
+    /// Daarvoor had elk z'n eigen lijstje en gaven ze verschillende antwoorden over
+    /// dezelfde dag: een geplande rustdag was +25 op het dashboard en telde mee voor
+    /// je streak, maar stond in de jaar-heatmap als gemist. Custom habits telden
+    /// alleen in die jaar-heatmap mee.
+    static func factors(_ day: Date, index: DayIndex, profile: Profile,
+                        customHabits: [String] = []) -> [Factor] {
+        var out: [Factor] = []
+        if profile.tracksFood {
+            let ratio = Double(index.protein(day)) / Double(max(profile.proteinTarget, 1))
+            out.append(Factor(name: "Eiwit", weight: 30, progress: min(ratio, 1)))
+        }
+        // Rustdag volgens plan telt als gedaan — niet trainen ís dan het plan.
+        let weekday = Calendar.current.component(.weekday, from: day)
+        let restDay = !profile.trainingDays.isEmpty && !profile.trainingDays.contains(weekday)
+        out.append(Factor(name: "Training", weight: 25,
+                          progress: index.trained(day) || restDay ? 1 : 0))
+        out.append(Factor(name: "Gewicht", weight: 15, progress: index.weighed(day) ? 1 : 0))
+        let h = index.habits(day)
+        if profile.tracksCreatine {
+            out.append(Factor(name: "Creatine", weight: 15, progress: h?.creatine == true ? 1 : 0))
+        }
+        if profile.tracksSleep {
+            out.append(Factor(name: "Slaap", weight: 15, progress: h?.sleptEnough == true ? 1 : 0))
+        }
+        for name in customHabits {
+            out.append(Factor(name: name, weight: 10, progress: index.logged(name, on: day) ? 1 : 0))
+        }
+        return out
+    }
+
+    /// Gewogen vervulling, 0…100.
+    static func score(_ day: Date, index: DayIndex, profile: Profile,
+                      customHabits: [String] = []) -> Int {
+        let f = factors(day, index: index, profile: profile, customHabits: customHabits)
+        let total = f.reduce(0) { $0 + $1.weight }
+        guard total > 0 else { return 0 }
+        let earned = f.reduce(0.0) { $0 + Double($1.weight) * $1.progress }
+        return Int((earned / Double(total) * 100).rounded())
+    }
+
+    /// Perfecte dag = alles binnen, en dus per definitie score 100.
+    static func perfect(_ day: Date, index: DayIndex, profile: Profile,
+                        customHabits: [String] = []) -> Bool {
+        factors(day, index: index, profile: profile, customHabits: customHabits).allSatisfy(\.done)
+    }
+
+    static func streak(index: DayIndex, profile: Profile, customHabits: [String] = []) -> Int {
         let cal = Calendar.current
         var count = 0
         for n in 0..<365 {
             guard let day = cal.date(byAdding: .day, value: -n, to: cal.startOfDay(for: .now)) else { break }
-            if perfect(day, index: index, target: target,
-                       requireCreatine: requireCreatine, requireSleep: requireSleep,
-                       trainingDays: trainingDays, requireFood: requireFood) { count += 1 }
+            if perfect(day, index: index, profile: profile, customHabits: customHabits) { count += 1 }
             else if n == 0 { continue } // vandaag mag nog open staan
             else { break }
         }

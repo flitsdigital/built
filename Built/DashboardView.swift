@@ -52,28 +52,10 @@ struct DashboardView: View {
         !profile.trainingDays.isEmpty && !profile.trainingDays.contains(cal.component(.weekday, from: day))
     }
 
-    /// Vervulling van een dag (0…100), zelfde weging als de Groei Score.
-    /// Zonder eten-tracking vervallen de 30 eiwitpunten en schaalt de rest mee,
-    /// anders is 100 onbereikbaar en liegt de score over je dag.
+    private var customHabitNames: [String] { customHabits.map(\.name) }
+
     private func scoreOn(_ day: Date, _ idx: DayIndex) -> Int {
-        var raw = 0
-        var maxPoints = 40
-        if profile.tracksFood {
-            maxPoints += 30
-            raw += min(30, Int(30.0 * Double(idx.protein(day)) / Double(max(profile.proteinTarget, 1))))
-        }
-        if idx.trained(day) || restDayOn(day) { raw += 25 }
-        if idx.weighed(day) { raw += 15 }
-        let h = idx.habits(day)
-        if profile.tracksCreatine {
-            maxPoints += 15
-            if h?.creatine == true { raw += 15 }
-        }
-        if profile.tracksSleep {
-            maxPoints += 15
-            if h?.sleptEnough == true { raw += 15 }
-        }
-        return Int((Double(raw) / Double(maxPoints) * 100).rounded())
+        DayCheck.score(day, index: idx, profile: profile, customHabits: customHabitNames)
     }
 
     private var currentWeight: Double {
@@ -93,9 +75,7 @@ struct DashboardView: View {
     }
 
     private func streak(_ idx: DayIndex) -> Int {
-        DayCheck.streak(index: idx, target: profile.proteinTarget,
-                        requireCreatine: profile.tracksCreatine, requireSleep: profile.tracksSleep,
-                        trainingDays: profile.trainingDays, requireFood: profile.tracksFood)
+        DayCheck.streak(index: idx, profile: profile, customHabits: customHabitNames)
     }
 
     // MARK: - Streak per habit (🔥5 naast de rij)
@@ -104,9 +84,6 @@ struct DashboardView: View {
     private func streakWeighed(_ idx: DayIndex) -> Int { habitStreak { idx.weighed($0) } }
     private func streakCreatine(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.creatine == true } }
     private func streakSlept(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.sleptEnough == true } }
-    private func streakJournal(_ idx: DayIndex) -> Int {
-        habitStreak { d in idx.habits(d)?.journal.contains { !$0.text.isEmpty } == true }
-    }
     private func streakCheckIn(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.checkedIn == true } }
     private func streakCustom(_ name: String, _ idx: DayIndex) -> Int {
         habitStreak { idx.logged(name, on: $0) }
@@ -518,9 +495,8 @@ struct DashboardView: View {
             NavigationLink {
                 DayDetailView(day: selectedDay, profile: profile)
             } label: {
-                checkRowLabel(icon: "book.closed", color: .habitJournal, title: "Journal",
-                              done: h?.journal.contains { !$0.text.isEmpty } ?? false,
-                              streak: streakJournal(idx))
+                checkRowLabel(icon: "list.bullet.rectangle", color: .habitJournal, title: "Dagdetails",
+                              done: false, navigates: true)
             }
             .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
@@ -529,7 +505,7 @@ struct DashboardView: View {
                          done: idx.logged(habit.name, on: selectedDay),
                          streak: streakCustom(habit.name, idx)) { toggleCustom(habit.name) }
             }
-            Text("Slaaptijden, kwaliteit en langere notities: tik op Journal.")
+            Text("Slaaptijden en losse metingen: tik op Dagdetails.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -606,22 +582,30 @@ struct DashboardView: View {
 
     private func streakBadge(_ days: Int) -> some View { StreakBadge(days: days) }
 
+    /// `navigates` = geen habit maar een doorverwijzing; dan een chevron i.p.v. een
+    /// bolletje, anders leest de rij als iets wat je nog moet afvinken.
     private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
-                               streak: Int = 0) -> some View {
+                               streak: Int = 0, navigates: Bool = false) -> some View {
         HStack(spacing: 12) {
             BuiltIconTile(systemName: icon, color: color)
             Text(title)
-                .foregroundStyle(done ? .secondary : .primary)
-                .strikethrough(done, color: .secondary)
+                .foregroundStyle(done && !navigates ? .secondary : .primary)
+                .strikethrough(done && !navigates, color: .secondary)
                 .lineLimit(1)
             streakBadge(streak)
             Spacer()
-            Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
-                .font(.title3)
-                .foregroundStyle(done ? .green : (missed ? .orange : .secondary))
-                .contentTransition(.symbolEffect(.replace))
-                .animation(.snappy(duration: 0.2), value: done)
-                .animation(.snappy(duration: 0.2), value: missed)
+            if navigates {
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.tertiary)
+            } else {
+                Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
+                    .font(.title3)
+                    .foregroundStyle(done ? .green : (missed ? .orange : .secondary))
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(.snappy(duration: 0.2), value: done)
+                    .animation(.snappy(duration: 0.2), value: missed)
+            }
         }
     }
 
