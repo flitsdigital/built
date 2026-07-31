@@ -225,6 +225,11 @@ struct RootView: View {
                     }
                     FloatingTabBar(selection: $tab)
                 }
+                // De frame moet er vóór staan: `ignoresSafeArea` kan alleen uitbreiden
+                // wat ruimte heeft, en deze VStack was al op z'n inhoud gekrompen.
+                // Zonder dit reed de tab bar mee omhoog op het toetsenbord en at hij
+                // de ruimte op die de invoervelden nodig hebben.
+                .frame(maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
                 .animation(.snappy(duration: 0.3), value: workoutStatus.startedAt)
                 .animation(.snappy(duration: 0.3), value: workoutStatus.restEndsAt)
