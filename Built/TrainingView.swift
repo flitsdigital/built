@@ -623,6 +623,15 @@ struct TrainingView: View {
         .toolbar(active ? .automatic : .hidden, for: .navigationBar) // idle heeft z'n eigen titel
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Klaar") {
+                    focusedSet = nil
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
+                }
+                .font(.body.bold())
+            }
             if active {
                 ToolbarItem(placement: .principal) {
                     Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
@@ -1912,6 +1921,15 @@ struct NumericField: UIViewRepresentable {
         tf.placeholder = placeholder
         tf.text = context.coordinator.string(from: value)
         tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
+        // Numpad heeft geen return-toets, dus zonder deze balk kun je het toetsenbord
+        // alleen wegkrijgen door de lijst weg te slepen.
+        let bar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 0, height: 44))
+        bar.items = [UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+                     UIBarButtonItem(title: "Klaar", style: .done,
+                                     target: context.coordinator,
+                                     action: #selector(Coordinator.dismissKeyboard))]
+        bar.sizeToFit()
+        tf.inputAccessoryView = bar
         return tf
     }
 
@@ -1941,6 +1959,11 @@ struct NumericField: UIViewRepresentable {
                     : String(value).replacingOccurrences(of: ".", with: ",")
             }
             return String(Int(value))
+        }
+
+        @objc func dismissKeyboard() {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
         }
 
         @objc func editingChanged(_ tf: UITextField) {
