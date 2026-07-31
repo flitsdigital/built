@@ -18,6 +18,9 @@ alter table public.profiles add column if not exists training_days jsonb not nul
 alter table public.protein_entries add column if not exists meal text not null default '';
 alter table public.protein_entries add column if not exists carbs int not null default 0;
 alter table public.protein_entries add column if not exists fat int not null default 0;
+-- Portie zoals gelogd; 0 = oudere invoer zonder portie (dan blijft bewerken op macro-niveau).
+alter table public.protein_entries add column if not exists amount float8 not null default 0;
+alter table public.protein_entries add column if not exists unit   text   not null default 'g';
 alter table public.profiles add column if not exists kcal_target int not null default 0;
 alter table public.meals add column if not exists favorite boolean not null default false;
 
@@ -52,6 +55,10 @@ create table if not exists public.exercises (
   created_at timestamptz not null
 );
 alter table public.food_products add column if not exists serving_name text not null default '';
+-- 'g' of 'ml' per product, plus de laatst gelogde portie en de OFF-categorieën.
+alter table public.food_products add column if not exists unit        text   not null default 'g';
+alter table public.food_products add column if not exists last_amount float8 not null default 0;
+alter table public.food_products add column if not exists categories  text   not null default '';
 
 create table if not exists public.weight_entries (
   id uuid primary key default gen_random_uuid(),
@@ -209,10 +216,11 @@ begin
     from jsonb_array_elements(coalesce(payload->'weights', '[]'::jsonb)) e;
 
   delete from public.protein_entries where user_id = uid;
-  insert into public.protein_entries (user_id, date, grams, label, kcal, carbs, fat, meal)
+  insert into public.protein_entries (user_id, date, grams, label, kcal, carbs, fat, meal, amount, unit)
     select uid, (e->>'date')::timestamptz, (e->>'grams')::int, e->>'label', coalesce((e->>'kcal')::int, 0),
            coalesce((e->>'carbs')::int, 0), coalesce((e->>'fat')::int, 0),
-           coalesce(e->>'meal', '')
+           coalesce(e->>'meal', ''),
+           coalesce((e->>'amount')::float8, 0), coalesce(e->>'unit', 'g')
     from jsonb_array_elements(coalesce(payload->'proteins', '[]'::jsonb)) e;
 
   delete from public.set_entries where user_id = uid;
@@ -248,12 +256,13 @@ begin
     from jsonb_array_elements(coalesce(payload->'meals', '[]'::jsonb)) e;
 
   delete from public.food_products where user_id = uid;
-  insert into public.food_products (user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, image_url, serving_grams, serving_name, created_at)
+  insert into public.food_products (user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, image_url, serving_grams, serving_name, created_at, unit, last_amount, categories)
     select uid, e->>'name', coalesce(e->>'brand', ''), coalesce(e->>'barcode', ''),
            (e->>'protein100')::float8, (e->>'kcal100')::float8,
            coalesce((e->>'carbs100')::float8, 0), coalesce((e->>'fat100')::float8, 0),
            coalesce((e->>'favorite')::boolean, false), coalesce(e->>'image_url', ''),
-           coalesce((e->>'serving_grams')::float8, 0), coalesce(e->>'serving_name', ''), (e->>'created_at')::timestamptz
+           coalesce((e->>'serving_grams')::float8, 0), coalesce(e->>'serving_name', ''), (e->>'created_at')::timestamptz,
+           coalesce(e->>'unit', 'g'), coalesce((e->>'last_amount')::float8, 0), coalesce(e->>'categories', '')
     from jsonb_array_elements(coalesce(payload->'foods', '[]'::jsonb)) e;
 
   delete from public.exercises where user_id = uid;

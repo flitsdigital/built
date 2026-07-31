@@ -48,12 +48,18 @@ enum Sync {
     private struct ProteinRow: Codable {
         var user_id: UUID; var date: Date; var grams: Int; var label: String
         var kcal: Int; var carbs: Int; var fat: Int; var meal: String
+        // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
+        var amount: Double? = 0
+        var unit: String? = "g"
     }
     private struct FoodRow: Codable {
         var user_id: UUID; var name: String; var brand: String; var barcode: String
         var protein100: Double; var kcal100: Double; var carbs100: Double; var fat100: Double
         var favorite: Bool; var image_url: String
         var serving_grams: Double; var serving_name: String; var created_at: Date
+        var unit: String? = "g"
+        var last_amount: Double? = 0
+        var categories: String? = ""
     }
     private struct SetRow: Codable {
         var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
@@ -110,7 +116,14 @@ enum Sync {
               let urlString = dict["SUPABASE_URL"], let key = dict["SUPABASE_ANON_KEY"],
               !urlString.isEmpty, !key.isEmpty, let supabaseURL = URL(string: urlString)
         else { return nil }
-        return SupabaseClient(supabaseURL: supabaseURL, supabaseKey: key)
+        // emitLocalSessionAsInitialSession: supabase-swift waarschuwt dat het huidige
+        // gedrag (eerst refreshen, dán de sessie uitzenden) een bug is die in de
+        // volgende major omklapt. Nu al opt-in, dan verandert er straks niets.
+        // De platform-init vult de standaard keychain-storage zelf in.
+        return SupabaseClient(
+            supabaseURL: supabaseURL,
+            supabaseKey: key,
+            options: .init(auth: .init(emitLocalSessionAsInitialSession: true)))
     }()
 
     static var isConfigured: Bool { client != nil }
@@ -142,7 +155,8 @@ enum Sync {
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
         p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)]))
             .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label,
-                              kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal) }
+                              kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal,
+                              amount: $0.amount, unit: $0.unit) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
             .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps,
                           dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) }
@@ -166,7 +180,8 @@ enum Sync {
                            carbs100: $0.carbs100, fat100: $0.fat100,
                            favorite: $0.favorite, image_url: $0.imageURL,
                            serving_grams: $0.servingGrams, serving_name: $0.servingName,
-                           created_at: $0.createdAt) }
+                           created_at: $0.createdAt,
+                           unit: $0.unit, last_amount: $0.lastAmount, categories: $0.categories) }
         p.exercises = try context.fetch(FetchDescriptor<Exercise>(sortBy: [.init(\.name)]))
             .map { ExerciseRow(user_id: uid, name: $0.name, muscle: $0.muscle, type: $0.type, created_at: $0.createdAt) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
@@ -239,7 +254,9 @@ enum Sync {
         for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
         for r in proteins {
             context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label,
-                                        kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal))
+                                        kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal,
+                                        amount: r.amount ?? 0,
+                                        unit: FoodUnit(rawValue: r.unit ?? "g") ?? .gram))
         }
         for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps,
                                                     dropset: r.dropset ?? false, failure: r.failure ?? false,
@@ -284,6 +301,9 @@ enum Sync {
             f.servingGrams = r.serving_grams
             f.servingName = r.serving_name
             f.createdAt = r.created_at
+            f.unit = r.unit ?? FoodUnit.gram.rawValue
+            f.lastAmount = r.last_amount ?? 0
+            f.categories = r.categories ?? ""
             context.insert(f)
         }
         for r in exerciseRows {

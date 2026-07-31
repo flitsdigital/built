@@ -4,198 +4,11 @@ import SwiftData
 let mealOrder = ["breakfast", "lunch", "dinner", "snack"]
 let mealNames = ["breakfast": "Ontbijt", "lunch": "Lunch", "dinner": "Diner", "snack": "Snacks"]
 
-// Eiwit loggen, gestructureerd per maaltijd (Lifesum/MyFitnessPal-patroon).
-// Tik = 1 portie; ingedrukt houden = porties of aanpassen; tik op gelogd item = bewerken.
-struct ProteinLogSheet: View {
-    let profile: Profile
-    @Environment(\.modelContext) private var context
-    @Environment(\.dismiss) private var dismiss
-    @Query private var proteins: [ProteinEntry]
-    @Query(sort: \Meal.createdAt) private var meals: [Meal]
-
-    @State private var editingEntry: ProteinEntry?
-    @State private var showCustom = false
-    @State private var customPrefill: QuickAdd?
-
-    struct QuickAdd: Identifiable {
-        var id: String { key }
-        let key: String
-        let label: String
-        let grams: Int
-        let kcal: Int
-        let favorite: Bool
-    }
-
-    private var cal: Calendar { .current }
-    private var todayEntries: [ProteinEntry] {
-        proteins.filter { cal.isDateInToday($0.date) }.sorted { $0.date < $1.date }
-    }
-    private var todayProtein: Int { todayEntries.map(\.grams).reduce(0, +) }
-    private var todayKcal: Int { todayEntries.map(\.kcal).reduce(0, +) }
-
-    private var yesterdayEntries: [ProteinEntry] {
-        guard let yesterday = cal.date(byAdding: .day, value: -1, to: .now) else { return [] }
-        return proteins.filter { dayKey($0.date) == dayKey(yesterday) }
-    }
-
-    private var quickAdds: [QuickAdd] {
-        var out = meals.filter { $0.proteinPerServing > 0 }
-            .sorted { ($0.favorite ? 0 : 1, $0.createdAt) < (($1.favorite ? 0 : 1), $1.createdAt) }
-            .map { QuickAdd(key: "meal-\($0.name)", label: $0.name,
-                            grams: $0.proteinPerServing, kcal: $0.kcalPerServing, favorite: $0.favorite) }
-        for s in proteins.suggestions(limit: 8) where !out.contains(where: { $0.label == s.label }) {
-            out.append(QuickAdd(key: s.key, label: s.label, grams: s.grams, kcal: s.kcal, favorite: false))
-        }
-        return Array(out.prefix(8))
-    }
-
-    private func entries(for meal: String) -> [ProteinEntry] {
-        todayEntries.filter { $0.mealKey == meal }
-    }
-
-    private func mealTotal(_ meal: String) -> Int {
-        entries(for: meal).map(\.grams).reduce(0, +)
-    }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    LabeledContent("Vandaag", value: "\(todayProtein) / \(profile.proteinTarget) g\(todayKcal > 0 ? " · \(todayKcal) kcal" : "")")
-                    HStack(spacing: 0) {
-                        ForEach(mealOrder, id: \.self) { meal in
-                            VStack(spacing: 2) {
-                                Text("\(mealTotal(meal))")
-                                    .font(.footnote.bold().monospacedDigit())
-                                Text(mealNames[meal] ?? meal)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-
-                Section {
-                    if !yesterdayEntries.isEmpty {
-                        Button {
-                            repeatYesterday()
-                        } label: {
-                            Label("Herhaal gisteren (\(yesterdayEntries.map(\.grams).reduce(0, +)) g)",
-                                  systemImage: "arrow.uturn.backward")
-                        }
-                    }
-                    ForEach(quickAdds) { item in
-                        Button {
-                            log(item)
-                        } label: {
-                            HStack {
-                                Image(systemName: "plus.circle.fill").foregroundStyle(.green)
-                                Text(item.label).foregroundStyle(.primary)
-                                if item.favorite {
-                                    Image(systemName: "star.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(.yellow)
-                                }
-                                Spacer()
-                                Text("\(item.grams) g").foregroundStyle(.secondary)
-                            }
-                        }
-                        .contextMenu {
-                            Button("½ portie (\(Int((Double(item.grams) * 0.5).rounded())) g)") { log(item, multiplier: 0.5) }
-                            Button("1½ portie (\(Int((Double(item.grams) * 1.5).rounded())) g)") { log(item, multiplier: 1.5) }
-                            Button("2 porties (\(item.grams * 2) g)") { log(item, multiplier: 2) }
-                            Divider()
-                            Button("Aanpassen…", systemImage: "slider.horizontal.3") {
-                                customPrefill = item
-                                showCustom = true
-                            }
-                        }
-                    }
-                    Button {
-                        customPrefill = nil
-                        showCustom = true
-                    } label: {
-                        HStack {
-                            Image(systemName: "plus.circle").foregroundStyle(.secondary)
-                            Text("Eigen maaltijd…").foregroundStyle(.primary)
-                        }
-                    }
-                } header: {
-                    Text("Snel toevoegen")
-                } footer: {
-                    Text("Tik = 1 portie · houd ingedrukt voor porties of aanpassen.")
-                }
-
-                ForEach(mealOrder, id: \.self) { meal in
-                    let list = entries(for: meal)
-                    if !list.isEmpty {
-                        Section("\(mealNames[meal] ?? meal) — \(mealTotal(meal)) g") {
-                            ForEach(list) { entry in
-                                Button {
-                                    editingEntry = entry
-                                } label: {
-                                    LabeledContent {
-                                        Text("\(entry.grams) g\(entry.kcal > 0 ? " · \(entry.kcal) kcal" : "")")
-                                    } label: {
-                                        Text(entry.label).foregroundStyle(.primary)
-                                    }
-                                }
-                            }
-                            .onDelete { offsets in
-                                for i in offsets { context.delete(list[i]) }
-                            }
-                        }
-                    }
-                }
-
-                Section {
-                    NavigationLink { MealsView() } label: {
-                        Label("Maaltijden & recepten", systemImage: "fork.knife")
-                    }
-                }
-            }
-            .navigationTitle("Eiwit loggen")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Klaar") { dismiss() }
-                }
-            }
-            .sensoryFeedback(.increase, trigger: todayProtein)
-            .sheet(item: $editingEntry) { entry in
-                ProteinEntrySheet(entry: entry)
-            }
-            .sheet(isPresented: $showCustom) {
-                ProteinEntrySheet(prefill: customPrefill)
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func log(_ item: QuickAdd, multiplier: Double = 1) {
-        context.insert(ProteinEntry(grams: Int((Double(item.grams) * multiplier).rounded()),
-                                    label: item.label,
-                                    kcal: Int((Double(item.kcal) * multiplier).rounded()),
-                                    meal: ProteinEntry.guessMeal()))
-    }
-
-    private func repeatYesterday() {
-        for entry in yesterdayEntries {
-            // Niet in de toekomst plaatsen: een item van gisteravond wordt anders "vanavond".
-            let newDate = min(cal.date(byAdding: .day, value: 1, to: entry.date) ?? .now, .now)
-            context.insert(ProteinEntry(date: newDate, grams: entry.grams, label: entry.label,
-                                        kcal: entry.kcal, meal: entry.meal))
-        }
-    }
-}
 
 /// Eén sheet voor alles: eigen maaltijd toevoegen, een suggestie aanpassen,
 /// of een gelogd item bewerken.
 struct ProteinEntrySheet: View {
     var entry: ProteinEntry?
-    var prefill: ProteinLogSheet.QuickAdd?
     var entryDate: Date = .now
 
     @Environment(\.modelContext) private var context
@@ -208,30 +21,68 @@ struct ProteinEntrySheet: View {
     @State private var meal = ProteinEntry.guessMeal()
     @State private var saveAsMeal = false
     @State private var loaded = false
+    /// Hoeveelheid in de eenheid van de invoer; 0 = geen portie bekend.
+    @State private var amount = 0
+
+    /// Met een bekende portie bewerk je de hoeveelheid en schalen de macro's mee.
+    /// Zonder (oudere invoer) blijft het handmatig — dan is er niets om op te schalen.
+    private var per100: (protein: Double, kcal: Double, carbs: Double, fat: Double)? { entry?.per100 }
+
+    private func scale(_ v: Double) -> Int { Int((v * Double(amount) / 100).rounded()) }
 
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Wat (bijv. Kwark)", text: $label)
-                LabeledContent("Eiwit (g)") {
-                    TextField("g", value: $grams, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                }
-                LabeledContent("Kcal") {
-                    TextField("kcal", value: $kcal, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                }
-                LabeledContent("Koolhydraten (g)") {
-                    TextField("g", value: $carbs, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                }
-                LabeledContent("Vet (g)") {
-                    TextField("g", value: $fat, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
+                if let p = per100 {
+                    let unit = entry?.foodUnit ?? .gram
+                    Section {
+                        HStack(spacing: 10) {
+                            Button { amount = max(amount - (unit == .milliliter ? 50 : 10), 0) } label: {
+                                Image(systemName: "minus").frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.bordered).disabled(amount <= 0)
+                            TextField("100", value: $amount, format: .number)
+                                .keyboardType(.numberPad)
+                                .font(.title3.bold().monospacedDigit())
+                                .multilineTextAlignment(.center)
+                                .frame(width: 64)
+                            Text(unit.label).foregroundStyle(.secondary)
+                            Button { amount += (unit == .milliliter ? 50 : 10) } label: {
+                                Image(systemName: "plus").frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.bordered)
+                            Spacer()
+                        }
+                        Text("\(scale(p.protein)) g eiwit · \(scale(p.kcal)) kcal · \(scale(p.carbs)) g koolh. · \(scale(p.fat)) g vet")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.numericText())
+                            .animation(.snappy(duration: 0.2), value: amount)
+                    } header: {
+                        Text("Hoeveelheid")
+                    }
+                } else {
+                    LabeledContent("Eiwit (g)") {
+                        TextField("g", value: $grams, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Kcal") {
+                        TextField("kcal", value: $kcal, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Koolhydraten (g)") {
+                        TextField("g", value: $carbs, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    LabeledContent("Vet (g)") {
+                        TextField("g", value: $fat, format: .number)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
                 }
                 Picker("Maaltijd", selection: $meal) {
                     ForEach(mealOrder, id: \.self) { m in
@@ -251,7 +102,7 @@ struct ProteinEntrySheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Opslaan") { save() }
-                        .disabled(grams <= 0)
+                        .disabled(per100 == nil ? grams <= 0 : amount <= 0)
                 }
             }
         }
@@ -266,11 +117,7 @@ struct ProteinEntrySheet: View {
                 carbs = entry.carbs
                 fat = entry.fat
                 meal = entry.mealKey
-            } else if let prefill {
-                meal = ProteinEntry.guessMeal(for: entryDate)
-                label = prefill.label
-                grams = prefill.grams
-                kcal = prefill.kcal
+                amount = Int(entry.amount.rounded())
             }
         }
     }
@@ -279,10 +126,14 @@ struct ProteinEntrySheet: View {
         let cleanLabel = label.trimmingCharacters(in: .whitespaces)
         if let entry {
             entry.label = cleanLabel.isEmpty ? "Eigen maaltijd" : cleanLabel
-            entry.grams = grams
-            entry.kcal = kcal
-            entry.carbs = carbs
-            entry.fat = fat
+            if entry.per100 != nil {
+                entry.rescale(to: Double(amount)) // macro's volgen de portie
+            } else {
+                entry.grams = grams
+                entry.kcal = kcal
+                entry.carbs = carbs
+                entry.fat = fat
+            }
             entry.meal = meal
         } else {
             context.insert(ProteinEntry(date: entryDate, grams: grams,

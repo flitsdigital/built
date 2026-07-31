@@ -297,7 +297,13 @@ final class ProteinEntry {
     var carbs: Int = 0
     var fat: Int = 0
     var meal: String = "" // "breakfast" | "lunch" | "dinner" | "snack"; leeg = raden op tijdstip
-    init(date: Date = .now, grams: Int, label: String, kcal: Int = 0, carbs: Int = 0, fat: Int = 0, meal: String = "") {
+    /// Hoeveelheid zoals gelogd, in `unit`. 0 = oudere invoer zonder portie; die blijft
+    /// op macro-niveau bewerkbaar. Hiermee kun je "250 → 200 g" aanpassen zonder zelf
+    /// vier macro's te herrekenen.
+    var amount: Double = 0
+    var unit: String = FoodUnit.gram.rawValue
+    init(date: Date = .now, grams: Int, label: String, kcal: Int = 0, carbs: Int = 0, fat: Int = 0,
+         meal: String = "", amount: Double = 0, unit: FoodUnit = .gram) {
         self.date = date
         self.grams = grams
         self.label = label
@@ -305,6 +311,28 @@ final class ProteinEntry {
         self.carbs = carbs
         self.fat = fat
         self.meal = meal
+        self.amount = amount
+        self.unit = unit.rawValue
+    }
+
+    var foodUnit: FoodUnit { FoodUnit(rawValue: unit) ?? .gram }
+
+    /// Waarden per 100 g/ml, teruggerekend uit wat er gelogd is. nil bij oudere invoer
+    /// zonder portie — dan is er niets om op te schalen.
+    var per100: (protein: Double, kcal: Double, carbs: Double, fat: Double)? {
+        guard amount > 0 else { return nil }
+        let f = 100 / amount
+        return (Double(grams) * f, Double(kcal) * f, Double(carbs) * f, Double(fat) * f)
+    }
+
+    /// Zet de hoeveelheid om en schaalt de macro's mee.
+    func rescale(to newAmount: Double) {
+        guard let p = per100, newAmount > 0 else { return }
+        amount = newAmount
+        grams = Int((p.protein * newAmount / 100).rounded())
+        kcal = Int((p.kcal * newAmount / 100).rounded())
+        carbs = Int((p.carbs * newAmount / 100).rounded())
+        fat = Int((p.fat * newAmount / 100).rounded())
     }
 
     static func guessMeal(for date: Date = .now) -> String {
@@ -318,6 +346,79 @@ final class ProteinEntry {
 
     /// Effectieve maaltijd: expliciet gekozen, anders geraden op tijdstip.
     var mealKey: String { meal.isEmpty ? Self.guessMeal(for: date) : meal }
+}
+
+// MARK: - Porties en eenheden
+//
+// Je denkt niet in grammen maar in porties: "een glas melk", "een snee brood".
+// Hieronder de vertaling van beide kanten op — welke eenheid hoort bij dit product,
+// en welke vaste porties zijn zinnig om aan te bieden.
+
+/// Drank log je in milliliters, de rest in grammen.
+enum FoodUnit: String, Codable, CaseIterable {
+    case gram = "g"
+    case milliliter = "ml"
+
+    var label: String { rawValue }
+
+    /// Categorie-hints uit OpenFoodFacts. `categories_tags` is daar wél gevuld waar
+    /// `product_quantity_unit` en `serving_size` leeg blijven — geverifieerd op melk,
+    /// cola, brood en kwark. Substring-match, zodat `en:milks-liquid-and-powder` en
+    /// `en:carbonated-drinks` ook meetellen.
+    private static let drinkTagHints = ["beverage", "milk", "water", "juice", "drink",
+                                        "soda", "tea", "coffee", "smoothie"]
+    /// Terugval voor eigen producten, die geen categorieën hebben.
+    private static let drinkWords = ["melk", "water", "sap", "jus", "cola", "koffie", "thee", "limonade",
+                                     "frisdrank", "smoothie", "shake", "bier", "wijn", "drinkyoghurt"]
+
+    /// Slimme gok, geen wet: in de portie-sheet kun je 'm altijd omzetten.
+    static func detect(categories: [String], name: String) -> FoodUnit {
+        let tags = categories.joined(separator: " ").lowercased()
+        if drinkTagHints.contains(where: tags.contains) { return .milliliter }
+        guard categories.isEmpty else { return .gram } // categorieën bekend en niet-drank → klaar
+        let lower = name.lowercased()
+        return drinkWords.contains(where: lower.contains) ? .milliliter : .gram
+    }
+}
+
+/// Eén aanklikbare portie: "1 glas" → 250 ml.
+struct FoodPortion: Identifiable, Hashable {
+    var label: String
+    var amount: Double
+    var id: String { label }
+}
+
+enum FoodPortions {
+    private static let drink = [FoodPortion(label: "Klein glas", amount: 200),
+                               FoodPortion(label: "1 glas", amount: 250),
+                               FoodPortion(label: "Groot glas", amount: 330),
+                               FoodPortion(label: "Blikje", amount: 330),
+                               FoodPortion(label: "Fles", amount: 500)]
+    private static let bread = [FoodPortion(label: "1 snee", amount: 35),
+                               FoodPortion(label: "1 broodje", amount: 60),
+                               FoodPortion(label: "1 bolletje", amount: 50)]
+    private static let egg = [FoodPortion(label: "1 ei", amount: 60),
+                             FoodPortion(label: "2 eieren", amount: 120)]
+    private static let dairy = [FoodPortion(label: "1 bakje", amount: 150),
+                               FoodPortion(label: "1 schaal", amount: 250),
+                               FoodPortion(label: "1 el", amount: 15)]
+    private static let spoon = [FoodPortion(label: "1 tl", amount: 5),
+                               FoodPortion(label: "1 el", amount: 15)]
+    private static let generic = [FoodPortion(label: "50 g", amount: 50),
+                                 FoodPortion(label: "100 g", amount: 100),
+                                 FoodPortion(label: "250 g", amount: 250)]
+
+    /// Vaste porties voor dit product. Categorieën gaan voor; bij eigen producten
+    /// beslist de naam. Valt terug op de oude 50/100/250.
+    static func suggested(unit: FoodUnit, categories: [String], name: String) -> [FoodPortion] {
+        if unit == .milliliter { return drink }
+        let hay = (categories + [name]).joined(separator: " ").lowercased()
+        if ["bread", "brood", "toast", "cracker", "beschuit"].contains(where: hay.contains) { return bread }
+        if ["egg", ":ei", " ei", "eieren"].contains(where: hay.contains) { return egg }
+        if ["spread", "oil", "sauce", "boter", "olie", "saus", "jam", "pindakaas"].contains(where: hay.contains) { return spoon }
+        if ["dairies", "yogurt", "yoghurt", "kwark", "skyr", "cottage"].contains(where: hay.contains) { return dairy }
+        return generic
+    }
 }
 
 /// Product uit de scanner of zoekfunctie; voedingswaarden per 100 g.
@@ -337,6 +438,16 @@ final class FoodProduct {
     var servingName: String = ""
     var createdAt: Date = Date.now
     var lastUsed: Date = Date.now
+    /// "g" of "ml" — onthouden, zodat melk niet elke keer opnieuw in grammen begint.
+    var unit: String = FoodUnit.gram.rawValue
+    /// Laatst gelogde hoeveelheid; de logische startwaarde de volgende keer.
+    var lastAmount: Double = 0
+    /// OFF-categorieën, voor de portie-suggesties. Kommagescheiden gehouden zodat het
+    /// één kolom blijft in de sync.
+    var categories: String = ""
+
+    var foodUnit: FoodUnit { FoodUnit(rawValue: unit) ?? .gram }
+    var categoryList: [String] { categories.isEmpty ? [] : categories.components(separatedBy: ",") }
 
     init(name: String, brand: String = "", barcode: String = "",
          protein100: Double, kcal100: Double, carbs100: Double = 0, fat100: Double = 0) {
