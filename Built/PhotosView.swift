@@ -63,6 +63,7 @@ struct PhotosView: View {
                         comparePhoto(oldest)
                         Image(systemName: "arrow.right")
                             .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
                         comparePhoto(newest)
                     }
                     .padding(.vertical, 4)

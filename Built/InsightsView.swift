@@ -398,6 +398,7 @@ struct InsightsView: View {
                 Text("Records").font(.headline).foregroundStyle(.primary)
                 Spacer()
                 Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             .builtCard()
         }
@@ -504,6 +505,7 @@ struct InsightsView: View {
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "chart.line.flattrend.xyaxis").foregroundStyle(.orange)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(lift.name).foregroundStyle(.primary)
                                 Text("\(lift.sessions) sessies zonder nieuw record")
@@ -512,6 +514,7 @@ struct InsightsView: View {
                             }
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
                         }
                         .padding(.vertical, 10)
                     }

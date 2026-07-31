@@ -130,6 +130,7 @@ struct ExerciseRow: View {
                 .foregroundStyle(.green)
                 .frame(width: 32, height: 32)
                 .background(.builtTint(.green), in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).foregroundStyle(.primary)
                 if let muscle {
@@ -211,6 +212,8 @@ struct ExercisePickerSheet: View {
                     } label: {
                         Image(systemName: muscleFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                     }
+                    .accessibilityLabel("Filter")
+                    .accessibilityValue(muscleFilter ?? "Alle spiergroepen")
                 }
             }
             .sheet(isPresented: $creating) {
@@ -346,6 +349,8 @@ struct ExerciseLibraryView: View {
                 } label: {
                     Image(systemName: muscleFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
                 }
+                .accessibilityLabel("Filter")
+                .accessibilityValue(muscleFilter ?? "Alle spiergroepen")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { creating = true } label: { Image(systemName: "plus") }

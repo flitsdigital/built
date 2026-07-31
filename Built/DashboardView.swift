@@ -472,6 +472,7 @@ struct DashboardView: View {
                     Spacer()
                     Image(systemName: "chevron.right")
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
             }
         }
@@ -617,6 +618,7 @@ struct DashboardView: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.bold())
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             } else {
                 Image(systemName: done ? "checkmark.circle.fill" : (missed ? "circle.slash" : "circle"))
                     .font(.title3)
@@ -624,6 +626,9 @@ struct DashboardView: View {
                     .contentTransition(.symbolEffect(.replace))
                     .animation(.snappy(duration: 0.2), value: done)
                     .animation(.snappy(duration: 0.2), value: missed)
+                    // De staat zit alleen in het bolletje; zonder dit hoor je niet of
+                    // de habit al af is.
+                    .accessibilityLabel(done ? "Afgevinkt" : (missed ? "Niet gehaald" : "Nog te doen"))
             }
         }
     }

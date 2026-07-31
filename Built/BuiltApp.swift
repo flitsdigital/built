@@ -116,6 +116,8 @@ struct RootView: View {
                     .frame(width: 36, height: 36)
                     .background(.builtTint(.green), in: Circle())
             }
+            .accessibilityLabel("Rusttijd")
+            .accessibilityValue(restLabel(restSeconds))
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text("Rust")
@@ -164,6 +166,7 @@ struct RootView: View {
                     .foregroundStyle(.green)
                     .frame(width: 36, height: 36)
                     .background(.builtTint(.green), in: Circle())
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Training bezig")
                         .font(.footnote.bold())
@@ -179,6 +182,7 @@ struct RootView: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.bold())
                     .foregroundStyle(.green)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

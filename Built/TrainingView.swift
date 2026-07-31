@@ -847,6 +847,7 @@ struct TrainingView: View {
                             .font(.title3)
                             .foregroundStyle(tint)
                     }
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("VANDAAG GEPLAND")
                         .font(.caption2.weight(.semibold)).tracking(0.8)
@@ -861,6 +862,8 @@ struct TrainingView: View {
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)
                     .background(.green, in: Circle())
+                    // Zonder dit leest de kaart als tekst zonder actie: tikken start de training.
+                    .accessibilityLabel("Start training")
             }
             .builtCard()
         }
@@ -885,6 +888,7 @@ struct TrainingView: View {
                             .font(.subheadline)
                             .foregroundStyle(tint)
                     }
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(routine.name).font(.headline).foregroundStyle(.primary)
                     Text(routineSubtitle(routine))
@@ -1458,6 +1462,7 @@ struct WorkoutSummarySheet: View {
                     .font(.system(size: 64))
                     .foregroundStyle(.green)
                     .symbolEffect(.bounce, value: bounced)
+                    .accessibilityHidden(true)
                 Text("Sterk werk, \(name)! 💪")
                     .font(.title2.bold())
                 HStack {
@@ -1501,6 +1506,7 @@ struct WorkoutSummarySheet: View {
                         .padding(.horizontal, 6)
                 }
                 .buttonStyle(.bordered)
+                .accessibilityLabel("Delen")
                 Button {
                     dismiss()
                 } label: {
@@ -1745,6 +1751,7 @@ struct RoutineEditorView: View {
                         HStack(spacing: 12) {
                             Image(systemName: "line.3.horizontal")
                                 .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(name).foregroundStyle(.primary)
                                 let sub = subtitle(for: name)

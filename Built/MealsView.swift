@@ -44,16 +44,22 @@ struct ProteinEntrySheet: View {
                                 Image(systemName: "minus").frame(width: 30, height: 30)
                             }
                             .buttonStyle(.bordered).disabled(amount <= 0)
+                            .accessibilityLabel("Minder")
+                            .accessibilityValue("\(amount) \(unit.label)")
                             TextField("100", value: $amount, format: .number)
                                 .keyboardType(.numberPad)
                                 .font(.title3.bold().monospacedDigit())
                                 .multilineTextAlignment(.center)
                                 .frame(width: 64)
+                                .accessibilityLabel("Hoeveelheid")
+                                .accessibilityValue("\(amount) \(unit.label)")
                             Text(unit.label).foregroundStyle(.secondary)
                             Button { amount += (unit == .milliliter ? 50 : 10) } label: {
                                 Image(systemName: "plus").frame(width: 30, height: 30)
                             }
                             .buttonStyle(.bordered)
+                            .accessibilityLabel("Meer")
+                            .accessibilityValue("\(amount) \(unit.label)")
                             Spacer()
                         }
                         Text("\(scale(p.protein)) g eiwit · \(scale(p.kcal)) kcal · \(scale(p.carbs)) g koolh. · \(scale(p.fat)) g vet")
@@ -171,6 +177,7 @@ struct MealsView: View {
                                 Image(systemName: "star.fill")
                                     .font(.caption)
                                     .foregroundStyle(.yellow)
+                                    .accessibilityLabel("Favoriet")
                             }
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(m.name)

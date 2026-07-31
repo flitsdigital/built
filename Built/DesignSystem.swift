@@ -212,6 +212,9 @@ struct BuiltIconTile: View {
                     .font(.subheadline)
                     .foregroundStyle(color)
             }
+            // Staat altijd naast een titel die hetzelfde zegt — anders leest VoiceOver
+            // de symboolnaam ("figure.walk") vóór de rij zelf.
+            .accessibilityHidden(true)
     }
 }
 

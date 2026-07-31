@@ -89,6 +89,7 @@ struct OnboardingView: View {
                     .background(Color(.secondarySystemGroupedBackground), in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Vorige stap")
             .opacity(step > 0 ? 1 : 0)
             .disabled(step == 0)
 
@@ -334,6 +335,7 @@ struct OnboardingView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.title3)
                 .foregroundStyle(.green)
+                .accessibilityHidden(true)
         }
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))

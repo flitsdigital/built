@@ -166,6 +166,7 @@ struct WeightView: View {
                             Image(systemName: "camera")
                                 .foregroundStyle(.secondary)
                                 .frame(width: 36)
+                                .accessibilityHidden(true)
                         }
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Progress foto's")
@@ -348,6 +349,7 @@ struct WeightView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .frame(width: 18)
+                .accessibilityHidden(true) // het tijdstip staat rechts al voluit in de rij
             Text("\(entry.kg.kgText) kg")
                 .font(.body.weight(.semibold))
                 .monospacedDigit()

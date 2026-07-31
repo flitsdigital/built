@@ -238,6 +238,7 @@ struct FoodThumb: View {
         .frame(width: size, height: size)
         .background(Color(.tertiarySystemFill))
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .accessibilityHidden(true) // staat altijd naast de productnaam
     }
 }
 
@@ -460,6 +461,7 @@ struct FoodView: View {
                     Image(systemName: "plus.circle.fill")
                         .font(.title2)
                         .foregroundStyle(.green)
+                        .accessibilityHidden(true)
                 }
             }
             .buttonStyle(.plain)
@@ -669,6 +671,7 @@ struct FoodLogSheet: View {
                                     .foregroundStyle(.green)
                                     .frame(width: 34, height: 34)
                                     .background(.builtTint(.green), in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+                                    .accessibilityHidden(true)
                                 Text(s.label).foregroundStyle(.primary).lineLimit(1)
                                 Spacer()
                                 Text("\(s.grams) g\(s.kcal > 0 ? " · \(s.kcal) kcal" : "")")
@@ -676,6 +679,7 @@ struct FoodLogSheet: View {
                                     .foregroundStyle(.secondary)
                                 Image(systemName: "plus.circle.fill")
                                     .foregroundStyle(.green)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .buttonStyle(.plain)
@@ -774,6 +778,7 @@ struct FoodLogSheet: View {
                         .font(.caption.bold())
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(open ? 180 : 0))
+                        .accessibilityHidden(true)
                 }
             }
             .buttonStyle(.plain)
@@ -828,6 +833,7 @@ struct FoodLogSheet: View {
                     Text(name).foregroundStyle(.primary).lineLimit(1)
                     if favorite {
                         Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+                            .accessibilityLabel("Favoriet")
                     }
                 }
                 if !brand.isEmpty {
@@ -1038,6 +1044,7 @@ struct FoodLogSheet: View {
                             Text(recipe.name).foregroundStyle(.primary)
                             if recipe.favorite {
                                 Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+                                    .accessibilityLabel("Favoriet")
                             }
                             Spacer()
                             Text("\(recipe.proteinPerServing) g · \(recipe.kcalPerServing) kcal")
@@ -1104,6 +1111,9 @@ struct PortionEditor: View {
                         .font(.system(size: 30, weight: .semibold, design: .rounded).monospacedDigit())
                         .multilineTextAlignment(.trailing)
                         .fixedSize()
+                        // Zonder label leest VoiceOver de placeholder, dus het veld heette "100".
+                        .accessibilityLabel("Hoeveelheid")
+                        .accessibilityValue("\(amount) \(unit.label)")
                     Picker("Eenheid", selection: $unit) {
                         ForEach(FoodUnit.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
@@ -1182,6 +1192,8 @@ struct PortionEditor: View {
                 .background(Color(.tertiarySystemFill), in: Circle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(symbol == "minus" ? "Minder" : "Meer")
+        .accessibilityValue("\(amount) \(unit.label)")
     }
 }
 

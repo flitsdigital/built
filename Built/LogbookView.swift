@@ -112,6 +112,7 @@ struct LogbookView: View {
                             .background(.builtTint(.green), in: Circle())
                     }
                     .accessibilityLabel("Filter")
+                    .accessibilityValue(filter.rawValue) // actieve filter zit alleen in de icoonvariant
                 }
                 ForEach(groups, id: \.month) { group in
                     BuiltSectionHeader(group.month.formatted(.dateTime.month(.wide).year()))
@@ -182,6 +183,7 @@ struct LogbookView: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.bold())
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
             .opacity(empty && !isToday ? 0.55 : 1)
