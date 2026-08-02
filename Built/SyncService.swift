@@ -136,6 +136,7 @@ enum Sync {
         var soreness: Int? = 0
         var stress: Int? = 0
         var exercise_notes: [String: String]? = [:]
+        var workout_name: String? = ""
         var updated_at: String?; var deleted_at: String?
     }
     private struct RoutineRow: Codable, Sendable, SyncRow {
@@ -162,6 +163,7 @@ enum Sync {
     }
     private struct ExerciseRow: Codable, Sendable, SyncRow {
         var id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date
+        var secondary_muscles: [String]? = []
         var updated_at: String?; var deleted_at: String?
     }
     private struct HabitLogRow: Codable, Sendable, SyncRow {
@@ -290,7 +292,7 @@ enum Sync {
                   note: e.note, bed_time: e.bedTime, wake_time: e.wakeTime, sleep_quality: e.sleepQuality,
                   journal: e.journal, workout_note: e.workoutNote, energy: e.energy, mood: e.mood,
                   soreness: e.soreness, stress: e.stress, exercise_notes: e.exerciseNotes,
-                  updated_at: at)
+                  workout_name: e.workoutName, updated_at: at)
     }
     private static func row(_ e: Routine, _ at: String?) -> RoutineRow {
         RoutineRow(id: e.syncID, name: e.name, exercises: e.exercises, alternatives: e.alternatives,
@@ -310,7 +312,7 @@ enum Sync {
     }
     private static func row(_ e: Exercise, _ at: String?) -> ExerciseRow {
         ExerciseRow(id: e.syncID, name: e.name, muscle: e.muscle, type: e.type,
-                    created_at: e.createdAt, updated_at: at)
+                    created_at: e.createdAt, secondary_muscles: e.secondaryMuscles, updated_at: at)
     }
     private static func row(_ e: Scale, _ at: String?) -> ScaleRow {
         ScaleRow(id: e.syncID, name: e.name, updated_at: at)
@@ -695,6 +697,7 @@ enum Sync {
         m.energy = r.energy ?? 0; m.mood = r.mood ?? 0
         m.soreness = r.soreness ?? 0; m.stress = r.stress ?? 0
         m.exerciseNotes = r.exercise_notes ?? [:]
+        m.workoutName = r.workout_name ?? ""
     }
     private static func apply(_ r: RoutineRow, to m: Routine) {
         m.name = r.name; m.exercises = r.exercises; m.alternatives = r.alternatives
@@ -716,6 +719,7 @@ enum Sync {
     }
     private static func apply(_ r: ExerciseRow, to m: Exercise) {
         m.name = r.name; m.muscle = r.muscle; m.type = r.type; m.createdAt = r.created_at
+        m.secondaryMuscles = r.secondary_muscles ?? []
     }
     private static func apply(_ r: ScaleRow, to m: Scale) { m.name = r.name }
     private static func apply(_ r: CustomHabitRow, to m: CustomHabit) {

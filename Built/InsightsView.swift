@@ -847,12 +847,97 @@ struct WeeklyReviewSheet: View {
 struct ExerciseDetailView: View {
     let exercise: String
     @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
+    @Query private var allExercises: [Exercise]
+    @AppStorage("exerciseChartMetric") private var metric = ChartMetric.topWeight
+    @AppStorage("exerciseChartRange") private var range = ChartRange.year
+
+    /// Wat de grafiek uitzet. Topgewicht zegt iets anders dan 1RM: zware triples laten je
+    /// topgewicht stijgen terwijl je 1RM vlak blijft, en andersom.
+    enum ChartMetric: String, CaseIterable, Identifiable {
+        case topWeight, e1rm, setVolume
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .topWeight: "Topgewicht"
+            case .e1rm: "Geschat 1RM"
+            case .setVolume: "Beste set"
+            }
+        }
+        var unit: String { self == .setVolume ? "kg volume" : "kg" }
+        func value(_ s: SetEntry) -> Double {
+            switch self {
+            case .topWeight: s.weightKg
+            case .e1rm: epley(s.weightKg, s.reps)
+            case .setVolume: s.weightKg * Double(s.reps)
+            }
+        }
+    }
+
+    enum ChartRange: String, CaseIterable, Identifiable {
+        case quarter, year, all
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .quarter: "3 mnd"
+            case .year: "Jaar"
+            case .all: "Alles"
+            }
+        }
+        var days: Int? {
+            switch self {
+            case .quarter: 90
+            case .year: 365
+            case .all: nil
+            }
+        }
+    }
 
     private var cal: Calendar { .current }
     private var sets: [SetEntry] { allSets.filter { $0.exercise == exercise } }
 
     private var days: [Date] {
         Set(sets.map { cal.startOfDay(for: $0.date) }).sorted(by: >)
+    }
+
+    /// De gekozen metriek per sessie, binnen de gekozen periode.
+    private var chartPoints: [(day: Date, value: Double)] {
+        let cutoff = range.days.flatMap { cal.date(byAdding: .day, value: -$0, to: .now) }
+        let inRange = cutoff.map { c in sets.filter { $0.date >= c } } ?? sets
+        return Dictionary(grouping: inRange) { cal.startOfDay(for: $0.date) }
+            .map { ($0.key, $0.value.map(metric.value).max() ?? 0) }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    /// Beste gewicht per aantal reps — de tabel waar je in de sportschool op afgaat.
+    /// Alleen reps waar ook echt op gewerkt is; boven de 12 wordt het uithoudingswerk.
+    private var repMaxes: [(reps: Int, kg: Double)] {
+        Dictionary(grouping: sets.filter { (1...12).contains($0.reps) }, by: \.reps)
+            .compactMap { reps, group in
+                guard let best = group.map(\.weightKg).max(), best > 0 else { return nil }
+                return (reps, best)
+            }
+            .sorted { $0.reps < $1.reps }
+    }
+
+    /// Welke records elke set brak op het moment dat hij gezet werd. Eén chronologische
+    /// pass; per set opzoeken zou kwadratisch worden over de volledige historie.
+    private var prBadges: [UUID: [String]] {
+        var out: [UUID: [String]] = [:]
+        var bestWeight = 0.0, bestE1rm = 0.0, bestVolume = 0.0
+        for s in sets.sorted(by: { $0.date < $1.date }) {
+            let volume = s.weightKg * Double(s.reps)
+            var badges: [String] = []
+            // Alleen records tégen een bestaande historie: anders krijgt de allereerste
+            // set van een oefening alle drie de badges en zegt het niets.
+            if bestWeight > 0, s.weightKg > bestWeight + 0.01 { badges.append("Gewicht") }
+            if bestE1rm > 0, epley(s.weightKg, s.reps) > bestE1rm + 0.01 { badges.append("1RM") }
+            if bestVolume > 0, volume > bestVolume + 0.01 { badges.append("Volume") }
+            if !badges.isEmpty { out[s.syncID] = badges }
+            bestWeight = max(bestWeight, s.weightKg)
+            bestE1rm = max(bestE1rm, epley(s.weightKg, s.reps))
+            bestVolume = max(bestVolume, volume)
+        }
+        return out
     }
 
     private var tops: [(day: Date, kg: Double)] {
@@ -888,13 +973,6 @@ struct ExerciseDetailView: View {
         return (slope * 7, in4, current)
     }
 
-    private func isRecordDay(_ day: Date) -> Bool {
-        let key = dayKey(day)
-        let dayBest = sets.filter { dayKey($0.date) == key }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
-        let before = sets.filter { $0.date < cal.startOfDay(for: day) }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
-        return before > 0 && dayBest > before + 0.1
-    }
-
     var body: some View {
         List {
             Section {
@@ -905,17 +983,47 @@ struct ExerciseDetailView: View {
             } footer: {
                 Text("Geschat 1RM via de Epley-formule: gewicht × (1 + reps ÷ 30).")
             }
-            if tops.count >= 2 {
-                Section("Topgewicht per sessie") {
-                    Chart(tops, id: \.day) { item in
-                        LineMark(x: .value("Dag", item.day), y: .value("kg", item.kg))
-                            .interpolationMethod(.catmullRom)
-                        PointMark(x: .value("Dag", item.day), y: .value("kg", item.kg))
+
+            if let record = allExercises.first(where: { $0.name == exercise }) {
+                Section("Spieren") {
+                    LabeledContent("Primair", value: record.muscle)
+                    if !record.secondaryMuscles.isEmpty {
+                        LabeledContent("Meewerkend", value: record.secondaryMuscles.joined(separator: ", "))
                     }
-                    .chartYScale(domain: .automatic(includesZero: false))
-                    .foregroundStyle(.green)
-                    .frame(height: 200)
-                    .padding(.vertical, 8)
+                }
+            }
+            if tops.count >= 2 {
+                Section {
+                    Picker("Metriek", selection: $metric) {
+                        ForEach(ChartMetric.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
+                    let points = chartPoints
+                    if points.count >= 2 {
+                        Chart(points, id: \.day) { item in
+                            LineMark(x: .value("Dag", item.day), y: .value(metric.unit, item.value))
+                                .interpolationMethod(.catmullRom)
+                            PointMark(x: .value("Dag", item.day), y: .value(metric.unit, item.value))
+                        }
+                        .chartYScale(domain: .automatic(includesZero: false))
+                        .foregroundStyle(.green)
+                        .frame(height: 200)
+                        .padding(.vertical, 8)
+                    } else {
+                        Text("Te weinig sessies in deze periode.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 40)
+                    }
+                    Picker("Periode", selection: $range) {
+                        ForEach(ChartRange.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
+                } header: {
+                    Text("Verloop")
                 }
             } else if !sets.isEmpty {
                 // Eén sessie: een lijn door één punt zegt niets, de sets binnen die sessie
@@ -939,6 +1047,21 @@ struct ExerciseDetailView: View {
                     Text("Vanaf je tweede sessie zie je hier je topgewicht per sessie.")
                 }
             }
+            let maxes = repMaxes
+            if maxes.count >= 2 {
+                Section {
+                    ForEach(maxes, id: \.reps) { item in
+                        LabeledContent("\(item.reps) \(item.reps == 1 ? "rep" : "reps")",
+                                       value: "\(item.kg.kgText) kg")
+                            .monospacedDigit()
+                    }
+                } header: {
+                    Text("Beste per aantal reps")
+                } footer: {
+                    Text("Je zwaarste set voor elk aantal herhalingen. Handig als richtpunt vlak voor je gaat tillen.")
+                }
+            }
+
             if let p = projection, p.slopePerWeek > 0.05 {
                 Section {
                     LabeledContent("Tempo", value: "+\(p.slopePerWeek.formatted(.number.precision(.fractionLength(1)))) kg/week (1RM)")
@@ -967,25 +1090,39 @@ struct ExerciseDetailView: View {
             }
 
             Section("Historie") {
+                let badges = prBadges
                 ForEach(days, id: \.self) { day in
                     let daySets = sets.filter { dayKey($0.date) == dayKey(day) }
                     let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(day.formatted(.dateTime.weekday(.wide).day().month()))
                                 .font(.headline)
-                            if isRecordDay(day) {
-                                Text("🏆").font(.caption)
-                            }
                             Spacer()
                             Text("\(vol) kg")
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        Text(daySets.map { "\($0.weightKg.kgText)×\($0.reps)" }.joined(separator: "  "))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        // Per set, zodat je ziet wélke set het record brak in plaats van
+                        // alleen dát er die dag een record viel.
+                        ForEach(daySets, id: \.syncID) { set in
+                            HStack(spacing: 6) {
+                                Text("\(set.weightKg.kgText)×\(set.reps)")
+                                    .font(.footnote.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                ForEach(badges[set.syncID] ?? [], id: \.self) { badge in
+                                    Text("🏅 \(badge)")
+                                        .font(.caption2.bold())
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.builtTint(.green), in: Capsule())
+                                        .foregroundStyle(.green)
+                                }
+                                Spacer()
+                            }
+                        }
                     }
+                    .padding(.vertical, 2)
                 }
             }
         }
