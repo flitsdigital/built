@@ -392,16 +392,18 @@ enum Sync {
     }
 
     private static func pushFull(_ context: ModelContext, skipIfUnchanged: Bool) async throws {
-        _ = try await userID() // geldige sessie, of anoniem aanmelden bij een verse install
+        _ = try await userID() // geldige sessie; zonder account komt niemand hier
+        // Vóór het verzamelen, want alles wat ná dit moment binnenkomt zit niet in de
+        // payload en moet blijven staan. `collect` zelf heeft geen await, dus daar kan
+        // geen save tussendoor glippen.
+        let cutoff = Date.now
         let p = try collect(context)
         let h = try await fingerprint(p)
         // Automatisch pad: staat alles er al, dan is er niets te doen. Handmatig ("Sync
         // nu") pusht altijd — dat is een bewuste overschrijving.
         if skipIfUnchanged, h == lastPushedHash {
             lastFullPush = .now
-            dirty = false
-            isClean = true
-            deltaValid = true
+            clearSynced(upTo: cutoff, deletions: p.deletions) // server heeft deze staat al
             return
         }
         guard client != nil else { return }
@@ -414,7 +416,7 @@ enum Sync {
         lastPushedHash = h
         lastFullPush = .now
         pushAllowed = true
-        finishPush()
+        finishPush(upTo: cutoff, deletions: p.deletions)
     }
 
     /// Alleen de gewijzigde rijen. Rijen die de payload niet noemt blijven op de server
@@ -422,6 +424,7 @@ enum Sync {
     @discardableResult
     private static func pushDelta(_ context: ModelContext) async throws -> Bool {
         _ = try await userID()
+        let cutoff = Date.now
         let p = collectDelta(context)
         guard client != nil else { return false }
         guard !p.isEmpty else { return false }
@@ -434,15 +437,26 @@ enum Sync {
         // De vingerafdruk hoort bij de volledige staat en klopt na een delta niet meer.
         // Hij wordt alleen op het volledige pad gebruikt, dat 'm dan opnieuw uitrekent.
         lastPushedHash = nil
-        finishPush()
+        finishPush(upTo: cutoff, deletions: p.deletions)
         return true
     }
 
-    private static func finishPush() {
-        changes.removeAll()
-        deletions = []
-        isClean = true
+    /// Streept weg wat aantoonbaar op de server staat, en laat de rest staan.
+    ///
+    /// Een `removeAll()` hier wiste ook de rijen die tijdens de push binnenkwamen: die
+    /// zaten niet in de payload, en de client was daarna vergeten dat ze bestonden. Pas
+    /// bij de eerstvolgende volledige push (hooguit wekelijks) kwamen ze alsnog mee.
+    private static func clearSynced(upTo cutoff: Date, deletions sent: [DeletionRow]) {
+        changes = changes.filter { $0.value > cutoff }
+        let sentIDs = Set(sent.map(\.id))
+        deletions.removeAll { sentIDs.contains($0.id) }
+        isClean = changes.isEmpty && deletions.isEmpty
+        dirty = !isClean
         deltaValid = true
+    }
+
+    private static func finishPush(upTo cutoff: Date, deletions sent: [DeletionRow]) {
+        clearSynced(upTo: cutoff, deletions: sent)
         pushFailures = 0
         retryPushAfter = nil
         SyncStatus.shared.lastError = nil
@@ -550,6 +564,10 @@ enum Sync {
         // Wat er nu op het toestel staat komt van de server; een push zou dezelfde data
         // terugsturen. Mocht er een save-melding na deze regel binnenvallen, dan levert dat
         // hooguit één overbodige push op — geen dataverlies.
+        //
+        // Hier bewust géén `clearSynced`: de rijen die `applyFull`/`applyIncremental` zelf
+        // wegschrijven komen via dezelfde observer binnen, en een tijdstempel kan die niet
+        // onderscheiden van een set die je tijdens het ophalen afvinkte. Zie #31.
         changes.removeAll()
         dirty = false
         isClean = true
@@ -1118,9 +1136,9 @@ enum Sync {
                 // blijft liggen.
                 try await pushFull(context, skipIfUnchanged: true)
             }
-            // Pas hier uit: bij een fout blijft 'dirty' staan zodat de lus het opnieuw
-            // probeert, ook als de gebruiker daarna niets meer wijzigt.
-            dirty = false
+            // `dirty` wordt door clearSynced gezet: false als alles weg is, true als er
+            // tijdens de push nog iets binnenkwam. Bij een fout blijft 'ie staan zodat de
+            // lus het opnieuw probeert, ook als de gebruiker daarna niets meer wijzigt.
         } catch {
             pushFailures += 1
             retryPushAfter = .now.addingTimeInterval(min(20 * pow(2, Double(pushFailures)), 600))

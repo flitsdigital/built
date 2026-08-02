@@ -271,6 +271,11 @@ struct OnboardingView: View {
     /// te stranden.
     private func createAccount() {
         guard Sync.isConfigured else { go(1); return } // zonder Supabase-config lokaal verder
+        // Terug vanaf stap 2 en dan weer Volgende: het account bestaat al. Een tweede
+        // signUp geeft bij een bestaand adres geen sessie terug (Supabase verklapt niet
+        // dat het adres bezet is), en dat zou je in het bevestigingsscherm zetten terwijl
+        // je gewoon ingelogd bent.
+        guard !Sync.hasSession else { go(1); return }
         creating = true
         authError = nil
         Task {
@@ -324,8 +329,17 @@ struct OnboardingView: View {
                     }
                 }
             }
+            // Een typefout in je e-mailadres is de makkelijkste fout om te maken, en zonder
+            // deze knop is de app afsluiten de enige uitweg.
+            Button("Ander e-mailadres") {
+                awaitingConfirmation = false
+                authError = nil
+            }
+            .font(.footnote)
+            .disabled(creating)
+            .padding(.bottom, 20)
         }
-        .interactiveDismissDisabled()
+        .interactiveDismissDisabled() // wel bewust: niet per ongeluk wegvegen
     }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
