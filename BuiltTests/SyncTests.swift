@@ -80,6 +80,51 @@ struct SyncTests {
         #expect(json.contains("\"kg\""))
     }
 
+    // MARK: - Sync-identiteit
+
+    /// Zonder stabiel id kan de client geen enkele rij aanwijzen, en is "alles wissen en
+    /// opnieuw schrijven" het enige dat server en toestel gelijk trekt.
+    @Test("Nieuwe rijen krijgen meteen een eigen syncID")
+    @MainActor func nieuweRijenKrijgenEenID() throws {
+        let a = SetEntry(exercise: "Squat", weightKg: 60, reps: 5)
+        let b = SetEntry(exercise: "Squat", weightKg: 60, reps: 5)
+        #expect(a.syncID != .zero)
+        #expect(a.syncID != b.syncID)
+        #expect(SetEntry.syncTable == "set_entries")
+    }
+
+    /// De sentinel is er omdat SwiftData de default van een nieuw attribuut één keer
+    /// evalueert: met `= UUID()` zouden álle bestaande rijen dezelfde waarde krijgen.
+    @Test("Rijen van vóór de update krijgen alsnog een uniek id")
+    @MainActor func backfillDeeltIDsUit() throws {
+        let context = try memoryContext()
+        let rows = store((0..<3).map { _ in WeightEntry(kg: 80) }, in: context)
+        for row in rows { row.syncID = .zero } // zoals ze uit de migratie zouden komen
+
+        UserDefaults.standard.removeObject(forKey: "syncIdentityBackfilled")
+        SyncIdentity.backfill(context)
+
+        #expect(rows.allSatisfy { $0.syncID != .zero })
+        #expect(Set(rows.map(\.syncID)).count == 3)
+    }
+
+    @Test("Verwijderen laat een spoor achter voor de server")
+    @MainActor func verwijderenLaatSpoorAchter() throws {
+        let context = try memoryContext()
+        let entry = WeightEntry(kg: 80)
+        context.insert(entry)
+        let id = entry.syncID
+
+        Sync.clearDeletionsForTesting()
+        context.deleteSynced(entry)
+
+        let spoor = Sync.pendingDeletionsForTesting
+        #expect(spoor.count == 1)
+        #expect(spoor.first?.id == id)
+        #expect(spoor.first?.table == "weight_entries")
+        Sync.clearDeletionsForTesting()
+    }
+
     // MARK: - Gzip
 
     @Test("CRC32 volgt de standaard-testvector")

@@ -248,7 +248,7 @@ struct DayDetailView: View {
                 if on {
                     context.insert(HabitLog(name: name, date: noon))
                 } else if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
-                    context.delete(log)
+                    context.deleteSynced(log)
                 }
             })
     }
@@ -380,7 +380,7 @@ struct DayDetailView: View {
                             }
                         }
                         .onDelete { offsets in
-                            for i in offsets { context.delete(list[i]) }
+                            for i in offsets { context.deleteSynced(list[i]) }
                         }
                     }
                 }
@@ -411,7 +411,7 @@ struct DayDetailView: View {
                     }
                     .onDelete { offsets in
                         for i in offsets {
-                            for s in setsByExercise[i].sets { context.delete(s) }
+                            for s in setsByExercise[i].sets { context.deleteSynced(s) }
                         }
                     }
                 }
@@ -429,7 +429,7 @@ struct DayDetailView: View {
                     }
                 }
                 .onDelete { offsets in
-                    for i in offsets { context.delete(weights[i]) }
+                    for i in offsets { context.deleteSynced(weights[i]) }
                 }
                 Button { showWeightAlert = true } label: {
                     Label("Toevoegen", systemImage: "plus")

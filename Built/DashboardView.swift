@@ -587,7 +587,7 @@ struct DashboardView: View {
     private func toggleCustom(_ name: String) {
         let key = dayKey(selectedDay)
         if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
-            context.delete(log)
+            context.deleteSynced(log)
         } else {
             context.insert(HabitLog(name: name, date: stamp(selectedDay)))
         }

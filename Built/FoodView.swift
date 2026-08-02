@@ -492,7 +492,7 @@ struct FoodView: View {
                 .buttonStyle(.plain)
             }
             .onDelete { offsets in
-                for i in offsets { context.delete(list[i]) }
+                for i in offsets { context.deleteSynced(list[i]) }
             }
         }
     }
@@ -635,7 +635,7 @@ struct FoodLogSheet: View {
         guard !added.isEmpty else { return }
         let key = dayKey(entryDate)
         let mine = todaysEntries.filter { dayKey($0.date) == key && $0.mealKey == meal }
-        if let last = mine.max(by: { $0.date < $1.date }) { context.delete(last) }
+        if let last = mine.max(by: { $0.date < $1.date }) { context.deleteSynced(last) }
         withAnimation(.snappy(duration: 0.25)) { _ = added.popLast() }
     }
 
@@ -708,7 +708,7 @@ struct FoodLogSheet: View {
                             }
                     }
                     .onDelete { offsets in
-                        for i in offsets { context.delete(own[i]) }
+                        for i in offsets { context.deleteSynced(own[i]) }
                     }
                 }
             }

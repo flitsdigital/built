@@ -6,8 +6,7 @@ import AuthenticationServices
 import CryptoKit
 import UIKit
 
-/// ISO8601 mét fracties — precies wat PostgREST zelf ook stuurt, dus de datums komen
-/// exact terug zoals ze weggeschreven zijn.
+/// ISO8601 mét fracties — precies wat PostgREST zelf ook stuurt.
 ///
 /// `ISO8601DateFormatter` is thread-safe voor formatteren maar niet als `Sendable`
 /// gemarkeerd, en de encoder draait op een achtergrond-task. Eén gedeelde instantie achter
@@ -61,19 +60,31 @@ final class SyncStatus {
 }
 
 // Supabase is de source of truth: de app pusht wijzigingen automatisch en een lege
-// install haalt alles op. Push gaat via één RPC (sync_push) die server-side in één
-// transactie alles vervangt — geen half-gewiste tabellen bij netwerkuitval.
+// install haalt alles op.
+//
+// Het protocol is delta: `sync_push_v2` upsert alleen de rijen die meegestuurd worden en
+// `sync_pull(since)` geeft alleen terug wat sindsdien gewijzigd is. Beide gaan via één
+// RPC, dus een push blijft één transactie — netwerkuitval laat nooit een halve staat
+// achter. Als de app niet zeker weet wélke rijen gewijzigd zijn (koude start met
+// openstaande wijzigingen), valt hij terug op een volledige push: dan is dit toestel de
+// waarheid, precies zoals het oude protocol deed.
 @MainActor
 enum Sync {
     // MARK: - Rijen (kolomnamen = snake_case zoals in Postgres)
     //
-    // Geen `user_id` in deze structs: sync_push haalt de uid uit de sessie en negeert
-    // wat de client meestuurt (terecht — de client mag niet bepalen onder wiens id er
-    // geschreven wordt). Het veld was daarmee 49 bytes per rij aan dood gewicht, ~24%
-    // van de payload. Bij het decoderen van een pull wordt de kolom simpelweg genegeerd.
+    // Geen `user_id`: sync_push haalt de uid uit de sessie en negeert wat de client
+    // meestuurt. Het veld was 49 bytes per rij aan dood gewicht.
     //
-    // Sendable: de payload gaat naar een achtergrond-task om te encoden en te hashen,
-    // en dat is alleen veilig omdat het waardetypes tot op de bodem zijn.
+    // `id` is de `syncID` van het model: het toestel bepaalt de primary key, want anders
+    // kan de client geen enkele rij aanwijzen.
+    //
+    // `updated_at`/`deleted_at` zijn strings, geen Dates. PostgREST levert microseconden
+    // ("…:12.123456+00:00") en die haalt `ISO8601DateFormatter` er niet betrouwbaar uit;
+    // als string gaan ze ongewijzigd heen en weer en parseert Postgres ze zelf. Bij een
+    // push is `updated_at` nil op het volledige pad — dan zet de server z'n eigen now(),
+    // wat meteen de vingerafdruk stabiel houdt.
+    //
+    // Sendable: de payload gaat naar een achtergrond-task om te encoden en te hashen.
 
     private struct ProfileRow: Codable, Sendable {
         var name: String; var age: Int; var height_cm: Int
@@ -87,33 +98,37 @@ enum Sync {
         var tracks_food: Bool? = true
         var food_counts_for_score: Bool? = true
     }
-    private struct WeightRow: Codable, Sendable { var date: Date; var kg: Double; var scale: String }
-    private struct ProteinRow: Codable, Sendable {
-        var date: Date; var grams: Int; var label: String
+    private struct WeightRow: Codable, Sendable, SyncRow {
+        var id: UUID; var date: Date; var kg: Double; var scale: String
+        var updated_at: String?; var deleted_at: String?
+    }
+    private struct ProteinRow: Codable, Sendable, SyncRow {
+        var id: UUID; var date: Date; var grams: Int; var label: String
         var kcal: Int; var carbs: Int; var fat: Int; var meal: String
         // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var amount: Double? = 0
         var unit: String? = "g"
+        var updated_at: String?; var deleted_at: String?
     }
-    private struct FoodRow: Codable, Sendable {
-        var name: String; var brand: String; var barcode: String
+    private struct FoodRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var brand: String; var barcode: String
         var protein100: Double; var kcal100: Double; var carbs100: Double; var fat100: Double
         var favorite: Bool; var image_url: String
         var serving_grams: Double; var serving_name: String; var created_at: Date
         var unit: String? = "g"
         var last_amount: Double? = 0
         var categories: String? = ""
+        var updated_at: String?; var deleted_at: String?
     }
-    private struct SetRow: Codable, Sendable {
-        var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
-        // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
+    private struct SetRow: Codable, Sendable, SyncRow {
+        var id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
         var dropset: Bool? = false; var failure: Bool? = false
         var seconds: Int? = 0
+        var updated_at: String?; var deleted_at: String?
     }
-    private struct HabitsRow: Codable, Sendable {
-        var date: Date; var creatine: Bool; var slept_enough: Bool
+    private struct HabitsRow: Codable, Sendable, SyncRow {
+        var id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
         var note: String; var bed_time: Date?; var wake_time: Date?; var sleep_quality: Int
-        // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var journal: [JournalNote]? = []
         var workout_note: String? = ""
         var energy: Int? = 0
@@ -121,23 +136,45 @@ enum Sync {
         var soreness: Int? = 0
         var stress: Int? = 0
         var exercise_notes: [String: String]? = [:]
+        var updated_at: String?; var deleted_at: String?
     }
-    private struct RoutineRow: Codable, Sendable {
-        var name: String; var exercises: [String]
+    private struct RoutineRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var exercises: [String]
         var alternatives: [String: [String]]; var targets: [String: [Int]]
         var supersets: [String: String]; var rest_by_exercise: [String: Int]; var created_at: Date
+        var updated_at: String?; var deleted_at: String?
     }
-    private struct MealRow: Codable, Sendable {
-        var name: String; var protein: Int; var kcal: Int
+    private struct MealRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var protein: Int; var kcal: Int
         var created_at: Date; var servings: Double; var ingredients: [Ingredient]
         var favorite: Bool
+        var updated_at: String?; var deleted_at: String?
     }
     // `scales.correction` bestaat wel in Postgres maar niet in het model; sync_push
     // laat 'm daarom op z'n default staan i.p.v. altijd 0 mee te sturen.
-    private struct ScaleRow: Codable, Sendable { var name: String }
-    private struct CustomHabitRow: Codable, Sendable { var name: String; var created_at: Date }
-    private struct ExerciseRow: Codable, Sendable { var name: String; var muscle: String; var type: String; var created_at: Date }
-    private struct HabitLogRow: Codable, Sendable { var name: String; var date: Date }
+    private struct ScaleRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String
+        var updated_at: String?; var deleted_at: String?
+    }
+    private struct CustomHabitRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var created_at: Date
+        var updated_at: String?; var deleted_at: String?
+    }
+    private struct ExerciseRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date
+        var updated_at: String?; var deleted_at: String?
+    }
+    private struct HabitLogRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var date: Date
+        var updated_at: String?; var deleted_at: String?
+    }
+
+    /// Een verwijderde rij: de rij zelf is weg, dus alleen tabel en id gaan mee.
+    struct DeletionRow: Codable, Sendable {
+        var table: String
+        var id: UUID
+        var deleted_at: String
+    }
 
     private struct Payload: Codable, Sendable {
         var profile: ProfileRow?
@@ -152,9 +189,39 @@ enum Sync {
         var scales: [ScaleRow] = []
         var customHabits: [CustomHabitRow] = []
         var habitLogs: [HabitLogRow] = []
+        var deletions: [DeletionRow] = []
+
+        var isEmpty: Bool {
+            profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
+                && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
+                && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty && deletions.isEmpty
+        }
     }
 
-    private struct RPCParams: Encodable, Sendable { let payload: Payload }
+    private struct PushParams: Encodable, Sendable {
+        let payload: Payload
+        let full_replace: Bool
+    }
+
+    /// Antwoord van `sync_pull`. `server_time` blijft een string — die gaat ongewijzigd
+    /// terug als `since` bij de volgende pull, dus er valt niets te parsen.
+    private struct PullResponse: Decodable {
+        var server_time: String
+        var profile: ProfileRow?
+        var weights: [WeightRow] = []
+        var proteins: [ProteinRow] = []
+        var sets: [SetRow] = []
+        var habits: [HabitsRow] = []
+        var routines: [RoutineRow] = []
+        var meals: [MealRow] = []
+        var foods: [FoodRow] = []
+        var exercises: [ExerciseRow] = []
+        var scales: [ScaleRow] = []
+        var customHabits: [CustomHabitRow] = []
+        var habitLogs: [HabitLogRow] = []
+    }
+
+    private struct PullParams: Encodable, Sendable { let since: String? }
 
     // MARK: - Client
 
@@ -174,7 +241,6 @@ enum Sync {
     // emitLocalSessionAsInitialSession: supabase-swift waarschuwt dat het huidige
     // gedrag (eerst refreshen, dán de sessie uitzenden) een bug is die in de
     // volgende major omklapt. Nu al opt-in, dan verandert er straks niets.
-    // De platform-init vult de standaard keychain-storage zelf in.
     static let client: SupabaseClient? = config.map {
         SupabaseClient(supabaseURL: $0.url, supabaseKey: $0.key,
                        options: .init(auth: .init(emitLocalSessionAsInitialSession: true)))
@@ -184,11 +250,10 @@ enum Sync {
 
     /// Beslist of een mislukte `auth.session` mag uitmonden in een nieuw anoniem account.
     ///
-    /// `auth.session` gooit in twee gevallen: er is geen opgeslagen sessie, óf de
-    /// token-refresh mislukte (500 van de auth-server, timeout, een rotatie-race). Alleen
-    /// het eerste geval rechtvaardigt een nieuw account. Werd bij het tweede geval tóch
-    /// anoniem aangemeld, dan werd de gebruiker stil uitgelogd uit z'n echte account en
-    /// werd z'n volledige dataset onder een vers `user_id` weggeschreven — onomkeerbaar,
+    /// `auth.session` gooit zowel bij "geen opgeslagen sessie" als bij "token-refresh
+    /// mislukt" (500, timeout, rotatie-race). Alleen het eerste rechtvaardigt een nieuw
+    /// account. Bij het tweede werd de gebruiker stil uitgelogd uit z'n echte account en
+    /// werd z'n volledige dataset onder een vers user_id weggeschreven — onomkeerbaar,
     /// terwijl een mislukte sync zichzelf herstelt.
     ///
     /// De opgeslagen sessie is het onderscheid: supabase-swift wist die alleen als de
@@ -205,77 +270,178 @@ enum Sync {
         }
     }
 
-    // MARK: - Verzamelen (gesorteerd, zodat de change-hash stabiel is)
+    // MARK: - Rijen uit modellen
 
+    private static func row(_ e: WeightEntry, _ at: String?) -> WeightRow {
+        WeightRow(id: e.syncID, date: e.date, kg: e.kg, scale: e.scale, updated_at: at)
+    }
+    private static func row(_ e: ProteinEntry, _ at: String?) -> ProteinRow {
+        ProteinRow(id: e.syncID, date: e.date, grams: e.grams, label: e.label, kcal: e.kcal,
+                   carbs: e.carbs, fat: e.fat, meal: e.meal, amount: e.amount, unit: e.unit,
+                   updated_at: at)
+    }
+    private static func row(_ e: SetEntry, _ at: String?) -> SetRow {
+        SetRow(id: e.syncID, date: e.date, exercise: e.exercise, weight_kg: e.weightKg, reps: e.reps,
+               dropset: e.dropset, failure: e.failure, seconds: e.seconds, updated_at: at)
+    }
+    private static func row(_ e: DayHabits, _ at: String?) -> HabitsRow {
+        HabitsRow(id: e.syncID, date: e.date, creatine: e.creatine, slept_enough: e.sleptEnough,
+                  note: e.note, bed_time: e.bedTime, wake_time: e.wakeTime, sleep_quality: e.sleepQuality,
+                  journal: e.journal, workout_note: e.workoutNote, energy: e.energy, mood: e.mood,
+                  soreness: e.soreness, stress: e.stress, exercise_notes: e.exerciseNotes,
+                  updated_at: at)
+    }
+    private static func row(_ e: Routine, _ at: String?) -> RoutineRow {
+        RoutineRow(id: e.syncID, name: e.name, exercises: e.exercises, alternatives: e.alternatives,
+                   targets: e.targets, supersets: e.supersets, rest_by_exercise: e.restByExercise,
+                   created_at: e.createdAt, updated_at: at)
+    }
+    private static func row(_ e: Meal, _ at: String?) -> MealRow {
+        MealRow(id: e.syncID, name: e.name, protein: e.protein, kcal: e.kcal, created_at: e.createdAt,
+                servings: e.servings, ingredients: e.ingredients, favorite: e.favorite, updated_at: at)
+    }
+    private static func row(_ e: FoodProduct, _ at: String?) -> FoodRow {
+        FoodRow(id: e.syncID, name: e.name, brand: e.brand, barcode: e.barcode,
+                protein100: e.protein100, kcal100: e.kcal100, carbs100: e.carbs100, fat100: e.fat100,
+                favorite: e.favorite, image_url: e.imageURL, serving_grams: e.servingGrams,
+                serving_name: e.servingName, created_at: e.createdAt, unit: e.unit,
+                last_amount: e.lastAmount, categories: e.categories, updated_at: at)
+    }
+    private static func row(_ e: Exercise, _ at: String?) -> ExerciseRow {
+        ExerciseRow(id: e.syncID, name: e.name, muscle: e.muscle, type: e.type,
+                    created_at: e.createdAt, updated_at: at)
+    }
+    private static func row(_ e: Scale, _ at: String?) -> ScaleRow {
+        ScaleRow(id: e.syncID, name: e.name, updated_at: at)
+    }
+    private static func row(_ e: CustomHabit, _ at: String?) -> CustomHabitRow {
+        CustomHabitRow(id: e.syncID, name: e.name, created_at: e.createdAt, updated_at: at)
+    }
+    private static func row(_ e: HabitLog, _ at: String?) -> HabitLogRow {
+        HabitLogRow(id: e.syncID, name: e.name, date: e.date, updated_at: at)
+    }
+    private static func row(_ p: Profile) -> ProfileRow {
+        ProfileRow(name: p.name, age: p.age, height_cm: p.heightCm, start_weight: p.startWeight,
+                   goal_weight: p.goalWeight, start_date: p.startDate, goal_date: p.goalDate,
+                   trainings_per_week: p.trainingsPerWeek, tracks_creatine: p.tracksCreatine,
+                   tracks_sleep: p.tracksSleep, training_days: p.trainingDays,
+                   kcal_target: p.kcalTarget, schedule: p.schedule, tracks_food: p.tracksFood,
+                   food_counts_for_score: p.foodCountsForScore)
+    }
+
+    // MARK: - Verzamelen
+
+    /// Alles, gesorteerd zodat de vingerafdruk stabiel is. `updated_at` blijft leeg: de
+    /// server zet dan z'n eigen now(), en de vingerafdruk verandert niet bij elke collect.
     private static func collect(_ context: ModelContext) throws -> Payload {
         var p = Payload()
-        if let profile = try context.fetch(FetchDescriptor<Profile>()).first {
-            p.profile = ProfileRow(name: profile.name, age: profile.age, height_cm: profile.heightCm,
-                                   start_weight: profile.startWeight, goal_weight: profile.goalWeight,
-                                   start_date: profile.startDate, goal_date: profile.goalDate,
-                                   trainings_per_week: profile.trainingsPerWeek,
-                                   tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep,
-                                   training_days: profile.trainingDays, kcal_target: profile.kcalTarget,
-                                   schedule: profile.schedule, tracks_food: profile.tracksFood,
-                                   food_counts_for_score: profile.foodCountsForScore)
-        }
-        p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
-            .map { WeightRow(date: $0.date, kg: $0.kg, scale: $0.scale) }
-        p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)]))
-            .map { ProteinRow(date: $0.date, grams: $0.grams, label: $0.label,
-                              kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal,
-                              amount: $0.amount, unit: $0.unit) }
-        p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
-            .map { SetRow(date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps,
-                          dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) }
-        p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
-            .map { HabitsRow(date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
-                             note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality,
-                             journal: $0.journal, workout_note: $0.workoutNote,
-                             energy: $0.energy, mood: $0.mood, soreness: $0.soreness, stress: $0.stress,
-                             exercise_notes: $0.exerciseNotes) }
-        p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
-            .map { RoutineRow(name: $0.name, exercises: $0.exercises,
-                              alternatives: $0.alternatives, targets: $0.targets,
-                              supersets: $0.supersets, rest_by_exercise: $0.restByExercise,
-                              created_at: $0.createdAt) }
-        p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)]))
-            .map { MealRow(name: $0.name, protein: $0.protein, kcal: $0.kcal,
-                           created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients,
-                           favorite: $0.favorite) }
-        p.foods = try context.fetch(FetchDescriptor<FoodProduct>(sortBy: [.init(\.createdAt)]))
-            .map { FoodRow(name: $0.name, brand: $0.brand, barcode: $0.barcode,
-                           protein100: $0.protein100, kcal100: $0.kcal100,
-                           carbs100: $0.carbs100, fat100: $0.fat100,
-                           favorite: $0.favorite, image_url: $0.imageURL,
-                           serving_grams: $0.servingGrams, serving_name: $0.servingName,
-                           created_at: $0.createdAt,
-                           unit: $0.unit, last_amount: $0.lastAmount, categories: $0.categories) }
-        p.exercises = try context.fetch(FetchDescriptor<Exercise>(sortBy: [.init(\.name)]))
-            .map { ExerciseRow(name: $0.name, muscle: $0.muscle, type: $0.type, created_at: $0.createdAt) }
-        p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
-            .map { ScaleRow(name: $0.name) }
-        p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
-            .map { CustomHabitRow(name: $0.name, created_at: $0.createdAt) }
-        p.habitLogs = try context.fetch(FetchDescriptor<HabitLog>(sortBy: [.init(\.date)]))
-            .map { HabitLogRow(name: $0.name, date: $0.date) }
+        if let profile = try context.fetch(FetchDescriptor<Profile>()).first { p.profile = row(profile) }
+        p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
+        p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
+        p.foods = try context.fetch(FetchDescriptor<FoodProduct>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
+        p.exercises = try context.fetch(FetchDescriptor<Exercise>(sortBy: [.init(\.name)])).map { row($0, nil) }
+        p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)])).map { row($0, nil) }
+        p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
+        p.habitLogs = try context.fetch(FetchDescriptor<HabitLog>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.deletions = deletions
         return p
     }
 
-    // MARK: - Push (atomair via RPC)
+    /// Alleen wat sinds de laatste geslaagde push gewijzigd is.
+    ///
+    /// SwiftData meldt bij elke save wélke rijen zijn ingevoegd of gewijzigd, dus hoeft
+    /// hier geen enkele tabel gescand te worden: `model(for:)` is een directe opzoeking.
+    /// Een afgevinkte set levert zo een payload van één rij op in plaats van 6.980.
+    private static func collectDelta(_ context: ModelContext) -> Payload {
+        var p = Payload()
+        for (identifier, stamp) in changes {
+            let at = ISODate.shared.string(from: stamp)
+            let model = context.model(for: identifier)
+            guard !model.isDeleted else { continue }
+            switch model {
+            case let m as Profile: p.profile = row(m)
+            case let m as WeightEntry: p.weights.append(row(m, at))
+            case let m as ProteinEntry: p.proteins.append(row(m, at))
+            case let m as SetEntry: p.sets.append(row(m, at))
+            case let m as DayHabits: p.habits.append(row(m, at))
+            case let m as Routine: p.routines.append(row(m, at))
+            case let m as Meal: p.meals.append(row(m, at))
+            case let m as FoodProduct: p.foods.append(row(m, at))
+            case let m as Exercise: p.exercises.append(row(m, at))
+            case let m as Scale: p.scales.append(row(m, at))
+            case let m as CustomHabit: p.customHabits.append(row(m, at))
+            case let m as HabitLog: p.habitLogs.append(row(m, at))
+            default: break // PhotoEntry en al het niet-gesynchroniseerde
+            }
+        }
+        p.deletions = deletions
+        return p
+    }
 
+    // MARK: - Push
+
+    /// Volledige push: dit toestel is de waarheid. Wat de server heeft en dit toestel niet,
+    /// wordt daar als verwijderd gemarkeerd. Dit is wat "Sync nu" doet.
     static func push(_ context: ModelContext) async throws {
+        try await pushFull(context, skipIfUnchanged: false)
+    }
+
+    private static func pushFull(_ context: ModelContext, skipIfUnchanged: Bool) async throws {
         _ = try await userID() // geldige sessie, of anoniem aanmelden bij een verse install
         let p = try collect(context)
+        let h = try await fingerprint(p)
+        // Automatisch pad: staat alles er al, dan is er niets te doen. Handmatig ("Sync
+        // nu") pusht altijd — dat is een bewuste overschrijving.
+        if skipIfUnchanged, h == lastPushedHash {
+            lastFullPush = .now
+            dirty = false
+            isClean = true
+            deltaValid = true
+            return
+        }
         guard client != nil else { return }
         do {
-            try await send(p)
+            try await send(p, fullReplace: true)
         } catch {
             SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
             throw error
         }
-        lastPushedHash = try await fingerprint(p)
-        pushAllowed = true // expliciete push = bewuste overschrijving
+        lastPushedHash = h
+        lastFullPush = .now
+        pushAllowed = true
+        finishPush()
+    }
+
+    /// Alleen de gewijzigde rijen. Rijen die de payload niet noemt blijven op de server
+    /// staan zoals ze zijn. Geeft false als er niets aan te wijzen viel.
+    @discardableResult
+    private static func pushDelta(_ context: ModelContext) async throws -> Bool {
+        _ = try await userID()
+        let p = collectDelta(context)
+        guard client != nil else { return false }
+        guard !p.isEmpty else { return false }
+        do {
+            try await send(p, fullReplace: false)
+        } catch {
+            SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
+            throw error
+        }
+        // De vingerafdruk hoort bij de volledige staat en klopt na een delta niet meer.
+        // Hij wordt alleen op het volledige pad gebruikt, dat 'm dan opnieuw uitrekent.
+        lastPushedHash = nil
+        finishPush()
+        return true
+    }
+
+    private static func finishPush() {
+        changes.removeAll()
+        deletions = []
+        isClean = true
+        deltaValid = true
         pushFailures = 0
         retryPushAfter = nil
         SyncStatus.shared.lastError = nil
@@ -285,10 +451,10 @@ enum Sync {
 
     // MARK: - Transport
     //
-    // De payload is bij uitstek comprimeerbaar: duizenden rijen met identieke sleutelnamen,
-    // ISO-datums met een gedeelde prefix, herhaalde oefeningsnamen. Realistisch 8-12×
-    // kleiner. supabase-swift zet zelf geen `Content-Encoding` en biedt geen haakje om een
-    // voorgecodeerde body mee te geven, dus de gzip-variant gaat via een eigen URLRequest.
+    // De payload is bij uitstek comprimeerbaar: rijen met identieke sleutelnamen,
+    // ISO-datums met een gedeelde prefix, herhaalde oefeningsnamen. supabase-swift zet zelf
+    // geen `Content-Encoding` en biedt geen haakje om een voorgecodeerde body mee te geven,
+    // dus de gzip-variant gaat via een eigen URLRequest.
     //
     // Of de Supabase-gateway (Kong) `Content-Encoding: gzip` doorlaat naar PostgREST is per
     // project niet gegarandeerd. Daarom: proberen, en bij een afwijzing terugvallen op de
@@ -303,20 +469,20 @@ enum Sync {
         set { UserDefaults.standard.set(!newValue, forKey: gzipDisabledKey) }
     }
 
-    private static func send(_ payload: Payload) async throws {
+    private static func send(_ payload: Payload, fullReplace: Bool) async throws {
         guard let db = client else { return }
-        let params = RPCParams(payload: payload)
+        let params = PushParams(payload: payload, full_replace: fullReplace)
 
         var compressionRejected = false
         if gzipEnabled, let body = try await gzipped(params) {
             do {
-                try await postGzip("sync_push", body: body)
+                try await postGzip("sync_push_v2", body: body)
                 return
             } catch is CompressionRejected {
                 compressionRejected = true
             }
         }
-        try await db.rpc("sync_push", params: params).execute()
+        _ = try await db.rpc("sync_push_v2", params: params).execute()
         // Ongecomprimeerd lukt het wél, dus het lag aan de compressie en niet aan de
         // payload. Pas hier uitzetten: een 400 op een kapotte payload mag gzip niet
         // permanent uitschakelen.
@@ -325,7 +491,7 @@ enum Sync {
 
     /// JSON-encode + gzip op een achtergrond-thread. Dit is de zwaarste stap van een push
     /// en hoort niet op de MainActor.
-    private static func gzipped(_ params: RPCParams) async throws -> Data? {
+    private static func gzipped(_ params: PushParams) async throws -> Data? {
         try await Task.detached(priority: .utility) {
             Gzip.compress(try makeEncoder().encode(params))
         }.value
@@ -353,126 +519,213 @@ enum Sync {
         throw NSError(domain: "Sync", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
-    // MARK: - Pull (server wint, lokaal wordt vervangen)
+    // MARK: - Pull
 
-    static func pull(_ context: ModelContext) async throws {
-        let uid = try await userID()
+    /// `incremental` haalt alleen op wat sinds de vorige pull gewijzigd is en laat lokale
+    /// data die de server nog niet kent staan — dat is wat een tweede toestel mogelijk
+    /// maakt. Zonder anker (of expliciet volledig) wint de server en wordt het toestel
+    /// opnieuw opgebouwd; dat is wat "Data ophalen van server" doet.
+    static func pull(_ context: ModelContext, incremental: Bool = false) async throws {
+        _ = try await userID()
         guard let db = client else { return }
 
-        let profileRows: [ProfileRow] = try await db.from("profiles").select().eq("user_id", value: uid).execute().value
-        guard let profileRow = profileRows.first else {
-            pushAllowed = true // server is leeg → pushen kan geen data vernietigen
-            return
+        let since = incremental ? pullAnchor : nil
+        let response: PullResponse = try await db.rpc("sync_pull", params: PullParams(since: since))
+            .execute().value
+
+        if since == nil {
+            guard let profileRow = response.profile else {
+                pushAllowed = true // server is leeg → pushen kan geen data vernietigen
+                return
+            }
+            try applyFull(response, profile: profileRow, context)
+            lastPushedHash = try await fingerprint(collect(context))
+        } else {
+            try applyIncremental(response, context)
+            lastPushedHash = nil
         }
 
-        let weights: [WeightRow] = try await db.from("weight_entries").select().eq("user_id", value: uid).execute().value
-        let proteins: [ProteinRow] = try await db.from("protein_entries").select().eq("user_id", value: uid).execute().value
-        let setRows: [SetRow] = try await db.from("set_entries").select().eq("user_id", value: uid).execute().value
-        let habitRows: [HabitsRow] = try await db.from("day_habits").select().eq("user_id", value: uid).execute().value
-        let routineRows: [RoutineRow] = try await db.from("routines").select().eq("user_id", value: uid).execute().value
-        let mealRows: [MealRow] = try await db.from("meals").select().eq("user_id", value: uid).execute().value
-        let foodRows: [FoodRow] = try await db.from("food_products").select().eq("user_id", value: uid).execute().value
-        let exerciseRows: [ExerciseRow] = try await db.from("exercises").select().eq("user_id", value: uid).execute().value
-        let scaleRows: [ScaleRow] = try await db.from("scales").select().eq("user_id", value: uid).execute().value
-        let customRows: [CustomHabitRow] = try await db.from("custom_habits").select().eq("user_id", value: uid).execute().value
-        let logRows: [HabitLogRow] = try await db.from("habit_logs").select().eq("user_id", value: uid).execute().value
+        pullAnchor = response.server_time
+        // Wat er nu op het toestel staat komt van de server; een push zou dezelfde data
+        // terugsturen. Mocht er een save-melding na deze regel binnenvallen, dan levert dat
+        // hooguit één overbodige push op — geen dataverlies.
+        changes.removeAll()
+        dirty = false
+        isClean = true
+        deltaValid = true
+        pushAllowed = true
+        SyncStatus.shared.lastError = nil
+        SyncStatus.shared.lastSyncAt = .now
+        UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
+    }
 
-        // Wissen en terugzetten in één transactie: wordt de app er middenin afgeschoten,
-        // dan blijft de oude lokale staat staan i.p.v. een half gevulde database.
+    /// Server wint: wissen en terugzetten in één transactie, zodat een force-quit er
+    /// middenin de oude lokale staat laat staan i.p.v. een half gevulde database.
+    private static func applyFull(_ r: PullResponse, profile profileRow: ProfileRow,
+                                  _ context: ModelContext) throws {
         try context.transaction {
             try wipeLocal(context)
 
             let profile = Profile(name: profileRow.name, age: profileRow.age, heightCm: profileRow.height_cm,
                                   startWeight: profileRow.start_weight, goalWeight: profileRow.goal_weight,
                                   goalDate: profileRow.goal_date, trainingsPerWeek: profileRow.trainings_per_week)
-            profile.startDate = profileRow.start_date
-            profile.tracksCreatine = profileRow.tracks_creatine
-            profile.tracksSleep = profileRow.tracks_sleep
-            profile.trainingDays = profileRow.training_days
-            profile.kcalTarget = profileRow.kcal_target
-            profile.schedule = profileRow.schedule
-            profile.tracksFood = profileRow.tracks_food ?? true
-            profile.foodCountsForScore = profileRow.food_counts_for_score ?? true
+            apply(profileRow, to: profile)
             context.insert(profile)
 
-            for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
-            for r in proteins {
-                context.insert(ProteinEntry(date: r.date, grams: r.grams, label: r.label,
-                                            kcal: r.kcal, carbs: r.carbs, fat: r.fat, meal: r.meal,
-                                            amount: r.amount ?? 0,
-                                            unit: FoodUnit(rawValue: r.unit ?? "g") ?? .gram))
-            }
-            for r in setRows { context.insert(SetEntry(date: r.date, exercise: r.exercise, weightKg: r.weight_kg, reps: r.reps,
-                                                        dropset: r.dropset ?? false, failure: r.failure ?? false,
-                                                        seconds: r.seconds ?? 0)) }
-            for r in habitRows {
-                let h = DayHabits(date: r.date, creatine: r.creatine, sleptEnough: r.slept_enough)
-                h.note = r.note
-                h.bedTime = r.bed_time
-                h.wakeTime = r.wake_time
-                h.sleepQuality = r.sleep_quality
-                h.journal = r.journal ?? []
-                h.workoutNote = r.workout_note ?? ""
-                h.energy = r.energy ?? 0
-                h.mood = r.mood ?? 0
-                h.soreness = r.soreness ?? 0
-                h.stress = r.stress ?? 0
-                h.exerciseNotes = r.exercise_notes ?? [:]
-                context.insert(h)
-            }
-            for r in routineRows {
-                let routine = Routine(name: r.name, exercises: r.exercises)
-                routine.alternatives = r.alternatives
-                routine.targets = r.targets
-                routine.supersets = r.supersets
-                routine.restByExercise = r.rest_by_exercise
-                routine.createdAt = r.created_at
-                context.insert(routine)
-            }
-            for r in mealRows {
-                let meal = Meal(name: r.name, protein: r.protein, kcal: r.kcal)
-                meal.createdAt = r.created_at
-                meal.servings = r.servings
-                meal.ingredients = r.ingredients
-                meal.favorite = r.favorite
-                context.insert(meal)
-            }
-            for r in foodRows {
-                let f = FoodProduct(name: r.name, brand: r.brand, barcode: r.barcode,
-                                    protein100: r.protein100, kcal100: r.kcal100,
-                                    carbs100: r.carbs100, fat100: r.fat100)
-                f.favorite = r.favorite
-                f.imageURL = r.image_url
-                f.servingGrams = r.serving_grams
-                f.servingName = r.serving_name
-                f.createdAt = r.created_at
-                f.unit = r.unit ?? FoodUnit.gram.rawValue
-                f.lastAmount = r.last_amount ?? 0
-                f.categories = r.categories ?? ""
-                context.insert(f)
-            }
-            for r in exerciseRows {
-                let ex = Exercise(name: r.name, muscle: r.muscle, type: r.type)
-                ex.createdAt = r.created_at
-                context.insert(ex)
-            }
-            for r in scaleRows {
-                context.insert(Scale(name: r.name))
-            }
-            for r in customRows {
-                let habit = CustomHabit(name: r.name)
-                habit.createdAt = r.created_at
-                context.insert(habit)
-            }
-            for r in logRows { context.insert(HabitLog(name: r.name, date: r.date)) }
+            for x in r.weights { context.insert(make(x)) }
+            for x in r.proteins { context.insert(make(x)) }
+            for x in r.sets { context.insert(make(x)) }
+            for x in r.habits { context.insert(make(x)) }
+            for x in r.routines { context.insert(make(x)) }
+            for x in r.meals { context.insert(make(x)) }
+            for x in r.foods { context.insert(make(x)) }
+            for x in r.exercises { context.insert(make(x)) }
+            for x in r.scales { context.insert(make(x)) }
+            for x in r.customHabits { context.insert(make(x)) }
+            for x in r.habitLogs { context.insert(make(x)) }
         }
-
-        lastPushedHash = try await fingerprint(collect(context))
-        pushAllowed = true
-        SyncStatus.shared.lastError = nil
-        SyncStatus.shared.lastSyncAt = .now
-        UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
     }
+
+    /// Samenvoegen op `syncID`: bestaande rij bijwerken, onbekende toevoegen, tombstone
+    /// lokaal verwijderen. Geen `wipeLocal` — lokale data die de server nog niet kent
+    /// blijft staan.
+    private static func applyIncremental(_ r: PullResponse, _ context: ModelContext) throws {
+        try context.transaction {
+            if let p = r.profile, let local = try context.fetch(FetchDescriptor<Profile>()).first {
+                apply(p, to: local)
+            }
+            try merge(r.weights, WeightEntry.self, context) { apply($0, to: $1) }
+            try merge(r.proteins, ProteinEntry.self, context) { apply($0, to: $1) }
+            try merge(r.sets, SetEntry.self, context) { apply($0, to: $1) }
+            try merge(r.habits, DayHabits.self, context) { apply($0, to: $1) }
+            try merge(r.routines, Routine.self, context) { apply($0, to: $1) }
+            try merge(r.meals, Meal.self, context) { apply($0, to: $1) }
+            try merge(r.foods, FoodProduct.self, context) { apply($0, to: $1) }
+            try merge(r.exercises, Exercise.self, context) { apply($0, to: $1) }
+            try merge(r.scales, Scale.self, context) { apply($0, to: $1) }
+            try merge(r.customHabits, CustomHabit.self, context) { apply($0, to: $1) }
+            try merge(r.habitLogs, HabitLog.self, context) { apply($0, to: $1) }
+        }
+    }
+
+    /// Eén tabel samenvoegen. De index wordt één keer opgebouwd; per rij zoeken zou een
+    /// fetch per rij betekenen.
+    private static func merge<Row: SyncRow, Model: SyncedRecord>(
+        _ rows: [Row], _ type: Model.Type, _ context: ModelContext,
+        _ update: (Row, Model) -> Void) throws {
+        guard !rows.isEmpty else { return }
+        var byID = Dictionary(try context.fetch(FetchDescriptor<Model>()).map { ($0.syncID, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        for r in rows {
+            if r.deleted_at != nil {
+                if let existing = byID[r.id] {
+                    context.delete(existing) // geen deleteSynced: dit is de server die het zegt
+                    byID[r.id] = nil
+                }
+                continue
+            }
+            if let existing = byID[r.id] {
+                update(r, existing)
+            } else {
+                let fresh = Model.blank()
+                fresh.syncID = r.id
+                update(r, fresh)
+                context.insert(fresh)
+                byID[r.id] = fresh
+            }
+        }
+    }
+
+    // MARK: - Rij → model
+
+    private static func apply(_ r: ProfileRow, to p: Profile) {
+        p.name = r.name
+        p.age = r.age
+        p.heightCm = r.height_cm
+        p.startWeight = r.start_weight
+        p.goalWeight = r.goal_weight
+        p.startDate = r.start_date
+        p.goalDate = r.goal_date
+        p.trainingsPerWeek = r.trainings_per_week
+        p.tracksCreatine = r.tracks_creatine
+        p.tracksSleep = r.tracks_sleep
+        p.trainingDays = r.training_days
+        p.kcalTarget = r.kcal_target
+        p.schedule = r.schedule
+        p.tracksFood = r.tracks_food ?? true
+        p.foodCountsForScore = r.food_counts_for_score ?? true
+    }
+
+    private static func apply(_ r: WeightRow, to m: WeightEntry) {
+        m.date = r.date; m.kg = r.kg; m.scale = r.scale
+    }
+    private static func apply(_ r: ProteinRow, to m: ProteinEntry) {
+        m.date = r.date; m.grams = r.grams; m.label = r.label; m.kcal = r.kcal
+        m.carbs = r.carbs; m.fat = r.fat; m.meal = r.meal
+        m.amount = r.amount ?? 0; m.unit = r.unit ?? FoodUnit.gram.rawValue
+    }
+    private static func apply(_ r: SetRow, to m: SetEntry) {
+        m.date = r.date; m.exercise = r.exercise; m.weightKg = r.weight_kg; m.reps = r.reps
+        m.dropset = r.dropset ?? false; m.failure = r.failure ?? false; m.seconds = r.seconds ?? 0
+    }
+    private static func apply(_ r: HabitsRow, to m: DayHabits) {
+        m.date = r.date; m.creatine = r.creatine; m.sleptEnough = r.slept_enough
+        m.note = r.note; m.bedTime = r.bed_time; m.wakeTime = r.wake_time
+        m.sleepQuality = r.sleep_quality; m.journal = r.journal ?? []
+        m.workoutNote = r.workout_note ?? ""
+        m.energy = r.energy ?? 0; m.mood = r.mood ?? 0
+        m.soreness = r.soreness ?? 0; m.stress = r.stress ?? 0
+        m.exerciseNotes = r.exercise_notes ?? [:]
+    }
+    private static func apply(_ r: RoutineRow, to m: Routine) {
+        m.name = r.name; m.exercises = r.exercises; m.alternatives = r.alternatives
+        m.targets = r.targets; m.supersets = r.supersets; m.restByExercise = r.rest_by_exercise
+        m.createdAt = r.created_at
+    }
+    private static func apply(_ r: MealRow, to m: Meal) {
+        m.name = r.name; m.protein = r.protein; m.kcal = r.kcal; m.createdAt = r.created_at
+        m.servings = r.servings; m.ingredients = r.ingredients; m.favorite = r.favorite
+    }
+    private static func apply(_ r: FoodRow, to m: FoodProduct) {
+        m.name = r.name; m.brand = r.brand; m.barcode = r.barcode
+        m.protein100 = r.protein100; m.kcal100 = r.kcal100
+        m.carbs100 = r.carbs100; m.fat100 = r.fat100
+        m.favorite = r.favorite; m.imageURL = r.image_url
+        m.servingGrams = r.serving_grams; m.servingName = r.serving_name
+        m.createdAt = r.created_at; m.unit = r.unit ?? FoodUnit.gram.rawValue
+        m.lastAmount = r.last_amount ?? 0; m.categories = r.categories ?? ""
+    }
+    private static func apply(_ r: ExerciseRow, to m: Exercise) {
+        m.name = r.name; m.muscle = r.muscle; m.type = r.type; m.createdAt = r.created_at
+    }
+    private static func apply(_ r: ScaleRow, to m: Scale) { m.name = r.name }
+    private static func apply(_ r: CustomHabitRow, to m: CustomHabit) {
+        m.name = r.name; m.createdAt = r.created_at
+    }
+    private static func apply(_ r: HabitLogRow, to m: HabitLog) {
+        m.name = r.name; m.date = r.date
+    }
+
+    private static func make(_ r: WeightRow) -> WeightEntry { fresh(WeightEntry.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: ProteinRow) -> ProteinEntry { fresh(ProteinEntry.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: SetRow) -> SetEntry { fresh(SetEntry.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: HabitsRow) -> DayHabits { fresh(DayHabits.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: RoutineRow) -> Routine { fresh(Routine.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: MealRow) -> Meal { fresh(Meal.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: FoodRow) -> FoodProduct { fresh(FoodProduct.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: ExerciseRow) -> Exercise { fresh(Exercise.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: ScaleRow) -> Scale { fresh(Scale.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: CustomHabitRow) -> CustomHabit { fresh(CustomHabit.self, r.id) { apply(r, to: $0) } }
+    private static func make(_ r: HabitLogRow) -> HabitLog { fresh(HabitLog.self, r.id) { apply(r, to: $0) } }
+
+    private static func fresh<T: SyncedRecord>(_ type: T.Type, _ id: UUID, _ fill: (T) -> Void) -> T {
+        let model = T.blank()
+        model.syncID = id
+        fill(model)
+        return model
+    }
+
+    // MARK: - Export en wissen
 
     /// Volledige data als JSON — back-up/portabiliteit los van de server.
     static func exportJSON(_ context: ModelContext) -> String? {
@@ -504,9 +757,7 @@ enum Sync {
     static func signOut(context: ModelContext, keepLocalData: Bool) async {
         try? await client?.auth.signOut()
         pushAllowed = false
-        lastPushedHash = nil // ander account mag nooit als "ongewijzigd" tellen
-        pushFailures = 0
-        retryPushAfter = nil // ander account = schone lei, niet wachten op een oude storing
+        resetSyncState()
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = nil
         UserDefaults.standard.removeObject(forKey: "lastSync")
@@ -514,6 +765,20 @@ enum Sync {
             try? wipeLocal(context)
         }
         await bootstrap(context)
+    }
+
+    /// Ander account = schone lei. De bewaarde vingerafdruk en het pull-anker slaan op de
+    /// vorige gebruiker; laten staan zou betekenen dat de app denkt dat er niets te doen is.
+    private static func resetSyncState() {
+        lastPushedHash = nil
+        pullAnchor = nil
+        deletions = []
+        changes.removeAll()
+        isClean = false
+        deltaValid = false
+        dirty = true
+        pushFailures = 0
+        retryPushAfter = nil
     }
 
     // MARK: - Bootstrap: bepaal veilig of auto-push mag
@@ -532,6 +797,9 @@ enum Sync {
                 try await pull(context)
             } else if abs(localProfile!.startDate.timeIntervalSince(serverProfiles[0].start_date)) < 1 {
                 pushAllowed = true // zelfde profiel-lijn → veilig
+                // Wijzigingen van een ander toestel ophalen. Incrementeel, dus lokale data
+                // die de server nog niet kent blijft staan.
+                if pullAnchor != nil { try await pull(context, incremental: true) }
             } else {
                 pushAllowed = false
                 SyncStatus.shared.lastError = "De server bevat andere data dan dit toestel. Kies in Profiel: 'Data ophalen van server' (server wint) of 'Sync nu' (dit toestel wint)."
@@ -543,18 +811,10 @@ enum Sync {
 
     // MARK: - Account (e-mail + wachtwoord of Google)
 
-    static var currentEmail: String? {
-        client?.auth.currentSession?.user.email
-    }
-
-    static var isAnonymous: Bool {
-        client?.auth.currentSession?.user.isAnonymous ?? true
-    }
-
+    static var currentEmail: String? { client?.auth.currentSession?.user.email }
+    static var isAnonymous: Bool { client?.auth.currentSession?.user.isAnonymous ?? true }
     /// Actieve sessie? Na registreren met e-mailbevestiging-aan is die er nog niet.
-    static var hasSession: Bool {
-        client?.auth.currentSession != nil
-    }
+    static var hasSession: Bool { client?.auth.currentSession != nil }
 
     private static func notConfigured() -> Error {
         NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])
@@ -584,7 +844,7 @@ enum Sync {
         guard let client else { throw notConfigured() }
         try await client.auth.signIn(email: email, password: password)
         pushAllowed = false
-        lastPushedHash = nil
+        resetSyncState()
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
     }
@@ -608,7 +868,7 @@ enum Sync {
         }
         try await client.auth.session(from: callbackURL)
         pushAllowed = false
-        lastPushedHash = nil
+        resetSyncState()
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
     }
@@ -623,11 +883,92 @@ enum Sync {
         await signOut(context: context, keepLocalData: false)
     }
 
+    // MARK: - Wijzigingen bijhouden
+
+    /// Welke rijen sinds de laatste geslaagde push gewijzigd zijn, met het moment waarop we
+    /// het zagen. Bewust niet bewaard tussen app-starts: `PersistentIdentifier` is niet
+    /// bedoeld om op te slaan. Bij een koude start met openstaande wijzigingen valt de app
+    /// daarom terug op een volledige push.
+    private static var changes: [PersistentIdentifier: Date] = [:]
+
+    /// Verwijderingen wél bewaren: de rij is weg, dus die kunnen we later niet opnieuw
+    /// afleiden. Zonder dit zou een verwijdering die vlak voor het afsluiten gebeurt op de
+    /// server blijven staan en bij de volgende pull terugkomen.
+    private static let deletionsKey = "syncDeletions"
+    private static var deletions: [DeletionRow] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: deletionsKey),
+                  let rows = try? JSONDecoder().decode([DeletionRow].self, from: data) else { return [] }
+            return rows
+        }
+        set {
+            guard !newValue.isEmpty else {
+                UserDefaults.standard.removeObject(forKey: deletionsKey)
+                return
+            }
+            UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: deletionsKey)
+        }
+    }
+
+    /// Alleen voor tests: het spoor is bewust privé, maar het is precies het stuk dat je
+    /// wil kunnen nakijken.
+    static var pendingDeletionsForTesting: [DeletionRow] { deletions }
+    static func clearDeletionsForTesting() { deletions = [] }
+
+    /// Aangeroepen door `ModelContext.deleteSynced`.
+    static func recordDeletion(table: String, syncID: UUID) {
+        deletions.append(DeletionRow(table: table, id: syncID,
+                                     deleted_at: ISODate.shared.string(from: .now)))
+        isClean = false
+        markDirty()
+    }
+
+    /// Staat alles wat lokaal is ook op de server? Overleeft een herstart, zodat het
+    /// openen en sluiten van de app zonder wijzigingen nul pushes oplevert.
+    private static let cleanKey = "syncClean"
+    private static var isClean: Bool {
+        get { UserDefaults.standard.bool(forKey: cleanKey) }
+        set { UserDefaults.standard.set(newValue, forKey: cleanKey) }
+    }
+
+    /// Weten we precies wélke rijen gewijzigd zijn? Bij de start alleen als de vorige
+    /// sessie schoon eindigde. Anders is er tussen twee starts iets gewijzigd waarvan we de
+    /// rijen niet meer kunnen aanwijzen, en gaat er eerst één volledige push overheen.
+    private static var deltaValid = UserDefaults.standard.bool(forKey: cleanKey)
+
+    /// Ook als de delta-boekhouding klopt: eens per week een volledige push, zodat een
+    /// eventueel verschil tussen toestel en server zich niet ongemerkt kan opstapelen.
+    private static let fullPushKey = "lastFullPush"
+    private static var lastFullPush: Date? {
+        get {
+            let stamp = UserDefaults.standard.double(forKey: fullPushKey)
+            return stamp > 0 ? Date(timeIntervalSinceReferenceDate: stamp) : nil
+        }
+        set {
+            if let newValue { UserDefaults.standard.set(newValue.timeIntervalSinceReferenceDate, forKey: fullPushKey) }
+            else { UserDefaults.standard.removeObject(forKey: fullPushKey) }
+        }
+    }
+
+    private static var needsFullPush: Bool {
+        guard deltaValid else { return true }
+        guard let lastFullPush else { return true }
+        return Date.now.timeIntervalSince(lastFullPush) > 7 * 24 * 60 * 60
+    }
+
+    /// Servertijd van de laatste pull, als string doorgegeven zoals PostgREST 'm levert.
+    private static let anchorKey = "syncPullAnchor"
+    private static var pullAnchor: String? {
+        get { UserDefaults.standard.string(forKey: anchorKey) }
+        set {
+            if let newValue { UserDefaults.standard.set(newValue, forKey: anchorKey) }
+            else { UserDefaults.standard.removeObject(forKey: anchorKey) }
+        }
+    }
+
     // MARK: - Automatische sync-lus
 
-    /// Vingerafdruk van de laatst geslaagde push, in UserDefaults zodat hij een herstart
-    /// overleeft. Zonder dat begon elke koude start op `nil` en pushte de app binnen
-    /// twintig seconden de volledige database, ook als er niets gewijzigd was.
+    /// Vingerafdruk van de laatst geslaagde volledige push. Alleen op dat pad in gebruik.
     private static let hashKey = "lastPushedHash"
     private static var lastPushedHash: String? {
         get { UserDefaults.standard.string(forKey: hashKey) }
@@ -641,9 +982,7 @@ enum Sync {
     private(set) static var pushAllowed = false
     static var appActive = true
 
-    /// Gaat aan bij elke lokale wijziging. Zonder deze vlag draaide de lus élke ronde
-    /// `collect()` — twaalf volledige fetches plus een JSON-encode van de complete
-    /// database, ook als er niets veranderd was.
+    /// Gaat aan bij elke lokale wijziging.
     private static var dirty = true
 
     /// Bij een mislukte push wachten we langer dan het vaste interval. Zonder deze rem
@@ -652,7 +991,14 @@ enum Sync {
     private static var retryPushAfter: Date?
 
     /// Laat de sync-lus weten dat er iets te pushen valt.
-    static func markDirty() { dirty = true }
+    ///
+    /// Zet ook `isClean` uit: de lus slaat een schone staat over zonder te kijken, en een
+    /// aanroeper die dit aanroept weet iets wat de save-meldingen nog niet verteld hebben
+    /// (de autosave kan nog moeten komen).
+    static func markDirty() {
+        dirty = true
+        isClean = false
+    }
 
     /// Encoder voor de vingerafdruk, de gzip-body en de export.
     ///
@@ -670,15 +1016,15 @@ enum Sync {
         return encoder
     }
 
-    /// SHA-256 over de payload, als hex.
-    ///
-    /// Swift's `Hasher` kan dit niet: die is per proces willekeurig geseed, dus dezelfde
-    /// data levert na een herstart een andere waarde — precies wat je niet wil van iets
-    /// dat je in UserDefaults bewaart.
     nonisolated static func hexDigest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// SHA-256 over de payload.
+    ///
+    /// Swift's `Hasher` kan dit niet: die is per proces willekeurig geseed, dus dezelfde
+    /// data levert na een herstart een andere waarde — precies wat je niet wil van iets
+    /// dat je in UserDefaults bewaart.
     nonisolated private static func digest(_ p: Payload) throws -> String {
         hexDigest(try makeEncoder().encode(p))
     }
@@ -697,13 +1043,26 @@ enum Sync {
     /// force-quit midden in een training verliest niets (`draftSnapshot` vangt dat af).
     private static let interval: Duration = .seconds(300)
 
+    private static var tracking = false
+
+    /// Zo vroeg mogelijk aanzetten, vóór alles wat bij de start naar de store schrijft
+    /// (`Exercise.bootstrap`, de id-backfill). Een save die hier langsloopt zonder dat de
+    /// observer er is, zou ongemerkt buiten de delta vallen.
+    ///
+    /// SwiftData meldt bij elke save wat er is ingevoegd, gewijzigd en verwijderd. Dat is
+    /// precies wat een delta-push nodig heeft: niet "er is iets veranderd", maar "déze rijen".
+    static func startTracking() {
+        guard !tracking else { return }
+        tracking = true
+        NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated { record(note) }
+        }
+    }
+
     static func start(_ context: ModelContext) {
         guard isConfigured, !running else { return }
         running = true
-        // SwiftData meldt elke save; dat is precies "er valt iets te pushen".
-        NotificationCenter.default.addObserver(forName: ModelContext.didSave, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { markDirty() }
-        }
+        startTracking()
         Task {
             while true {
                 try? await Task.sleep(for: interval)
@@ -713,18 +1072,43 @@ enum Sync {
         }
     }
 
+    private static func record(_ note: Notification) {
+        let stamp = Date.now
+        let info = note.userInfo ?? [:]
+        func ids(_ key: ModelContext.NotificationKey) -> [PersistentIdentifier] {
+            info[key.rawValue] as? [PersistentIdentifier] ?? []
+        }
+        let touched = ids(.insertedIdentifiers) + ids(.updatedIdentifiers)
+        let removed = ids(.deletedIdentifiers)
+        // Niets herkenbaars in de melding terwijl er wél opgeslagen is: dan weten we niet
+        // welke rijen het waren en is een delta niet te vertrouwen.
+        if touched.isEmpty && removed.isEmpty { deltaValid = false }
+        for id in touched { changes[id] = stamp }
+        for id in removed { changes[id] = nil }
+        isClean = false
+        markDirty()
+    }
+
     /// `force` markeert een bewust moment: einde training, of de app die naar de
     /// achtergrond gaat. Die mogen ook tijdens een training pushen. De lus niet — die zou
-    /// anders elke ronde de volledige historie versturen zolang je aan het afvinken bent.
+    /// anders elke ronde pushen zolang je aan het afvinken bent.
     static func pushIfChanged(_ context: ModelContext, force: Bool = false) async {
         guard pushAllowed, dirty else { return }
         guard force || WorkoutStatus.shared.startedAt == nil else { return }
         if let retryPushAfter, Date.now < retryPushAfter { return }
+        // Koude start zonder wijzigingen: de vorige sessie eindigde schoon, dus er valt
+        // niets te doen. Dit is wat een lege push bij elke app-start voorkomt.
+        if isClean, changes.isEmpty, deletions.isEmpty { dirty = false; return }
         do {
-            let h = try await fingerprint(collect(context))
-            // Niets veranderd t.o.v. de server: schoon, dus de vlag mag uit.
-            guard h != lastPushedHash else { dirty = false; return }
-            try await push(context)
+            if needsFullPush {
+                try await pushFull(context, skipIfUnchanged: true)
+            } else if try await pushDelta(context) == false {
+                // Er is wél iets gewijzigd, maar we kunnen niet aanwijzen wát — de
+                // save-melding kan nog onderweg zijn. Dan liever één volledige push (die
+                // zichzelf overslaat als er toch niets veranderd is) dan een wijziging die
+                // blijft liggen.
+                try await pushFull(context, skipIfUnchanged: true)
+            }
             // Pas hier uit: bij een fout blijft 'dirty' staan zodat de lus het opnieuw
             // probeert, ook als de gebruiker daarna niets meer wijzigt.
             dirty = false
@@ -734,4 +1118,12 @@ enum Sync {
             SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
         }
     }
+}
+
+// MARK: - Hulpprotocollen
+
+/// Een rij zoals de server 'm teruggeeft: adresseerbaar, en herkenbaar als tombstone.
+protocol SyncRow {
+    var id: UUID { get }
+    var deleted_at: String? { get }
 }

@@ -421,7 +421,7 @@ struct ProfileView: View {
                                                  set: { if !$0 { habitToDelete = nil } }),
                             titleVisibility: .visible) {
             Button("Verwijder \"\(habitToDelete?.name ?? "")\"", role: .destructive) {
-                if let habitToDelete { context.delete(habitToDelete) }
+                if let habitToDelete { context.deleteSynced(habitToDelete) }
                 habitToDelete = nil
             }
             Button("Annuleer", role: .cancel) { habitToDelete = nil }
@@ -431,7 +431,7 @@ struct ProfileView: View {
                                                  set: { if !$0 { scaleToDelete = nil } }),
                             titleVisibility: .visible) {
             Button("Verwijder \"\(scaleToDelete?.name ?? "")\"", role: .destructive) {
-                if let scaleToDelete { context.delete(scaleToDelete) }
+                if let scaleToDelete { context.deleteSynced(scaleToDelete) }
                 scaleToDelete = nil
             }
             Button("Annuleer", role: .cancel) { scaleToDelete = nil }

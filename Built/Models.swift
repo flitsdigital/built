@@ -126,6 +126,35 @@ final class WorkoutStatus {
     }
 }
 
+// MARK: - Sync-identiteit
+//
+// Elke rij die naar de server gaat heeft een eigen `syncID`, gegenereerd op het toestel.
+// Dat is wat een delta-sync mogelijk maakt: zonder stabiel id kan de client geen enkele
+// rij aanwijzen, en is "alles wissen en opnieuw schrijven" het enige dat de server met het
+// toestel in overeenstemming brengt.
+//
+// De naam is bewust niet `id`: `PersistentModel` voldoet al aan `Identifiable` via
+// `persistentModelID`, en een eigen `id` zou die conformance overnemen. Elke `ForEach`
+// in de app zou dan op deze waarde gaan sleutelen — en tijdens de backfill hieronder
+// hebben bestaande rijen allemaal dezelfde waarde, wat SwiftUI niet overleeft.
+
+extension UUID {
+    /// "Nog geen id". SwiftData evalueert de default van een nieuw attribuut één keer voor
+    /// de lichtgewicht migratie, dus `= UUID()` zou álle bestaande rijen dezelfde waarde
+    /// geven. Vandaar een sentinel, en een eenmalige backfill bij de eerste start erna.
+    static let zero = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+}
+
+/// Een model dat naar Supabase gesynchroniseerd wordt.
+protocol SyncedRecord: PersistentModel {
+    var syncID: UUID { get set }
+    /// De Postgres-tabel waar dit model in landt.
+    static var syncTable: String { get }
+    /// Leeg exemplaar om een gepullde rij in te gieten. De waarden hier doen er niet toe;
+    /// het toepassen van de rij overschrijft ze allemaal.
+    static func blank() -> Self
+}
+
 @Model
 final class Profile {
     var name: String
@@ -195,10 +224,12 @@ final class Profile {
 
 @Model
 final class WeightEntry {
+    var syncID: UUID = UUID.zero
     var date: Date
     var kg: Double
     var scale: String = ""
     init(date: Date = .now, kg: Double, scale: String = "") {
+        self.syncID = UUID()
         self.date = date
         self.kg = kg
         self.scale = scale
@@ -207,17 +238,21 @@ final class WeightEntry {
 
 @Model
 final class Scale {
+    var syncID: UUID = UUID.zero
     var name: String
     init(name: String) {
+        self.syncID = UUID()
         self.name = name
     }
 }
 
 @Model
 final class CustomHabit {
+    var syncID: UUID = UUID.zero
     var name: String
     var createdAt: Date
     init(name: String) {
+        self.syncID = UUID()
         self.name = name
         self.createdAt = .now
     }
@@ -225,12 +260,31 @@ final class CustomHabit {
 
 @Model
 final class HabitLog {
+    var syncID: UUID = UUID.zero
     var name: String
     var date: Date
     init(name: String, date: Date = .now) {
+        self.syncID = UUID()
         self.name = name
         self.date = date
     }
+}
+
+extension WeightEntry: SyncedRecord {
+    static var syncTable: String { "weight_entries" }
+    static func blank() -> WeightEntry { WeightEntry(kg: 0) }
+}
+extension Scale: SyncedRecord {
+    static var syncTable: String { "scales" }
+    static func blank() -> Scale { Scale(name: "") }
+}
+extension CustomHabit: SyncedRecord {
+    static var syncTable: String { "custom_habits" }
+    static func blank() -> CustomHabit { CustomHabit(name: "") }
+}
+extension HabitLog: SyncedRecord {
+    static var syncTable: String { "habit_logs" }
+    static func blank() -> HabitLog { HabitLog(name: "") }
 }
 
 @Model
@@ -298,6 +352,7 @@ func platesPerSide(total: Double, bar: Double = 20) -> [Double]? {
 
 @Model
 final class ProteinEntry {
+    var syncID: UUID = UUID.zero
     var date: Date
     var grams: Int
     var label: String
@@ -312,6 +367,7 @@ final class ProteinEntry {
     var unit: String = FoodUnit.gram.rawValue
     init(date: Date = .now, grams: Int, label: String, kcal: Int = 0, carbs: Int = 0, fat: Int = 0,
          meal: String = "", amount: Double = 0, unit: FoodUnit = .gram) {
+        self.syncID = UUID()
         self.date = date
         self.grams = grams
         self.label = label
@@ -432,6 +488,7 @@ enum FoodPortions {
 /// Product uit de scanner of zoekfunctie; voedingswaarden per 100 g.
 @Model
 final class FoodProduct {
+    var syncID: UUID = UUID.zero
     var name: String
     var brand: String = ""
     var barcode: String = ""
@@ -459,6 +516,7 @@ final class FoodProduct {
 
     init(name: String, brand: String = "", barcode: String = "",
          protein100: Double, kcal100: Double, carbs100: Double = 0, fat100: Double = 0) {
+        self.syncID = UUID()
         self.name = name
         self.brand = brand
         self.barcode = barcode
@@ -485,6 +543,7 @@ struct JournalNote: Codable, Identifiable, Hashable {
 
 @Model
 final class Meal {
+    var syncID: UUID = UUID.zero
     var name: String
     var protein: Int
     var kcal: Int
@@ -493,6 +552,7 @@ final class Meal {
     var ingredients: [Ingredient] = []
     var favorite: Bool = false
     init(name: String, protein: Int, kcal: Int) {
+        self.syncID = UUID()
         self.name = name
         self.protein = protein
         self.kcal = kcal
@@ -508,6 +568,7 @@ final class Meal {
 
 @Model
 final class SetEntry {
+    var syncID: UUID = UUID.zero
     var date: Date
     var exercise: String
     var weightKg: Double
@@ -518,6 +579,7 @@ final class SetEntry {
     var seconds: Int = 0
     init(date: Date = .now, exercise: String, weightKg: Double, reps: Int,
          dropset: Bool = false, failure: Bool = false, seconds: Int = 0) {
+        self.syncID = UUID()
         self.date = date
         self.exercise = exercise
         self.weightKg = weightKg
@@ -530,6 +592,7 @@ final class SetEntry {
 
 @Model
 final class Routine {
+    var syncID: UUID = UUID.zero
     var name: String
     var exercises: [String]
     var createdAt: Date
@@ -542,6 +605,7 @@ final class Routine {
     /// Rusttijd per oefening in seconden; ontbreekt = de globale instelling.
     var restByExercise: [String: Int] = [:]
     init(name: String, exercises: [String] = []) {
+        self.syncID = UUID()
         self.name = name
         self.exercises = exercises
         self.createdAt = .now
@@ -550,6 +614,7 @@ final class Routine {
 
 @Model
 final class DayHabits {
+    var syncID: UUID = UUID.zero
     var date: Date
     var creatine: Bool
     var sleptEnough: Bool
@@ -572,6 +637,7 @@ final class DayHabits {
     /// Algemene notitie bij de training van die dag (los van de per-oefening notities).
     var workoutNote: String = ""
     init(date: Date = .now, creatine: Bool = false, sleptEnough: Bool = false) {
+        self.syncID = UUID()
         self.date = date
         self.creatine = creatine
         self.sleptEnough = sleptEnough
@@ -586,6 +652,31 @@ final class DayHabits {
 
     /// Dag-check-in ingevuld? Eén van de vier is genoeg — anders voelt het als huiswerk.
     var checkedIn: Bool { energy > 0 || mood > 0 || soreness > 0 || stress > 0 }
+}
+
+extension ProteinEntry: SyncedRecord {
+    static var syncTable: String { "protein_entries" }
+    static func blank() -> ProteinEntry { ProteinEntry(grams: 0, label: "") }
+}
+extension SetEntry: SyncedRecord {
+    static var syncTable: String { "set_entries" }
+    static func blank() -> SetEntry { SetEntry(exercise: "", weightKg: 0, reps: 0) }
+}
+extension DayHabits: SyncedRecord {
+    static var syncTable: String { "day_habits" }
+    static func blank() -> DayHabits { DayHabits() }
+}
+extension Routine: SyncedRecord {
+    static var syncTable: String { "routines" }
+    static func blank() -> Routine { Routine(name: "") }
+}
+extension Meal: SyncedRecord {
+    static var syncTable: String { "meals" }
+    static func blank() -> Meal { Meal(name: "", protein: 0, kcal: 0) }
+}
+extension FoodProduct: SyncedRecord {
+    static var syncTable: String { "food_products" }
+    static func blank() -> FoodProduct { FoodProduct(name: "", protein100: 0, kcal100: 0) }
 }
 
 // MARK: - Dag-index

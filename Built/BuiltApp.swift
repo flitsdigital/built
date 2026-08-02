@@ -36,6 +36,9 @@ struct RootView: View {
     var body: some View {
         content
             .task {
+                // Vóór alles wat hieronder naar de store schrijft: anders vallen die
+                // wijzigingen buiten de delta die de sync bijhoudt.
+                Sync.startTracking()
                 #if DEBUG
                 // ponytail: screenshot-states forceren via `simctl launch ... -demoRest`
                 if ProcessInfo.processInfo.arguments.contains("-demoWorkout") { workoutStatus.startWorkout() }
@@ -55,6 +58,7 @@ struct RootView: View {
                 }
                 workoutStatus.cleanupStaleActivities() // na herstart hangt er anders een oude activity
                 Exercise.bootstrap(context) // catalogus vullen + vrije-tekst-namen inhalen
+                SyncIdentity.backfill(context) // rijen van vóór de delta-sync een eigen id geven
                 Notifier.shared.context = context
                 guard Sync.isConfigured else { return }
                 // Bepaal veilig of auto-push mag; haalt bij een lege install eerst alles op

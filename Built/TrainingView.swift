@@ -483,7 +483,7 @@ struct TrainingView: View {
 
     private func removeExercise(_ id: DraftExercise.ID) {
         if let ex = workout.first(where: { $0.id == id }) {
-            for s in ex.sets { if let e = s.savedEntry, !e.isDeleted { context.delete(e) } }
+            for s in ex.sets { if let e = s.savedEntry, !e.isDeleted { context.deleteSynced(e) } }
         }
         withAnimation(.snappy(duration: 0.25)) { workout.removeAll { $0.id == id } }
     }
@@ -567,7 +567,7 @@ struct TrainingView: View {
     private func discardWorkout() {
         WorkoutStatus.shared.endWorkout()
         for s in workout.flatMap(\.sets) {
-            if let e = s.savedEntry, !e.isDeleted { context.delete(e) }
+            if let e = s.savedEntry, !e.isDeleted { context.deleteSynced(e) }
         }
         withAnimation(.snappy(duration: 0.3)) {
             active = false
@@ -693,7 +693,7 @@ struct TrainingView: View {
                             titleVisibility: .visible) {
             Button("Verwijder \(dayToDelete.map { sets(on: $0, history).count } ?? 0) sets", role: .destructive) {
                 if let day = dayToDelete {
-                    for s in sets(on: day, history) { context.delete(s) }
+                    for s in sets(on: day, history) { context.deleteSynced(s) }
                 }
                 dayToDelete = nil
             }
@@ -926,7 +926,7 @@ struct TrainingView: View {
                             profile.schedule[weekday] = nil
                             if let day = Int(weekday) { profile.trainingDays.removeAll { $0 == day } }
                         }
-                        context.delete(routine)
+                        context.deleteSynced(routine)
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -1218,7 +1218,7 @@ struct TrainingView: View {
         }
         .onDelete { offsets in
             for i in offsets {
-                if let e = ex.sets[i].savedEntry, !e.isDeleted { context.delete(e) }
+                if let e = ex.sets[i].savedEntry, !e.isDeleted { context.deleteSynced(e) }
             }
             exercise.wrappedValue.sets.remove(atOffsets: offsets)
         }
@@ -1438,7 +1438,7 @@ struct TrainingView: View {
                                 && $0.weightKg == set.wrappedValue.kg && $0.reps == set.wrappedValue.reps
                                 && $0.seconds == set.wrappedValue.seconds
                         }
-                        if let e, !e.isDeleted { context.delete(e) }
+                        if let e, !e.isDeleted { context.deleteSynced(e) }
                         set.wrappedValue.savedEntry = nil
                     }
                     updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg, history)
@@ -1697,7 +1697,7 @@ struct SessionDetailView: View {
                         }
                     }
                     .onDelete { offsets in
-                        for i in offsets { context.delete(group.sets[i]) }
+                        for i in offsets { context.deleteSynced(group.sets[i]) }
                     }
                     Button {
                         if let last = group.sets.last {

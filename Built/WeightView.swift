@@ -187,7 +187,7 @@ struct WeightView: View {
                             .buttonStyle(.plain)
                     }
                     .onDelete { offsets in
-                        for i in offsets { context.delete(group.entries[i]) }
+                        for i in offsets { context.deleteSynced(group.entries[i]) }
                     }
                 }
             }

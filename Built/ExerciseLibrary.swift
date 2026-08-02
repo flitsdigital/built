@@ -5,6 +5,7 @@ import SwiftData
 
 @Model
 final class Exercise {
+    var syncID: UUID = UUID.zero
     /// Naam is de sleutel waarmee SetEntry en Routine (beide String) koppelen.
     var name: String
     var muscle: String
@@ -12,6 +13,7 @@ final class Exercise {
     var createdAt: Date
 
     init(name: String, muscle: String = Exercise.muscles.last!, type: String = Exercise.types.last!) {
+        self.syncID = UUID()
         self.name = name
         self.muscle = muscle
         self.type = type
@@ -287,6 +289,11 @@ struct NewExerciseSheet: View {
 
 // MARK: - Beheerscherm
 
+extension Exercise: SyncedRecord {
+    static var syncTable: String { "exercises" }
+    static func blank() -> Exercise { Exercise(name: "") }
+}
+
 struct ExerciseLibraryView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Exercise.name) private var exercises: [Exercise]
@@ -326,7 +333,7 @@ struct ExerciseLibraryView: View {
                         }
                     }
                     .onDelete { offsets in
-                        for i in offsets { context.delete(group.items[i]) }
+                        for i in offsets { context.deleteSynced(group.items[i]) }
                     }
                 }
             }

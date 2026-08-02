@@ -197,7 +197,7 @@ struct MealsView: View {
                     }
                 }
                 .onDelete { offsets in
-                    for i in offsets { context.delete(meals[i]) }
+                    for i in offsets { context.deleteSynced(meals[i]) }
                 }
                 Button { showAdd = true } label: {
                     Label("Nieuwe maaltijd of recept", systemImage: "plus")
