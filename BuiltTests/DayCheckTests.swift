@@ -175,6 +175,44 @@ struct DayCheckTests {
         #expect(DayCheck.perfect(maandag, index: dag, profile: profile))
     }
 
+    /// De grove knop (`tracksFood`) haalt eten helemaal weg; deze laat je doorloggen maar
+    /// rekent je er niet op af. Het verschil is precies waarom er twee vlaggen zijn.
+    @Test("Eiwit kan uit de score zonder dat eten-tracking uit gaat")
+    func etenTeltNietMeeMaarBlijftAan() {
+        let dag = index(maandag, trained: true, weighed: true, creatine: true, slept: true) // niets gegeten
+        #expect(DayCheck.score(maandag, index: dag, profile: profile) == 70)
+
+        profile.foodCountsForScore = false
+        #expect(profile.tracksFood)  // de Eten-tab en de eiwitkaart blijven staan
+        #expect(profile.scoresFood == false)
+
+        let factors = DayCheck.factors(maandag, index: dag, profile: profile)
+        #expect(factors.map(\.name) == ["Training", "Gewicht", "Creatine", "Slaap"])
+        #expect(factors.map(\.weight) == [25, 15, 15, 15])
+        #expect(DayCheck.score(maandag, index: dag, profile: profile) == 100)
+        #expect(DayCheck.perfect(maandag, index: dag, profile: profile))
+    }
+
+    @Test("Eiwit meetellen aan laten staan verandert niets")
+    func standaardTeltEiwitGewoonMee() {
+        #expect(profile.foodCountsForScore)
+        #expect(profile.scoresFood)
+        let dag = index(maandag, protein: 100, trained: true, weighed: true, creatine: true, slept: true)
+        #expect(DayCheck.factors(maandag, index: dag, profile: profile).map(\.name)
+                == ["Eiwit", "Training", "Gewicht", "Creatine", "Slaap"])
+        #expect(DayCheck.score(maandag, index: dag, profile: profile) == 100)
+    }
+
+    /// Eten bijhouden uit zet de score-vlag buitenspel: de grove knop wint altijd.
+    @Test("Eten bijhouden uit haalt eiwit weg, ook met meetellen aan")
+    func groveKnopWint() {
+        profile.tracksFood = false
+        profile.foodCountsForScore = true
+        #expect(profile.scoresFood == false)
+        #expect(DayCheck.factors(maandag, index: index(maandag), profile: profile)
+                .contains { $0.name == "Eiwit" } == false)
+    }
+
     @Test("Alle tracking uit laat training en gewicht over")
     func alleTrackingUit() {
         profile.tracksFood = false

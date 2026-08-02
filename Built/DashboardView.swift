@@ -324,7 +324,9 @@ struct DashboardView: View {
                        trained: idx.trained(today), creatine: h?.creatine == true,
                        weighed: idx.weighed(today), slept: h?.sleptEnough == true,
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
-                       restDay: restDayOn(today), showFood: profile.tracksFood).save()
+                       // De widget toont de checklist die de score bepaalt; telt eiwit
+                       // niet mee, dan hoort die rij er ook niet in.
+                       restDay: restDayOn(today), showFood: profile.scoresFood).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 

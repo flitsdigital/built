@@ -191,10 +191,13 @@ struct ProfileView: View {
                 Toggle("Creatine bijhouden", isOn: $profile.tracksCreatine)
                 Toggle("Slaap bijhouden", isOn: $profile.tracksSleep)
                 Toggle("Eten bijhouden", isOn: $profile.tracksFood)
+                if profile.tracksFood {
+                    Toggle("Eten telt mee voor je Groei Score", isOn: $profile.foodCountsForScore)
+                }
             } header: {
                 Text("Kern-habits")
             } footer: {
-                Text("Je Groei Score telt nu: wegen, training\(profile.tracksFood ? ", eiwit" : "")\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""). Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen. Eten uit? Dan blijft de Eten-tab gewoon werken, maar staat hij niet meer op je dashboard.")
+                Text("Je Groei Score telt nu: wegen, training\(profile.scoresFood ? ", eiwit" : "")\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""). Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen.\n\nEten bijhouden uit? Dan blijft de Eten-tab werken, maar verdwijnt de eiwitkaart van je dashboard. Wil je wél blijven loggen maar niet afgerekend worden op de dagen dat je het overslaat, zet dan alleen \"telt mee voor je Groei Score\" uit — de kaart blijft dan gewoon staan.")
             }
 
             Section {

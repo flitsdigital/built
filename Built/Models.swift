@@ -140,6 +140,14 @@ final class Profile {
     var tracksSleep: Bool = true
     /// Eten bijhouden. Uit = eiwit telt niet mee voor score/streak en verdwijnt van het dashboard.
     var tracksFood: Bool = true
+    /// Telt eiwit mee voor de Groei Score? Uit = je logt gewoon door in de Eten-tab en de
+    /// eiwitkaart blijft op je dashboard staan, maar een dag zonder eiwit trekt je score
+    /// niet omlaag en breekt je streak niet. `tracksFood` is de grovere knop: die haalt
+    /// eten helemaal weg.
+    var foodCountsForScore: Bool = true
+
+    /// Weegt eiwit mee in `DayCheck.factors`? Alleen als je het bijhoudt én het mee mag tellen.
+    var scoresFood: Bool { tracksFood && foodCountsForScore }
     /// Handmatig calorie-doel; 0 = automatisch berekenen uit lengte/gewicht/doel.
     var kcalTarget: Int = 0
     /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
@@ -689,7 +697,9 @@ enum DayCheck {
     static func factors(_ day: Date, index: DayIndex, profile: Profile,
                         customHabits: [String] = []) -> [Factor] {
         var out: [Factor] = []
-        if profile.tracksFood {
+        // Niet meetellen is iets anders dan gemist: de factor valt uit de lijst, dus de
+        // weging herverdeelt zich over wat er wél in zit — net als bij creatine en slaap.
+        if profile.scoresFood {
             let ratio = Double(index.protein(day)) / Double(max(profile.proteinTarget, 1))
             out.append(Factor(name: "Eiwit", weight: 30, progress: min(ratio, 1)))
         }
