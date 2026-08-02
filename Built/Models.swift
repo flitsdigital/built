@@ -340,12 +340,19 @@ func liftLoad(kg: Double, bodyweight: Double, bodyweightExercise: Bool) -> Doubl
 
 /// Schijven per kant voor een barbell-gewicht, greedy vanaf de zwaarste schijf.
 /// nil als het gewicht de stang niet haalt. Reststukje < kleinste schijf wordt genegeerd.
-func platesPerSide(total: Double, bar: Double = 20) -> [Double]? {
+/// `maxPlates` is de fysieke grens van een stang: daarboven is het een typefout in het
+/// gewichtsveld, en zonder grens werd de hint een muur van "25 + 25 + …" over het halve
+/// scherm. Geen suggestie is dan bruikbaarder dan een onmogelijke.
+func platesPerSide(total: Double, bar: Double = 20, maxPlates: Int = 10) -> [Double]? {
     guard total >= bar else { return nil }
     var perSide = (total - bar) / 2
     var out: [Double] = []
     for p in [25.0, 20, 15, 10, 5, 2.5, 1.25] {
-        while perSide >= p - 0.01 { out.append(p); perSide -= p }
+        while perSide >= p - 0.01 {
+            out.append(p)
+            guard out.count <= maxPlates else { return nil }
+            perSide -= p
+        }
     }
     return out
 }

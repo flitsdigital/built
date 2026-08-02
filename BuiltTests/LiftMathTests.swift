@@ -76,6 +76,15 @@ struct PlatesTests {
         #expect(platesPerSide(total: 14, bar: 15) == nil)
     }
 
+    /// Zonder grens leverde 4020 kg tachtig schijven van 25 op, en die hint at de halve
+    /// setrij op. Een gewicht dat niet op een stang past hoort geen suggestie te krijgen.
+    @Test("Onmogelijk gewicht levert geen stapel op")
+    func onmogelijkGewicht() {
+        #expect(platesPerSide(total: 4020) == nil)
+        #expect(platesPerSide(total: 540) == nil)     // 260 per kant vraagt een elfde schijf
+        #expect(platesPerSide(total: 520)?.count == 10) // 250 per kant past nog net
+    }
+
     @Test("Het resultaat past altijd op de stang")
     func altijdKloppendeStapel() throws {
         for stap in 0...720 {
