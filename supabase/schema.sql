@@ -45,7 +45,8 @@ alter table public.routines add column if not exists supersets jsonb not null de
 alter table public.routines add column if not exists rest_by_exercise jsonb not null default '{}';
 alter table public.profiles add column if not exists schedule jsonb not null default '{}';
 alter table public.profiles add column if not exists tracks_food boolean not null default true;
--- tracks_food haalt eten helemaal weg; deze bepaalt alleen of eiwit meeweegt in de score.
+-- Eten bijhouden en eten láten meetellen zijn twee dingen: uit betekent loggen zonder
+-- dat een vergeten dag punten en streak kost.
 alter table public.profiles add column if not exists food_counts_for_score boolean not null default true;
 
 create table if not exists public.exercises (

@@ -169,14 +169,10 @@ final class Profile {
     var tracksSleep: Bool = true
     /// Eten bijhouden. Uit = eiwit telt niet mee voor score/streak en verdwijnt van het dashboard.
     var tracksFood: Bool = true
-    /// Telt eiwit mee voor de Groei Score? Uit = je logt gewoon door in de Eten-tab en de
-    /// eiwitkaart blijft op je dashboard staan, maar een dag zonder eiwit trekt je score
-    /// niet omlaag en breekt je streak niet. `tracksFood` is de grovere knop: die haalt
-    /// eten helemaal weg.
+    /// Telt eiwit mee in de Groei Score? Uit = eten blijft loggen zoals het is (Eten-tab,
+    /// eiwitkaart op het dashboard), maar een dag zonder invoer trekt je score niet omlaag
+    /// en breekt je streak niet. Voor wie eten wél volgt, maar niet elke dag.
     var foodCountsForScore: Bool = true
-
-    /// Weegt eiwit mee in `DayCheck.factors`? Alleen als je het bijhoudt én het mee mag tellen.
-    var scoresFood: Bool { tracksFood && foodCountsForScore }
     /// Handmatig calorie-doel; 0 = automatisch berekenen uit lengte/gewicht/doel.
     var kcalTarget: Int = 0
     /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
@@ -194,6 +190,10 @@ final class Profile {
         self.goalDate = goalDate
         self.trainingsPerWeek = trainingsPerWeek
     }
+
+    /// Weegt eiwit mee in de Groei Score? Alleen als je eten überhaupt bijhoudt én
+    /// wilt dat het meetelt — de checklist, de streak en beide heatmaps lezen dit.
+    var foodInScore: Bool { tracksFood && foodCountsForScore }
 
     // ponytail: 1,6 g eiwit per kg doelgewicht — simpele regel, goed genoeg
     var proteinTarget: Int { Int((goalWeight * 1.6).rounded()) }
@@ -790,7 +790,7 @@ enum DayCheck {
         var out: [Factor] = []
         // Niet meetellen is iets anders dan gemist: de factor valt uit de lijst, dus de
         // weging herverdeelt zich over wat er wél in zit — net als bij creatine en slaap.
-        if profile.scoresFood {
+        if profile.foodInScore {
             let ratio = Double(index.protein(day)) / Double(max(profile.proteinTarget, 1))
             out.append(Factor(name: "Eiwit", weight: 30, progress: min(ratio, 1)))
         }

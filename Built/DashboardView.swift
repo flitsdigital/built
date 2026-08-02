@@ -326,7 +326,7 @@ struct DashboardView: View {
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
                        // De widget toont de checklist die de score bepaalt; telt eiwit
                        // niet mee, dan hoort die rij er ook niet in.
-                       restDay: restDayOn(today), showFood: profile.scoresFood).save()
+                       restDay: restDayOn(today), showFood: profile.foodInScore).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 

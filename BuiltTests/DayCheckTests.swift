@@ -175,42 +175,50 @@ struct DayCheckTests {
         #expect(DayCheck.perfect(maandag, index: dag, profile: profile))
     }
 
-    /// De grove knop (`tracksFood`) haalt eten helemaal weg; deze laat je doorloggen maar
-    /// rekent je er niet op af. Het verschil is precies waarom er twee vlaggen zijn.
-    @Test("Eiwit kan uit de score zonder dat eten-tracking uit gaat")
-    func etenTeltNietMeeMaarBlijftAan() {
+    /// Twee losse knoppen, want het zijn twee wensen: eten helemáál niet volgen, of eten
+    /// wél loggen maar niet elke dag — en dan geen 30 punten verliezen op een dag dat het
+    /// er niet van kwam.
+    @Test("Eten telt niet mee voor de score terwijl je het wel blijft bijhouden")
+    func etenTeltNietMee() {
         let dag = index(maandag, trained: true, weighed: true, creatine: true, slept: true) // niets gegeten
         #expect(DayCheck.score(maandag, index: dag, profile: profile) == 70)
 
         profile.foodCountsForScore = false
-        #expect(profile.tracksFood)  // de Eten-tab en de eiwitkaart blijven staan
-        #expect(profile.scoresFood == false)
+        // Eten blijft aan: de Eten-tab en de eiwitkaart op het dashboard hangen hieraan.
+        #expect(profile.tracksFood)
+        #expect(profile.foodInScore == false)
 
         let factors = DayCheck.factors(maandag, index: dag, profile: profile)
+        #expect(factors.contains { $0.name == "Eiwit" } == false)
+        // Niet meetellen is iets anders dan gemist: de factor valt uit de lijst en de
+        // weging herverdeelt zich over wat er wél in zit.
         #expect(factors.map(\.name) == ["Training", "Gewicht", "Creatine", "Slaap"])
         #expect(factors.map(\.weight) == [25, 15, 15, 15])
+        #expect(factors.reduce(0) { $0 + $1.weight } == 70)
         #expect(DayCheck.score(maandag, index: dag, profile: profile) == 100)
         #expect(DayCheck.perfect(maandag, index: dag, profile: profile))
     }
 
-    @Test("Eiwit meetellen aan laten staan verandert niets")
-    func standaardTeltEiwitGewoonMee() {
-        #expect(profile.foodCountsForScore)
-        #expect(profile.scoresFood)
-        let dag = index(maandag, protein: 100, trained: true, weighed: true, creatine: true, slept: true)
-        #expect(DayCheck.factors(maandag, index: dag, profile: profile).map(\.name)
-                == ["Eiwit", "Training", "Gewicht", "Creatine", "Slaap"])
-        #expect(DayCheck.score(maandag, index: dag, profile: profile) == 100)
+    @Test("Gelogd eiwit levert geen punten meer op als eten niet meetelt")
+    func etenTeltNietMeeOokNietBijInvoer() {
+        profile.foodCountsForScore = false
+        let alleenEiwit = index(maandag, protein: 100)
+        #expect(DayCheck.score(maandag, index: alleenEiwit, profile: profile) == 0)
     }
 
-    /// Eten bijhouden uit zet de score-vlag buitenspel: de grove knop wint altijd.
-    @Test("Eten bijhouden uit haalt eiwit weg, ook met meetellen aan")
-    func groveKnopWint() {
+    @Test("Eten telt standaard mee")
+    func etenTeltStandaardMee() {
+        #expect(profile.foodCountsForScore)
+        #expect(profile.foodInScore)
+    }
+
+    @Test("Eten bijhouden uit weegt zwaarder dan de score-knop")
+    func etenUitOverruleertScoreKnop() {
         profile.tracksFood = false
         profile.foodCountsForScore = true
-        #expect(profile.scoresFood == false)
+        #expect(profile.foodInScore == false)
         #expect(DayCheck.factors(maandag, index: index(maandag), profile: profile)
-                .contains { $0.name == "Eiwit" } == false)
+            .contains { $0.name == "Eiwit" } == false)
     }
 
     @Test("Alle tracking uit laat training en gewicht over")
