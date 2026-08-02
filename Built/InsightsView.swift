@@ -301,7 +301,7 @@ struct InsightsView: View {
         if isVisible { content } else { Color.clear }
     }
 
-    @ViewBuilder private var content: some View {
+    private var content: some View {
         // Alles wat over de volledige tabellen loopt: precies één keer per render.
         // Elk blok hieronder krijgt het resultaat door i.p.v. het zelf te herberekenen.
         let idx = makeIndex()
@@ -916,6 +916,27 @@ struct ExerciseDetailView: View {
                     .foregroundStyle(.green)
                     .frame(height: 200)
                     .padding(.vertical, 8)
+                }
+            } else if !sets.isEmpty {
+                // Eén sessie: een lijn door één punt zegt niets, de sets binnen die sessie
+                // wel. Vanaf de tweede sessie neemt de trendgrafiek hierboven het over.
+                Section {
+                    Chart(Array(sets.enumerated()), id: \.offset) { index, set in
+                        BarMark(x: .value("Set", index + 1), y: .value("kg", set.weightKg))
+                            .annotation(position: .top) {
+                                Text("×\(set.reps)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
+                    .foregroundStyle(.green)
+                    .chartXAxis { AxisMarks(values: .automatic(desiredCount: sets.count)) }
+                    .frame(height: 200)
+                    .padding(.vertical, 8)
+                } header: {
+                    Text("Deze sessie")
+                } footer: {
+                    Text("Vanaf je tweede sessie zie je hier je topgewicht per sessie.")
                 }
             }
             if let p = projection, p.slopePerWeek > 0.05 {

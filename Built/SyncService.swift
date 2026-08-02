@@ -263,26 +263,12 @@ enum Sync {
         return request
     }
 
-    /// Beslist of een mislukte `auth.session` mag uitmonden in een nieuw anoniem account.
-    ///
-    /// `auth.session` gooit zowel bij "geen opgeslagen sessie" als bij "token-refresh
-    /// mislukt" (500, timeout, rotatie-race). Alleen het eerste rechtvaardigt een nieuw
-    /// account. Bij het tweede werd de gebruiker stil uitgelogd uit z'n echte account en
-    /// werd z'n volledige dataset onder een vers user_id weggeschreven — onomkeerbaar,
-    /// terwijl een mislukte sync zichzelf herstelt.
-    ///
-    /// De opgeslagen sessie is het onderscheid: supabase-swift wist die alleen als de
-    /// refresh-token echt geweigerd is, niet bij een storing.
-    static func mayCreateAnonymousAccount(hasStoredSession: Bool) -> Bool { !hasStoredSession }
-
+    /// Geen sessie = geen account, en dat is een echte fout: nooit stilletjes een nieuw
+    /// account maken. Dat wiste voorheen bij een mislukte token-refresh de koppeling met
+    /// de echte gebruiker en schreef de hele dataset onder een vers user_id weg.
     private static func userID() async throws -> UUID {
         guard let client else { throw notConfigured() }
-        do {
-            return try await client.auth.session.user.id
-        } catch {
-            guard mayCreateAnonymousAccount(hasStoredSession: client.auth.currentSession != nil) else { throw error }
-            return try await client.auth.signInAnonymously().user.id
-        }
+        return try await client.auth.session.user.id
     }
 
     // MARK: - Rijen uit modellen
@@ -766,20 +752,17 @@ enum Sync {
         try context.delete(model: HabitLog.self)
     }
 
-    /// Uitloggen. Met keepLocalData blijft alles op het toestel staan (en gaat verder
-    /// onder een nieuw anoniem account); anders wordt het toestel leeggemaakt en
-    /// blijft je data alleen op je account staan.
-    static func signOut(context: ModelContext, keepLocalData: Bool) async {
+    /// Uitloggen maakt het toestel leeg: zonder account kan de app toch niet syncen, en
+    /// een achtergebleven lokale kopie zou bij de volgende login met een ánder account
+    /// gaan botsen. Je data blijft op je account staan; opnieuw inloggen haalt 'm terug.
+    static func signOut(context: ModelContext) async {
         try? await client?.auth.signOut()
         pushAllowed = false
         resetSyncState()
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = nil
         UserDefaults.standard.removeObject(forKey: "lastSync")
-        if !keepLocalData {
-            try? wipeLocal(context)
-        }
-        await bootstrap(context)
+        try? wipeLocal(context)
     }
 
     /// Ander account = schone lei. De bewaarde vingerafdruk en het pull-anker slaan op de
@@ -800,7 +783,7 @@ enum Sync {
 
     /// Voorkomt dat een verse (bijna lege) install de server overschrijft.
     static func bootstrap(_ context: ModelContext) async {
-        guard isConfigured else { return }
+        guard isConfigured, hasSession else { return } // uitgelogd = niets te syncen, geen foutmelding
         do {
             let uid = try await userID()
             let serverProfiles: [ProfileRow] = try await client!.from("profiles").select().eq("user_id", value: uid).execute().value
@@ -827,7 +810,6 @@ enum Sync {
     // MARK: - Account (e-mail + wachtwoord of Google)
 
     static var currentEmail: String? { client?.auth.currentSession?.user.email }
-    static var isAnonymous: Bool { client?.auth.currentSession?.user.isAnonymous ?? true }
     /// Actieve sessie? Na registreren met e-mailbevestiging-aan is die er nog niet.
     static var hasSession: Bool { client?.auth.currentSession != nil }
 
@@ -835,17 +817,19 @@ enum Sync {
         NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])
     }
 
-    /// Registreren. Anoniem account met data → wordt geconverteerd (zelfde user, data blijft).
-    static func register(email: String, password: String, context: ModelContext) async throws {
+    /// Registreren. Levert `false` op als het account wel is aangemaakt maar er nog geen
+    /// sessie is — dan staat e-mailbevestiging aan in Supabase en moet de gebruiker eerst
+    /// de link in z'n mail aantikken.
+    @discardableResult
+    static func register(email: String, password: String, context: ModelContext) async throws -> Bool {
         guard let client else { throw notConfigured() }
-        let session = try? await client.auth.session
-        if session?.user.isAnonymous == true {
-            try await client.auth.update(user: UserAttributes(email: email, password: password))
-        } else {
-            try await client.auth.signUp(email: email, password: password)
-        }
+        let result = try await client.auth.signUp(email: email, password: password)
+        guard result.session != nil else { return false }
+        pushAllowed = false
+        resetSyncState()
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
+        return true
     }
 
     /// Stuurt een wachtwoord-reset-mail zodat een gebruiker niet buitengesloten raakt.
@@ -893,9 +877,9 @@ enum Sync {
     static func deleteAccount(context: ModelContext) async throws {
         guard let client else { throw notConfigured() }
         try await client.rpc("delete_account").execute()
-        // Server-account is weg; signOut ruimt de lokale sessie op, wist het toestel
-        // en start een verse anonieme lijn zodat de app bruikbaar blijft.
-        await signOut(context: context, keepLocalData: false)
+        // Server-account is weg; signOut ruimt de lokale sessie op en wist het toestel,
+        // waarna de app op de onboarding uitkomt.
+        await signOut(context: context)
     }
 
     // MARK: - Wijzigingen bijhouden

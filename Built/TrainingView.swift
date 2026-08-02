@@ -617,7 +617,7 @@ struct TrainingView: View {
         if isVisible { content } else { Color.clear }
     }
 
-    @ViewBuilder private var content: some View {
+    private var content: some View {
         // Eén groepering per render; elke helper hieronder zocht hiervoor zelf de
         // volledige sets-tabel af, meerdere keren per oefening.
         let history = makeHistory()

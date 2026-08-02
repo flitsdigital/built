@@ -5,26 +5,10 @@ import Testing
 @testable import Built
 
 /// De sync heeft geen server nodig om te testen: de interessante beslissingen zitten in
-/// pure functies eromheen — mag er een nieuw anoniem account komen, is de vingerafdruk
-/// stabiel, en klopt de gzip-stream die we zelf in elkaar zetten.
+/// pure functies eromheen — is de vingerafdruk stabiel, en klopt de gzip-stream die we
+/// zelf in elkaar zetten.
 @Suite("Sync")
 struct SyncTests {
-
-    // MARK: - Anoniem aanmelden
-
-    /// `auth.session` gooit zowel bij "geen sessie" als bij "refresh mislukt". Alleen het
-    /// eerste geval mag een nieuw account opleveren; het tweede leverde een stille
-    /// accountwissel op, met de volledige dataset onder een vers user_id en de originele
-    /// rijen als wees achter.
-    @Test("Verse install zonder sessie meldt anoniem aan")
-    @MainActor func verseInstallMeldtAnoniemAan() {
-        #expect(Sync.mayCreateAnonymousAccount(hasStoredSession: false))
-    }
-
-    @Test("Mislukte refresh met een opgeslagen sessie maakt géén nieuw account")
-    @MainActor func mislukteRefreshMaaktGeenNieuwAccount() {
-        #expect(Sync.mayCreateAnonymousAccount(hasStoredSession: true) == false)
-    }
 
     // MARK: - Vingerafdruk
 
