@@ -324,7 +324,7 @@ struct DashboardView: View {
                        trained: idx.trained(today), creatine: h?.creatine == true,
                        weighed: idx.weighed(today), slept: h?.sleptEnough == true,
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
-                       restDay: restDayOn(today), showFood: profile.tracksFood).save()
+                       restDay: restDayOn(today), showFood: profile.foodInScore).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
