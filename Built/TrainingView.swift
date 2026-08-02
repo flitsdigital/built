@@ -57,6 +57,9 @@ struct SavedWorkout: Codable, Equatable {
     var restEndsAt: Date?
     /// Algemene notitie voor de hele sessie.
     var workoutNote: String?
+    var workoutName: String?
+    /// Teruggezette datum, zodat een force-quit hem niet op vandaag terugzet.
+    var workoutDate: Date?
 }
 
 struct WorkoutSummary: Identifiable {
@@ -96,6 +99,11 @@ struct TrainingView: View {
     @State private var workout: [DraftExercise] = []
     @State private var alternatives: [String: [String]] = [:]
     @State private var workoutNote = ""
+    @State private var workoutName = ""
+    @State private var showStopwatch = false
+    /// Wanneer de training telt. Standaard nu; terugzetten verhuist de sets en het
+    /// trainingsvinkje mee naar die dag.
+    @State private var workoutDate = Date.now
     @State private var startedAt = Date.now
     @State private var summary: WorkoutSummary?
     @State private var editingRoutine: Routine?
@@ -387,7 +395,9 @@ struct TrainingView: View {
                   originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }, alternatives: alternatives.isEmpty ? nil : alternatives,
            restEndsAt: workoutStatus.restEndsAt,
-           workoutNote: workoutNote.isEmpty ? nil : workoutNote)
+           workoutNote: workoutNote.isEmpty ? nil : workoutNote,
+                     workoutName: workoutName.isEmpty ? nil : workoutName,
+                     workoutDate: dayKey(workoutDate) == dayKey(.now) ? nil : workoutDate)
     }
 
     /// Na een force-quit: training terugzetten en de Live Activity weer adopteren.
@@ -403,6 +413,8 @@ struct TrainingView: View {
         }
         alternatives = saved.alternatives ?? [:]
         workoutNote = saved.workoutNote ?? ""
+        workoutName = saved.workoutName ?? ""
+        workoutDate = saved.workoutDate ?? .now
         active = true
         if workoutStatus.startedAt == nil {
             workoutStatus.resumeWorkout(at: saved.startedAt)
@@ -488,29 +500,44 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.25)) { workout.removeAll { $0.id == id } }
     }
 
+    /// Verhuist de sets naar de gekozen datum. De onderlinge afstand blijft staan, zodat
+    /// de volgorde binnen de sessie klopt en de historie er hetzelfde uitziet als wanneer
+    /// je 'm live had gelogd. Alles wat "heb ik die dag getraind?" beantwoordt — score,
+    /// streak, weekplanning — leest de datum van de sets, dus dit is de enige knop die om
+    /// hoeft.
+    private func applyWorkoutDate() {
+        guard dayKey(workoutDate) != dayKey(.now) else { return }
+        for set in workout.flatMap(\.sets) {
+            guard let entry = set.savedEntry, !entry.isDeleted else { continue }
+            entry.date = workoutDate.addingTimeInterval(entry.date.timeIntervalSince(startedAt))
+        }
+    }
+
+    /// De dagrecord waar deze training op landt — vandaag, of de teruggezette datum.
+    private func habitsRecord(for date: Date) -> DayHabits {
+        if let existing = habits.first(where: { dayKey($0.date) == dayKey(date) }) { return existing }
+        let h = DayHabits(date: date)
+        context.insert(h)
+        return h
+    }
+
     private func saveExerciseNotes() {
         let notes = workout
             .map { ($0.name, $0.note.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.1.isEmpty }
         guard !notes.isEmpty else { return }
-        let record = habits.first { cal.isDateInToday($0.date) } ?? {
-            let h = DayHabits()
-            context.insert(h)
-            return h
-        }()
+        let record = habitsRecord(for: workoutDate)
         for (name, text) in notes { record.exerciseNotes[name] = text }
     }
 
-    /// Algemene sessie-notitie op de dag bewaren (los van de per-oefening notities).
+    /// Naam en algemene notitie op de dag bewaren (los van de per-oefening notities).
     private func saveWorkoutNote() {
         let clean = workoutNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !clean.isEmpty else { return }
-        let record = habits.first { cal.isDateInToday($0.date) } ?? {
-            let h = DayHabits()
-            context.insert(h)
-            return h
-        }()
-        record.workoutNote = clean
+        let name = workoutName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty || !name.isEmpty else { return }
+        let record = habitsRecord(for: workoutDate)
+        if !clean.isEmpty { record.workoutNote = clean }
+        if !name.isEmpty { record.workoutName = name }
     }
 
     /// Spiergroep-intensiteit van de zojuist afgeronde training (0…1, genormaliseerd op volume).
@@ -529,6 +556,7 @@ struct TrainingView: View {
     }
 
     private func finishWorkout() {
+        applyWorkoutDate()
         saveExerciseNotes()
         saveWorkoutNote()
         WorkoutStatus.shared.endWorkout()
@@ -560,6 +588,8 @@ struct TrainingView: View {
             active = false
             workout = []
             workoutNote = ""
+            workoutName = ""
+            workoutDate = .now
         }
         syncNow()
     }
@@ -647,6 +677,12 @@ struct TrainingView: View {
                         .font(.subheadline.bold().monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showStopwatch = true } label: {
+                        Image(systemName: "stopwatch")
+                    }
+                    .accessibilityLabel("Stopwatch")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Afronden") { finishWorkout() }
                         .font(.headline)
@@ -660,6 +696,10 @@ struct TrainingView: View {
             }
         }
         .task { restoreDraft() }
+        .sheet(isPresented: $showStopwatch) {
+            StopwatchSheet()
+                .presentationDetents([.height(320)])
+        }
         .onChange(of: draftSnapshot) { _, snap in
             if let snap, let data = try? JSONEncoder().encode(snap) {
                 UserDefaults.standard.set(data, forKey: "activeWorkout")
@@ -1122,9 +1162,19 @@ struct TrainingView: View {
             }
         }
 
-        Section("Notitie voor deze training") {
-            TextField("Bijv. voelde sterk, korte sessie", text: $workoutNote, axis: .vertical)
+        Section {
+            TextField("Naam (bijv. Push A)", text: $workoutName)
+            // Vergeten te loggen? Zet de datum terug en de sessie landt op de juiste dag,
+            // inclusief het trainingsvinkje in je score.
+            DatePicker("Datum", selection: $workoutDate, in: ...Date.now, displayedComponents: [.date, .hourAndMinute])
+            TextField("Notitie (bijv. voelde sterk)", text: $workoutNote, axis: .vertical)
                 .lineLimit(1...6)
+        } header: {
+            Text("Deze training")
+        } footer: {
+            if !cal.isDateInToday(workoutDate) {
+                Text("Deze training wordt gelogd op \(workoutDate.formatted(date: .long, time: .shortened)).")
+            }
         }
 
         Section {
@@ -1453,6 +1503,62 @@ struct TrainingView: View {
             .accessibilityLabel(set.wrappedValue.done ? "Set afgevinkt" : "Set afvinken")
         }
         .listRowBackground(set.wrappedValue.done ? Color.builtTint(.green) : nil)
+    }
+}
+
+/// Stopwatch die optelt, naast de rusttimer die aftelt. Voor holds, intervallen en
+/// cardio waar je zelf de tijd bepaalt.
+///
+/// Geen `Timer`: `Text(timerInterval:)` telt zelf door zolang het scherm leeft, ook als
+/// de app tussendoor naar de achtergrond gaat. Pauzeren is daarom een som op `startedAt`
+/// in plaats van een tikker die je stopt.
+struct StopwatchSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var startedAt: Date?
+    @State private var elapsed: TimeInterval = 0
+
+    private var running: Bool { startedAt != nil }
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Group {
+                if let startedAt {
+                    Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
+                } else {
+                    Text(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond)))
+                }
+            }
+            .font(.system(size: 64, weight: .semibold, design: .rounded).monospacedDigit())
+            .contentTransition(.numericText())
+
+            HStack(spacing: 12) {
+                Button(running ? "Pauze" : (elapsed > 0 ? "Verder" : "Start")) {
+                    if let startedAt {
+                        elapsed = Date.now.timeIntervalSince(startedAt)
+                        self.startedAt = nil
+                    } else {
+                        // Terugdateren i.p.v. optellen: dan blijft Text(timerInterval:)
+                        // de enige bron van waarheid voor wat er op het scherm staat.
+                        startedAt = Date.now.addingTimeInterval(-elapsed)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button("Reset") {
+                    startedAt = nil
+                    elapsed = 0
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!running && elapsed == 0)
+            }
+            .font(.headline)
+        }
+        .padding(.top, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .presentationDragIndicator(.visible)
+        .sensoryFeedback(.selection, trigger: running)
     }
 }
 

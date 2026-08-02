@@ -390,7 +390,11 @@ struct DayDetailView: View {
             }
 
             if !setsByExercise.isEmpty {
-                Section("Training") {
+                // Kop wordt de naam van de training als je 'm er een gaf ("Push A"),
+                // anders gewoon "Training" zoals altijd.
+                let title = habitsRecord?.workoutName.isEmpty == false
+                    ? habitsRecord!.workoutName : "Training"
+                Section(title) {
                     if let wn = habitsRecord?.workoutNote, !wn.isEmpty {
                         Text(wn)
                             .font(.footnote)

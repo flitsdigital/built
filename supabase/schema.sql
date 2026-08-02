@@ -55,7 +55,10 @@ create table if not exists public.exercises (
   name text not null,
   muscle text not null default 'Overig',
   type text not null default 'Overig',
-  created_at timestamptz not null
+  created_at timestamptz not null,
+  -- Meewerkende spieren. `muscle` blijft er één: die bepaalt de indeling en de
+  -- spiersplit, en mag een oefening niet dubbel laten meetellen in het volume.
+  secondary_muscles jsonb not null default '[]'::jsonb
 );
 alter table public.food_products add column if not exists serving_name text not null default '';
 -- 'g' of 'ml' per product, plus de laatst gelogde portie en de OFF-categorieën.
@@ -109,7 +112,9 @@ create table if not exists public.day_habits (
   soreness int not null default 0,
   stress int not null default 0,
   -- Notitie per oefening; verving de geparsede "Naam: tekst"-regels in `note`.
-  exercise_notes jsonb not null default '{}'::jsonb
+  exercise_notes jsonb not null default '{}'::jsonb,
+  -- Label voor de training ("Push A"), naast de notitie die proza is.
+  workout_name text not null default ''
 );
 
 create table if not exists public.routines (
@@ -466,12 +471,13 @@ begin
     seconds = excluded.seconds, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where full_replace or t.updated_at <= excluded.updated_at;
 
-  insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, updated_at, deleted_at)
+  insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, workout_name, updated_at, deleted_at)
   select r.id, uid, r.date, coalesce(r.creatine, false), coalesce(r.slept_enough, false),
          coalesce(r.note, ''), r.bed_time, r.wake_time, coalesce(r.sleep_quality, 0),
          coalesce(r.journal, '[]'::jsonb), coalesce(r.workout_note, ''),
          coalesce(r.energy, 0), coalesce(r.mood, 0), coalesce(r.soreness, 0), coalesce(r.stress, 0),
-         coalesce(r.exercise_notes, '{}'::jsonb), least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
+         coalesce(r.exercise_notes, '{}'::jsonb), coalesce(r.workout_name, ''),
+         least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.day_habits, coalesce(payload->'habits', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     date = excluded.date, creatine = excluded.creatine, slept_enough = excluded.slept_enough,
@@ -479,7 +485,7 @@ begin
     sleep_quality = excluded.sleep_quality, journal = excluded.journal,
     workout_note = excluded.workout_note, energy = excluded.energy, mood = excluded.mood,
     soreness = excluded.soreness, stress = excluded.stress, exercise_notes = excluded.exercise_notes,
-    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+    workout_name = excluded.workout_name, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where full_replace or t.updated_at <= excluded.updated_at;
 
   insert into public.routines as t (id, user_id, name, exercises, alternatives, targets, supersets, rest_by_exercise, created_at, updated_at, deleted_at)
@@ -522,13 +528,15 @@ begin
     categories = excluded.categories, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where full_replace or t.updated_at <= excluded.updated_at;
 
-  insert into public.exercises as t (id, user_id, name, muscle, type, created_at, updated_at, deleted_at)
+  insert into public.exercises as t (id, user_id, name, muscle, type, created_at, secondary_muscles, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.muscle, 'Overig'), coalesce(r.type, 'Overig'),
-         r.created_at, least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
+         r.created_at, coalesce(r.secondary_muscles, '[]'::jsonb),
+         least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.exercises, coalesce(payload->'exercises', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     name = excluded.name, muscle = excluded.muscle, type = excluded.type,
-    created_at = excluded.created_at, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+    created_at = excluded.created_at, secondary_muscles = excluded.secondary_muscles,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where full_replace or t.updated_at <= excluded.updated_at;
 
   insert into public.scales as t (id, user_id, name, correction, updated_at, deleted_at)

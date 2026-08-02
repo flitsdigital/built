@@ -643,6 +643,9 @@ final class DayHabits {
     var exerciseNotes: [String: String] = [:]
     /// Algemene notitie bij de training van die dag (los van de per-oefening notities).
     var workoutNote: String = ""
+    /// Naam van de training ("Push A", "Leg day"). Leeg = naamloos; het logboek valt dan
+    /// terug op de datum, zoals het altijd deed.
+    var workoutName: String = ""
     init(date: Date = .now, creatine: Bool = false, sleptEnough: Bool = false) {
         self.syncID = UUID()
         self.date = date

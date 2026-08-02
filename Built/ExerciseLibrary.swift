@@ -11,13 +11,19 @@ final class Exercise {
     var muscle: String
     var type: String
     var createdAt: Date
+    /// Spieren die meewerken zonder de hoofdrol te spelen. Los van `muscle`, want die
+    /// bepaalt waar de oefening in de bibliotheek en de spiersplit terechtkomt — dat blijft
+    /// één spier, anders telt een oefening meerdere keren mee in het volume.
+    var secondaryMuscles: [String] = []
 
-    init(name: String, muscle: String = Exercise.muscles.last!, type: String = Exercise.types.last!) {
+    init(name: String, muscle: String = Exercise.muscles.last!, type: String = Exercise.types.last!,
+         secondaryMuscles: [String] = []) {
         self.syncID = UUID()
         self.name = name
         self.muscle = muscle
         self.type = type
         self.createdAt = .now
+        self.secondaryMuscles = secondaryMuscles
     }
 
     static let muscles = ["Borst", "Rug", "Schouders", "Biceps", "Triceps",
@@ -386,6 +392,30 @@ struct ExerciseEditor: View {
             }
             Picker("Type", selection: $exercise.type) {
                 ForEach(Exercise.types, id: \.self) { Text($0) }
+            }
+            Section {
+                // Aantikken in plaats van een tweede Picker: het zijn er meestal drie of
+                // vier, en een multi-select Picker bestaat niet in SwiftUI.
+                ForEach(Exercise.muscles.filter { $0 != exercise.muscle && $0 != "Cardio" }, id: \.self) { m in
+                    let on = exercise.secondaryMuscles.contains(m)
+                    Button {
+                        if on {
+                            exercise.secondaryMuscles.removeAll { $0 == m }
+                        } else {
+                            exercise.secondaryMuscles.append(m)
+                        }
+                    } label: {
+                        HStack {
+                            Text(m).foregroundStyle(.primary)
+                            Spacer()
+                            if on { Image(systemName: "checkmark").foregroundStyle(.green) }
+                        }
+                    }
+                }
+            } header: {
+                Text("Meewerkende spieren")
+            } footer: {
+                Text("Alleen ter informatie: de spiergroep hierboven bepaalt waar de oefening in de bibliotheek en de spiersplit landt.")
             }
         }
         .navigationTitle(name.isEmpty ? exercise.name : name)
