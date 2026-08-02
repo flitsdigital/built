@@ -279,20 +279,18 @@ struct ProfileView: View {
 
             if Sync.isConfigured {
                 Section {
-                    LabeledContent("Account", value: Sync.currentEmail ?? "Anoniem (alleen dit toestel)")
+                    LabeledContent("Account", value: Sync.currentEmail ?? "Niet ingelogd")
                     Button {
                         showLogin = true
                     } label: {
-                        Label(Sync.isAnonymous ? "Account koppelen" : "Ander account", systemImage: "person.badge.key")
+                        Label("Ander account", systemImage: "person.badge.key")
                     }
-                    if !Sync.isAnonymous {
-                        Button(role: .destructive) {
-                            confirmLogout = true
-                        } label: {
-                            Label("Uitloggen", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                        .disabled(busy)
+                    Button(role: .destructive) {
+                        confirmLogout = true
+                    } label: {
+                        Label("Uitloggen", systemImage: "rectangle.portrait.and.arrow.right")
                     }
+                    .disabled(busy)
                     Button(role: .destructive) {
                         confirmDelete = true
                     } label: {
@@ -301,10 +299,6 @@ struct ProfileView: View {
                     .disabled(busy)
                 } header: {
                     Text("Account")
-                } footer: {
-                    if Sync.isAnonymous {
-                        Text("Koppel een account zodat je data ook op andere toestellen beschikbaar is.")
-                    }
                 }
 
                 Section {
@@ -441,15 +435,10 @@ struct ProfileView: View {
         }
         .sheet(isPresented: $showLogin) { AccountLoginSheet() }
         .confirmationDialog("Uitloggen?", isPresented: $confirmLogout, titleVisibility: .visible) {
-            Button("Uitloggen, data op dit toestel houden") {
-                logout(keepData: true)
-            }
-            Button("Uitloggen en toestel leegmaken", role: .destructive) {
-                logout(keepData: false)
-            }
+            Button("Uitloggen", role: .destructive) { logout() }
             Button("Annuleer", role: .cancel) {}
         } message: {
-            Text("Je data blijft altijd op je account staan. \"Toestel leegmaken\" verwijdert alleen de lokale kopie.")
+            Text("Je data blijft op je account staan. Dit toestel wordt leeggemaakt; opnieuw inloggen haalt alles terug.")
         }
         .confirmationDialog("Account definitief verwijderen?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Account en alle data verwijderen", role: .destructive) {
@@ -520,10 +509,10 @@ struct ProfileView: View {
         }
     }
 
-    private func logout(keepData: Bool) {
+    private func logout() {
         busy = true
         Task {
-            await Sync.signOut(context: context, keepLocalData: keepData)
+            await Sync.signOut(context: context)
             busy = false
         }
     }
@@ -559,10 +548,11 @@ struct ProfileView: View {
 
 /// Inloggen of registreren met e-mail + wachtwoord, of doorgaan met Google.
 /// Registreren op een toestel met anonieme data converteert het account (data blijft).
+/// Alleen inloggen. Registreren gebeurt in de onboarding — dat is de enige plek waar een
+/// account ontstaat, dus hier hoort geen tweede route naartoe.
 struct AccountLoginSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
-    @State private var registering = false
     @State private var email = ""
     @State private var password = ""
     @State private var busy = false
@@ -576,26 +566,21 @@ struct AccountLoginSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Modus", selection: $registering) {
-                        Text("Inloggen").tag(false)
-                        Text("Registreren").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowSeparator(.hidden)
                     TextField("jij@voorbeeld.nl", text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .textContentType(.emailAddress)
-                    SecureField("Wachtwoord (min. 6 tekens)", text: $password)
-                        .textContentType(registering ? .newPassword : .password)
+                    SecureField("Wachtwoord", text: $password)
+                        .textContentType(.password)
                     Button {
-                        submit()
+                        run { try await Sync.signIn(email: email.trimmingCharacters(in: .whitespaces),
+                                                    password: password, context: context) }
                     } label: {
                         if busy {
                             ProgressView().frame(maxWidth: .infinity)
                         } else {
-                            Text(registering ? "Maak account" : "Log in")
+                            Text("Log in")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                         }
@@ -604,17 +589,13 @@ struct AccountLoginSheet: View {
                     .disabled(busy || !formValid)
                     .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                     .listRowBackground(Color.clear)
-                    if !registering {
-                        Button("Wachtwoord vergeten?") { resetPassword() }
-                            .font(.footnote)
-                            .disabled(busy || !email.contains("@"))
-                            .frame(maxWidth: .infinity)
-                            .listRowBackground(Color.clear)
-                    }
+                    Button("Wachtwoord vergeten?") { resetPassword() }
+                        .font(.footnote)
+                        .disabled(busy || !email.contains("@"))
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
                 } footer: {
-                    Text(registering
-                         ? "Registreren op dit toestel koppelt je huidige data aan je account."
-                         : "Inloggen haalt de data van je account naar dit toestel.")
+                    Text("Inloggen haalt de data van je account naar dit toestel.")
                 }
 
                 Section {
@@ -641,29 +622,6 @@ struct AccountLoginSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-    }
-
-    private func submit() {
-        let mail = email.trimmingCharacters(in: .whitespaces)
-        guard registering else {
-            run { try await Sync.signIn(email: mail, password: password, context: context) }
-            return
-        }
-        busy = true
-        message = nil
-        Task {
-            do {
-                try await Sync.register(email: mail, password: password, context: context)
-                if Sync.hasSession {
-                    dismiss() // meteen ingelogd (bevestiging staat uit)
-                } else {
-                    message = "Check je mail om je account te bevestigen, en log daarna in."
-                }
-            } catch {
-                message = "Mislukt: \(error.localizedDescription)"
-            }
-            busy = false
-        }
     }
 
     private func google() {

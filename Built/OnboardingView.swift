@@ -10,6 +10,12 @@ struct OnboardingView: View {
     @State private var forward = true
 
     @State private var name = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var showPassword = false
+    @State private var creating = false
+    @State private var authError: String?
+    @State private var awaitingConfirmation = false
     @State private var age = 22
     @State private var height = 176
     @State private var weight = 70.0
@@ -24,6 +30,27 @@ struct OnboardingView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let totalSteps = 4
+
+    // Live-checklist onder het wachtwoordveld: het patroon dat lululemon, Gymshark,
+    // Acorns en Upside allemaal draaien — je ziet vooraf waaróm de knop uit staat.
+    private var passwordRules: [(text: String, met: Bool)] {
+        [("Minstens 8 tekens", password.count >= 8),
+         ("Een hoofdletter", password.contains { $0.isUppercase }),
+         ("Een kleine letter", password.contains { $0.isLowercase }),
+         ("Een cijfer", password.contains { $0.isNumber })]
+    }
+
+    private var passwordValid: Bool { passwordRules.allSatisfy(\.met) }
+    /// Bewust ruim: e-mailvalidatie die slimmer wil zijn wijst echte adressen af.
+    private var emailValid: Bool {
+        let t = trimmedEmail
+        guard let at = t.firstIndex(of: "@"), at != t.startIndex else { return false }
+        let domain = t[t.index(after: at)...]
+        return domain.contains(".") && !domain.hasSuffix(".") && !domain.contains("@")
+    }
+
+    private var trimmedEmail: String { email.trimmingCharacters(in: .whitespaces) }
+    private var accountValid: Bool { !trimmedName.isEmpty && emailValid && passwordValid }
     private var weeks: Double { max(goalDate.timeIntervalSinceNow / 604_800, 1) }
     private var rate: Double { (goalWeight - weight) / weeks }
     private var proteinTarget: Int { Int((goalWeight * 1.6).rounded()) }
@@ -56,7 +83,7 @@ struct OnboardingView: View {
             topBar
             Group {
                 switch step {
-                case 0: stepName
+                case 0: stepAccount
                 case 1: stepBody
                 case 2: stepGoal
                 default: stepPlan
@@ -68,6 +95,7 @@ struct OnboardingView: View {
         }
         .background(Color(.systemGroupedBackground))
         .sheet(isPresented: $showLogin) { AccountLoginSheet() }
+        .sheet(isPresented: $awaitingConfirmation) { confirmMailSheet }
     }
 
     private func go(_ to: Int) {
@@ -121,6 +149,7 @@ struct OnboardingView: View {
             Text(sub)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true) // anders knipt 'ie af op één regel
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20)
@@ -154,28 +183,149 @@ struct OnboardingView: View {
         .padding(.bottom, 16)
     }
 
-    // MARK: - Stap 1: naam
+    // MARK: - Stap 1: account (naam + e-mail + wachtwoord in één scherm)
 
-    private var stepName: some View {
-        VStack(spacing: 24) {
-            title("Hoe mogen we je noemen?", "Je coach spreekt je graag aan.")
-            inputCard {
-                TextField("Je naam", text: $name)
-                    .font(.title3)
-                    .padding(16)
-                    .focused($nameFocused)
-                    .submitLabel(.next)
-                    .onSubmit { if !trimmedName.isEmpty { go(1) } }
+    private var stepAccount: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 20) {
+                    title("Maak je account", "Zo staat je voortgang veilig en heb je 'm op elk toestel bij de hand.")
+                    inputCard {
+                        TextField("Je naam", text: $name)
+                            .textContentType(.givenName)
+                            .padding(16)
+                            .focused($nameFocused)
+                        Divider().padding(.leading, 16)
+                        TextField("E-mailadres", text: $email)
+                            .textContentType(.emailAddress)
+                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .padding(16)
+                        Divider().padding(.leading, 16)
+                        HStack {
+                            Group {
+                                if showPassword {
+                                    TextField("Wachtwoord", text: $password)
+                                } else {
+                                    SecureField("Wachtwoord", text: $password)
+                                }
+                            }
+                            .textContentType(.newPassword)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            Button {
+                                showPassword.toggle()
+                            } label: {
+                                Image(systemName: showPassword ? "eye.slash" : "eye")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(showPassword ? "Wachtwoord verbergen" : "Wachtwoord tonen")
+                        }
+                        .padding(16)
+                    }
+                    passwordChecklist
+                    if let authError {
+                        hint(authError, warning: true)
+                    }
+                }
             }
-            Spacer()
-            primaryButton("Volgende", disabled: trimmedName.isEmpty) { go(1) }
-            if Sync.isConfigured {
-                Button("Al een account? Log in") { showLogin = true }
-                    .font(.footnote)
-                    .padding(.bottom, 12)
+            .scrollDismissesKeyboard(.interactively)
+            primaryButton(creating ? "Bezig…" : "Volgende", disabled: !accountValid || creating) {
+                createAccount()
             }
+            Button("Al een account? Log in") { showLogin = true }
+                .font(.footnote)
+                .padding(.bottom, 12)
+            Text("Door verder te gaan ga je akkoord met de voorwaarden en het privacybeleid.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 12)
         }
         .onAppear { nameFocused = true }
+    }
+
+    private var passwordChecklist: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(passwordRules, id: \.text) { rule in
+                Label {
+                    Text(rule.text)
+                } icon: {
+                    Image(systemName: rule.met ? "checkmark.circle.fill" : "circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(rule.met ? Color.green : Color.secondary)
+                .animation(.snappy(duration: 0.2), value: rule.met)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 20)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Account meteen aanmaken: pas als het echt gelukt is mag je door de rest van de
+    /// onboarding. Zo loopt niemand vier stappen ver om alsnog op een bezet e-mailadres
+    /// te stranden.
+    private func createAccount() {
+        guard Sync.isConfigured else { go(1); return } // zonder Supabase-config lokaal verder
+        creating = true
+        authError = nil
+        Task {
+            do {
+                let signedIn = try await Sync.register(email: trimmedEmail, password: password, context: context)
+                creating = false
+                if signedIn {
+                    go(1)
+                } else {
+                    awaitingConfirmation = true
+                }
+            } catch {
+                creating = false
+                authError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Staat e-mailbevestiging aan in Supabase, dan geeft `signUp` geen sessie terug en
+    /// kan de gebruiker niet verder. Deze sheet is de enige uitweg: bevestigen, dan hier
+    /// inloggen met hetzelfde wachtwoord.
+    private var confirmMailSheet: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "envelope.badge")
+                .font(.system(size: 44))
+                .foregroundStyle(.green)
+                .padding(.top, 40)
+            Text("Bevestig je e-mail")
+                .font(.title2.bold())
+            Text("We stuurden een link naar \(trimmedEmail). Tik 'm aan en kom hier terug.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            if let authError {
+                hint(authError, warning: true)
+            }
+            Spacer()
+            primaryButton(creating ? "Bezig…" : "Ik heb bevestigd", disabled: creating) {
+                creating = true
+                authError = nil
+                Task {
+                    do {
+                        try await Sync.signIn(email: trimmedEmail, password: password, context: context)
+                        creating = false
+                        awaitingConfirmation = false
+                        go(1)
+                    } catch {
+                        creating = false
+                        authError = "Nog niet bevestigd — check je mail en probeer opnieuw."
+                    }
+                }
+            }
+        }
+        .interactiveDismissDisabled()
     }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
@@ -304,8 +454,8 @@ struct OnboardingView: View {
                 context.insert(profile)
                 context.insert(WeightEntry(kg: weight))
             }
-            if Sync.isConfigured {
-                Text("Je gegevens staan op dit toestel. Koppel later een account via Profiel om ze veilig te stellen en tussen toestellen te synchroniseren.")
+            if Sync.isConfigured, let email = Sync.currentEmail {
+                Text("Opgeslagen op \(email) — je vindt je plan terug op elk toestel waar je inlogt.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

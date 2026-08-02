@@ -90,7 +90,7 @@ struct LogbookView: View {
         if isVisible { content } else { Color.clear }
     }
 
-    @ViewBuilder private var content: some View {
+    private var content: some View {
         let idx = makeIndex()
         let groups = monthGroups(idx)
         // LazyVStack: alleen de maandkaarten in beeld worden gebouwd. Eerder stonden

@@ -160,7 +160,7 @@ struct DashboardView: View {
         if isVisible { content } else { Color.clear }
     }
 
-    @ViewBuilder private var content: some View {
+    private var content: some View {
         // Eén index per render, gedeeld door elke kaart hieronder. Ook `score` en `streak`
         // hangen eraan, zodat de .onChange-vergelijkingen niet opnieuw gaan rekenen.
         let idx = makeIndex()
@@ -190,9 +190,10 @@ struct DashboardView: View {
         .onAppear {
             appeared = true
             writeSnapshot(idx, score: score, streak: streak)
-            // Zondag-review: één keer per week, op zondag
+            // Zondag-review: één keer per week, op zondag. Pas vanaf de tweede week —
+            // wie op een zondag installeert kreeg anders meteen een review vol nullen.
             let week = cal.component(.weekOfYear, from: .now) + cal.component(.yearForWeekOfYear, from: .now) * 100
-            if cal.component(.weekday, from: .now) == 1, lastReviewWeek != week {
+            if cal.component(.weekday, from: .now) == 1, profile.daysIn >= 7, lastReviewWeek != week {
                 lastReviewWeek = week
                 showWeeklyReview = true
             }
