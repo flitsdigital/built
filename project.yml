@@ -2,6 +2,11 @@ name: Built
 options:
   bundleIdPrefix: com.jordiklavers
   developmentLanguage: nl
+# Projectbreed, niet handmatig in Xcode: Built.xcodeproj staat in .gitignore en wordt
+# gegenereerd, dus een instelling die je daar klikt is weg na de volgende `xcodegen`.
+settings:
+  base:
+    DEVELOPMENT_TEAM: WZP3V95T9A
 packages:
   Supabase:
     url: https://github.com/supabase/supabase-swift
