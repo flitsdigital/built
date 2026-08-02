@@ -642,11 +642,11 @@ enum Sync {
             if let existing = byID[r.id] {
                 update(r, existing)
             } else {
-                let fresh = Model.blank()
-                fresh.syncID = r.id
-                update(r, fresh)
-                context.insert(fresh)
-                byID[r.id] = fresh
+                let created = Model.blank()
+                created.syncID = r.id
+                update(r, created)
+                context.insert(created)
+                byID[r.id] = created
             }
         }
     }
@@ -1092,6 +1092,16 @@ enum Sync {
         let info = note.userInfo ?? [:]
         func ids(_ key: ModelContext.NotificationKey) -> [PersistentIdentifier] {
             info[key.rawValue] as? [PersistentIdentifier] ?? []
+        }
+        // Een batch-delete (wipeLocal) meldt geen losse id's maar "alles ongeldig". De
+        // bewaarde identifiers wijzen dan naar rijen die niet meer bestaan; die moeten weg
+        // vóór iemand ze probeert op te zoeken.
+        if info[ModelContext.NotificationKey.invalidatedAllIdentifiers.rawValue] != nil {
+            changes.removeAll()
+            deltaValid = false
+            isClean = false
+            markDirty()
+            return
         }
         let touched = ids(.insertedIdentifiers) + ids(.updatedIdentifiers)
         let removed = ids(.deletedIdentifiers)
