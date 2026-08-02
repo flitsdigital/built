@@ -52,8 +52,14 @@ enum Gzip {
 }
 
 private extension Data {
+    /// De gzip-trailer is gedefinieerd als vier losse bytes, laagste eerst. Uitschrijven
+    /// leest hier beter dan een pointer-truc — en binnen een Data-extensie zou
+    /// `withUnsafeBytes(of:)` bovendien op de instance-methode vallen in plaats van op de
+    /// globale functie.
     mutating func append(littleEndian value: UInt32) {
-        var little = value.littleEndian
-        withUnsafeBytes(of: &little) { append(contentsOf: $0) }
+        append(contentsOf: [UInt8(truncatingIfNeeded: value),
+                            UInt8(truncatingIfNeeded: value >> 8),
+                            UInt8(truncatingIfNeeded: value >> 16),
+                            UInt8(truncatingIfNeeded: value >> 24)])
     }
 }
