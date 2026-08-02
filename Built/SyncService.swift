@@ -3,7 +3,25 @@ import SwiftData
 import Supabase
 import Observation
 import AuthenticationServices
+import CryptoKit
 import UIKit
+
+/// ISO8601 mét fracties — precies wat PostgREST zelf ook stuurt, dus de datums komen
+/// exact terug zoals ze weggeschreven zijn.
+///
+/// `ISO8601DateFormatter` is thread-safe voor formatteren maar niet als `Sendable`
+/// gemarkeerd, en de encoder draait op een achtergrond-task. Eén gedeelde instantie achter
+/// `@unchecked Sendable` is goedkoper dan een formatter per datum: dat zijn er duizenden
+/// per push.
+private final class ISODate: @unchecked Sendable {
+    static let shared = ISODate()
+    private let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    func string(from date: Date) -> String { formatter.string(from: date) }
+}
 
 /// Presentatie-anker voor de Google OAuth-websessie.
 @MainActor
@@ -48,9 +66,17 @@ final class SyncStatus {
 @MainActor
 enum Sync {
     // MARK: - Rijen (kolomnamen = snake_case zoals in Postgres)
+    //
+    // Geen `user_id` in deze structs: sync_push haalt de uid uit de sessie en negeert
+    // wat de client meestuurt (terecht — de client mag niet bepalen onder wiens id er
+    // geschreven wordt). Het veld was daarmee 49 bytes per rij aan dood gewicht, ~24%
+    // van de payload. Bij het decoderen van een pull wordt de kolom simpelweg genegeerd.
+    //
+    // Sendable: de payload gaat naar een achtergrond-task om te encoden en te hashen,
+    // en dat is alleen veilig omdat het waardetypes tot op de bodem zijn.
 
-    private struct ProfileRow: Codable {
-        var user_id: UUID; var name: String; var age: Int; var height_cm: Int
+    private struct ProfileRow: Codable, Sendable {
+        var name: String; var age: Int; var height_cm: Int
         var start_weight: Double; var goal_weight: Double
         var start_date: Date; var goal_date: Date; var trainings_per_week: Int
         var tracks_creatine: Bool
@@ -60,16 +86,16 @@ enum Sync {
         var schedule: [String: String]
         var tracks_food: Bool? = true
     }
-    private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
-    private struct ProteinRow: Codable {
-        var user_id: UUID; var date: Date; var grams: Int; var label: String
+    private struct WeightRow: Codable, Sendable { var date: Date; var kg: Double; var scale: String }
+    private struct ProteinRow: Codable, Sendable {
+        var date: Date; var grams: Int; var label: String
         var kcal: Int; var carbs: Int; var fat: Int; var meal: String
         // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var amount: Double? = 0
         var unit: String? = "g"
     }
-    private struct FoodRow: Codable {
-        var user_id: UUID; var name: String; var brand: String; var barcode: String
+    private struct FoodRow: Codable, Sendable {
+        var name: String; var brand: String; var barcode: String
         var protein100: Double; var kcal100: Double; var carbs100: Double; var fat100: Double
         var favorite: Bool; var image_url: String
         var serving_grams: Double; var serving_name: String; var created_at: Date
@@ -77,14 +103,14 @@ enum Sync {
         var last_amount: Double? = 0
         var categories: String? = ""
     }
-    private struct SetRow: Codable {
-        var user_id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
+    private struct SetRow: Codable, Sendable {
+        var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
         // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var dropset: Bool? = false; var failure: Bool? = false
         var seconds: Int? = 0
     }
-    private struct HabitsRow: Codable {
-        var user_id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
+    private struct HabitsRow: Codable, Sendable {
+        var date: Date; var creatine: Bool; var slept_enough: Bool
         var note: String; var bed_time: Date?; var wake_time: Date?; var sleep_quality: Int
         // Optioneel zodat een pull werkt óók als de kolommen nog niet gemigreerd zijn.
         var journal: [JournalNote]? = []
@@ -95,24 +121,24 @@ enum Sync {
         var stress: Int? = 0
         var exercise_notes: [String: String]? = [:]
     }
-    private struct RoutineRow: Codable {
-        var user_id: UUID; var name: String; var exercises: [String]
+    private struct RoutineRow: Codable, Sendable {
+        var name: String; var exercises: [String]
         var alternatives: [String: [String]]; var targets: [String: [Int]]
         var supersets: [String: String]; var rest_by_exercise: [String: Int]; var created_at: Date
     }
-    private struct MealRow: Codable {
-        var user_id: UUID; var name: String; var protein: Int; var kcal: Int
+    private struct MealRow: Codable, Sendable {
+        var name: String; var protein: Int; var kcal: Int
         var created_at: Date; var servings: Double; var ingredients: [Ingredient]
         var favorite: Bool
     }
     // `scales.correction` bestaat wel in Postgres maar niet in het model; sync_push
     // laat 'm daarom op z'n default staan i.p.v. altijd 0 mee te sturen.
-    private struct ScaleRow: Codable { var user_id: UUID; var name: String }
-    private struct CustomHabitRow: Codable { var user_id: UUID; var name: String; var created_at: Date }
-    private struct ExerciseRow: Codable { var user_id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date }
-    private struct HabitLogRow: Codable { var user_id: UUID; var name: String; var date: Date }
+    private struct ScaleRow: Codable, Sendable { var name: String }
+    private struct CustomHabitRow: Codable, Sendable { var name: String; var created_at: Date }
+    private struct ExerciseRow: Codable, Sendable { var name: String; var muscle: String; var type: String; var created_at: Date }
+    private struct HabitLogRow: Codable, Sendable { var name: String; var date: Date }
 
-    private struct Payload: Codable {
+    private struct Payload: Codable, Sendable {
         var profile: ProfileRow?
         var weights: [WeightRow] = []
         var proteins: [ProteinRow] = []
@@ -127,42 +153,63 @@ enum Sync {
         var habitLogs: [HabitLogRow] = []
     }
 
+    private struct RPCParams: Encodable, Sendable { let payload: Payload }
+
     // MARK: - Client
 
-    static let client: SupabaseClient? = {
+    /// URL en anon key apart bewaard: de gzip-push bouwt een eigen URLRequest en heeft
+    /// ze allebei nodig.
+    private struct Config: Sendable { let url: URL; let key: String }
+
+    private static let config: Config? = {
         guard let url = Bundle.main.url(forResource: "Secrets", withExtension: "plist"),
               let dict = NSDictionary(contentsOf: url) as? [String: String],
               let urlString = dict["SUPABASE_URL"], let key = dict["SUPABASE_ANON_KEY"],
               !urlString.isEmpty, !key.isEmpty, let supabaseURL = URL(string: urlString)
         else { return nil }
-        // emitLocalSessionAsInitialSession: supabase-swift waarschuwt dat het huidige
-        // gedrag (eerst refreshen, dán de sessie uitzenden) een bug is die in de
-        // volgende major omklapt. Nu al opt-in, dan verandert er straks niets.
-        // De platform-init vult de standaard keychain-storage zelf in.
-        return SupabaseClient(
-            supabaseURL: supabaseURL,
-            supabaseKey: key,
-            options: .init(auth: .init(emitLocalSessionAsInitialSession: true)))
+        return Config(url: supabaseURL, key: key)
     }()
+
+    // emitLocalSessionAsInitialSession: supabase-swift waarschuwt dat het huidige
+    // gedrag (eerst refreshen, dán de sessie uitzenden) een bug is die in de
+    // volgende major omklapt. Nu al opt-in, dan verandert er straks niets.
+    // De platform-init vult de standaard keychain-storage zelf in.
+    static let client: SupabaseClient? = config.map {
+        SupabaseClient(supabaseURL: $0.url, supabaseKey: $0.key,
+                       options: .init(auth: .init(emitLocalSessionAsInitialSession: true)))
+    }
 
     static var isConfigured: Bool { client != nil }
 
+    /// Beslist of een mislukte `auth.session` mag uitmonden in een nieuw anoniem account.
+    ///
+    /// `auth.session` gooit in twee gevallen: er is geen opgeslagen sessie, óf de
+    /// token-refresh mislukte (500 van de auth-server, timeout, een rotatie-race). Alleen
+    /// het eerste geval rechtvaardigt een nieuw account. Werd bij het tweede geval tóch
+    /// anoniem aangemeld, dan werd de gebruiker stil uitgelogd uit z'n echte account en
+    /// werd z'n volledige dataset onder een vers `user_id` weggeschreven — onomkeerbaar,
+    /// terwijl een mislukte sync zichzelf herstelt.
+    ///
+    /// De opgeslagen sessie is het onderscheid: supabase-swift wist die alleen als de
+    /// refresh-token echt geweigerd is, niet bij een storing.
+    static func mayCreateAnonymousAccount(hasStoredSession: Bool) -> Bool { !hasStoredSession }
+
     private static func userID() async throws -> UUID {
-        guard let client else {
-            throw NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])
+        guard let client else { throw notConfigured() }
+        do {
+            return try await client.auth.session.user.id
+        } catch {
+            guard mayCreateAnonymousAccount(hasStoredSession: client.auth.currentSession != nil) else { throw error }
+            return try await client.auth.signInAnonymously().user.id
         }
-        if let session = try? await client.auth.session {
-            return session.user.id
-        }
-        return try await client.auth.signInAnonymously().user.id
     }
 
     // MARK: - Verzamelen (gesorteerd, zodat de change-hash stabiel is)
 
-    private static func collect(_ context: ModelContext, uid: UUID) throws -> Payload {
+    private static func collect(_ context: ModelContext) throws -> Payload {
         var p = Payload()
         if let profile = try context.fetch(FetchDescriptor<Profile>()).first {
-            p.profile = ProfileRow(user_id: uid, name: profile.name, age: profile.age, height_cm: profile.heightCm,
+            p.profile = ProfileRow(name: profile.name, age: profile.age, height_cm: profile.heightCm,
                                    start_weight: profile.startWeight, goal_weight: profile.goalWeight,
                                    start_date: profile.startDate, goal_date: profile.goalDate,
                                    trainings_per_week: profile.trainingsPerWeek,
@@ -171,31 +218,31 @@ enum Sync {
                                    schedule: profile.schedule, tracks_food: profile.tracksFood)
         }
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
-            .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
+            .map { WeightRow(date: $0.date, kg: $0.kg, scale: $0.scale) }
         p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)]))
-            .map { ProteinRow(user_id: uid, date: $0.date, grams: $0.grams, label: $0.label,
+            .map { ProteinRow(date: $0.date, grams: $0.grams, label: $0.label,
                               kcal: $0.kcal, carbs: $0.carbs, fat: $0.fat, meal: $0.meal,
                               amount: $0.amount, unit: $0.unit) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)]))
-            .map { SetRow(user_id: uid, date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps,
+            .map { SetRow(date: $0.date, exercise: $0.exercise, weight_kg: $0.weightKg, reps: $0.reps,
                           dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)]))
-            .map { HabitsRow(user_id: uid, date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
+            .map { HabitsRow(date: $0.date, creatine: $0.creatine, slept_enough: $0.sleptEnough,
                              note: $0.note, bed_time: $0.bedTime, wake_time: $0.wakeTime, sleep_quality: $0.sleepQuality,
                              journal: $0.journal, workout_note: $0.workoutNote,
                              energy: $0.energy, mood: $0.mood, soreness: $0.soreness, stress: $0.stress,
                              exercise_notes: $0.exerciseNotes) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)]))
-            .map { RoutineRow(user_id: uid, name: $0.name, exercises: $0.exercises,
+            .map { RoutineRow(name: $0.name, exercises: $0.exercises,
                               alternatives: $0.alternatives, targets: $0.targets,
                               supersets: $0.supersets, rest_by_exercise: $0.restByExercise,
                               created_at: $0.createdAt) }
         p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)]))
-            .map { MealRow(user_id: uid, name: $0.name, protein: $0.protein, kcal: $0.kcal,
+            .map { MealRow(name: $0.name, protein: $0.protein, kcal: $0.kcal,
                            created_at: $0.createdAt, servings: $0.servings, ingredients: $0.ingredients,
                            favorite: $0.favorite) }
         p.foods = try context.fetch(FetchDescriptor<FoodProduct>(sortBy: [.init(\.createdAt)]))
-            .map { FoodRow(user_id: uid, name: $0.name, brand: $0.brand, barcode: $0.barcode,
+            .map { FoodRow(name: $0.name, brand: $0.brand, barcode: $0.barcode,
                            protein100: $0.protein100, kcal100: $0.kcal100,
                            carbs100: $0.carbs100, fat100: $0.fat100,
                            favorite: $0.favorite, image_url: $0.imageURL,
@@ -203,36 +250,105 @@ enum Sync {
                            created_at: $0.createdAt,
                            unit: $0.unit, last_amount: $0.lastAmount, categories: $0.categories) }
         p.exercises = try context.fetch(FetchDescriptor<Exercise>(sortBy: [.init(\.name)]))
-            .map { ExerciseRow(user_id: uid, name: $0.name, muscle: $0.muscle, type: $0.type, created_at: $0.createdAt) }
+            .map { ExerciseRow(name: $0.name, muscle: $0.muscle, type: $0.type, created_at: $0.createdAt) }
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)]))
-            .map { ScaleRow(user_id: uid, name: $0.name) }
+            .map { ScaleRow(name: $0.name) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)]))
-            .map { CustomHabitRow(user_id: uid, name: $0.name, created_at: $0.createdAt) }
+            .map { CustomHabitRow(name: $0.name, created_at: $0.createdAt) }
         p.habitLogs = try context.fetch(FetchDescriptor<HabitLog>(sortBy: [.init(\.date)]))
-            .map { HabitLogRow(user_id: uid, name: $0.name, date: $0.date) }
+            .map { HabitLogRow(name: $0.name, date: $0.date) }
         return p
     }
 
     // MARK: - Push (atomair via RPC)
 
     static func push(_ context: ModelContext) async throws {
-        let uid = try await userID()
-        let p = try collect(context, uid: uid)
-        guard let db = client else { return }
-        struct Params: Encodable { let payload: Payload }
+        _ = try await userID() // geldige sessie, of anoniem aanmelden bij een verse install
+        let p = try collect(context)
+        guard client != nil else { return }
         do {
-            try await db.rpc("sync_push", params: Params(payload: p)).execute()
+            try await send(p)
         } catch {
             SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
             throw error
         }
-        lastPushedHash = try hash(p)
+        lastPushedHash = try await fingerprint(p)
         pushAllowed = true // expliciete push = bewuste overschrijving
         pushFailures = 0
         retryPushAfter = nil
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = .now
         UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
+    }
+
+    // MARK: - Transport
+    //
+    // De payload is bij uitstek comprimeerbaar: duizenden rijen met identieke sleutelnamen,
+    // ISO-datums met een gedeelde prefix, herhaalde oefeningsnamen. Realistisch 8-12×
+    // kleiner. supabase-swift zet zelf geen `Content-Encoding` en biedt geen haakje om een
+    // voorgecodeerde body mee te geven, dus de gzip-variant gaat via een eigen URLRequest.
+    //
+    // Of de Supabase-gateway (Kong) `Content-Encoding: gzip` doorlaat naar PostgREST is per
+    // project niet gegarandeerd. Daarom: proberen, en bij een afwijzing terugvallen op de
+    // gewone RPC — en dat onthouden, zodat niet elke push twee keer gaat.
+
+    /// De gateway wil de gzip-body niet. Zegt niets over de payload zelf.
+    private struct CompressionRejected: Error {}
+
+    private static let gzipDisabledKey = "syncGzipUnsupported"
+    private static var gzipEnabled: Bool {
+        get { !UserDefaults.standard.bool(forKey: gzipDisabledKey) }
+        set { UserDefaults.standard.set(!newValue, forKey: gzipDisabledKey) }
+    }
+
+    private static func send(_ payload: Payload) async throws {
+        guard let db = client else { return }
+        let params = RPCParams(payload: payload)
+
+        var compressionRejected = false
+        if gzipEnabled, let body = try await gzipped(params) {
+            do {
+                try await postGzip("sync_push", body: body)
+                return
+            } catch is CompressionRejected {
+                compressionRejected = true
+            }
+        }
+        try await db.rpc("sync_push", params: params).execute()
+        // Ongecomprimeerd lukt het wél, dus het lag aan de compressie en niet aan de
+        // payload. Pas hier uitzetten: een 400 op een kapotte payload mag gzip niet
+        // permanent uitschakelen.
+        if compressionRejected { gzipEnabled = false }
+    }
+
+    /// JSON-encode + gzip op een achtergrond-thread. Dit is de zwaarste stap van een push
+    /// en hoort niet op de MainActor.
+    private static func gzipped(_ params: RPCParams) async throws -> Data? {
+        try await Task.detached(priority: .utility) {
+            Gzip.compress(try makeEncoder().encode(params))
+        }.value
+    }
+
+    private static func postGzip(_ function: String, body: Data) async throws {
+        guard let config, let client else { throw notConfigured() }
+        let token = try await client.auth.session.accessToken
+        var request = URLRequest(url: config.url.appending(path: "rest/v1/rpc/\(function)"))
+        request.httpMethod = "POST"
+        request.setValue(config.key, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if (200..<300).contains(code) { return }
+        // Een gateway die Content-Encoding niet doorlaat, struikelt op de body zelf.
+        // 401/5xx zeggen niets over compressie en gaan als gewone fout door.
+        if [400, 411, 415, 501].contains(code) { throw CompressionRejected() }
+        let message = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
+        throw NSError(domain: "Sync", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     // MARK: - Pull (server wint, lokaal wordt vervangen)
@@ -348,7 +464,7 @@ enum Sync {
             for r in logRows { context.insert(HabitLog(name: r.name, date: r.date)) }
         }
 
-        lastPushedHash = try hash(collect(context, uid: uid))
+        lastPushedHash = try await fingerprint(collect(context))
         pushAllowed = true
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = .now
@@ -357,10 +473,9 @@ enum Sync {
 
     /// Volledige data als JSON — back-up/portabiliteit los van de server.
     static func exportJSON(_ context: ModelContext) -> String? {
-        guard let p = try? collect(context, uid: UUID()) else { return nil }
-        let encoder = JSONEncoder()
+        guard let p = try? collect(context) else { return nil }
+        let encoder = makeEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(p), let s = String(data: data, encoding: .utf8) else { return nil }
         return s
     }
@@ -386,7 +501,7 @@ enum Sync {
     static func signOut(context: ModelContext, keepLocalData: Bool) async {
         try? await client?.auth.signOut()
         pushAllowed = false
-        lastPushedHash = nil
+        lastPushedHash = nil // ander account mag nooit als "ongewijzigd" tellen
         pushFailures = 0
         retryPushAfter = nil // ander account = schone lei, niet wachten op een oude storing
         SyncStatus.shared.lastError = nil
@@ -507,29 +622,77 @@ enum Sync {
 
     // MARK: - Automatische sync-lus
 
-    private static var lastPushedHash: Int?
+    /// Vingerafdruk van de laatst geslaagde push, in UserDefaults zodat hij een herstart
+    /// overleeft. Zonder dat begon elke koude start op `nil` en pushte de app binnen
+    /// twintig seconden de volledige database, ook als er niets gewijzigd was.
+    private static let hashKey = "lastPushedHash"
+    private static var lastPushedHash: String? {
+        get { UserDefaults.standard.string(forKey: hashKey) }
+        set {
+            if let newValue { UserDefaults.standard.set(newValue, forKey: hashKey) }
+            else { UserDefaults.standard.removeObject(forKey: hashKey) }
+        }
+    }
+
     private static var running = false
     private(set) static var pushAllowed = false
     static var appActive = true
 
-    /// Gaat aan bij elke lokale wijziging. Zonder deze vlag draaide de 20-seconden-lus
-    /// élke ronde `collect()` — twaalf volledige fetches plus een JSON-encode van de
-    /// complete database, op de main thread, ook als er niets veranderd was.
+    /// Gaat aan bij elke lokale wijziging. Zonder deze vlag draaide de lus élke ronde
+    /// `collect()` — twaalf volledige fetches plus een JSON-encode van de complete
+    /// database, ook als er niets veranderd was.
     private static var dirty = true
 
-    /// Bij een mislukte push wachten we langer dan de vaste 20 seconden. Zonder deze
-    /// rem blijft een langdurige storing (offline, server plat) elke ronde hameren.
+    /// Bij een mislukte push wachten we langer dan het vaste interval. Zonder deze rem
+    /// blijft een langdurige storing (offline, server plat) elke ronde hameren.
     private static var pushFailures = 0
     private static var retryPushAfter: Date?
 
     /// Laat de sync-lus weten dat er iets te pushen valt.
     static func markDirty() { dirty = true }
 
-    private static func hash(_ p: Payload) throws -> Int {
-        var hasher = Hasher()
-        hasher.combine(try JSONEncoder().encode(p))
-        return hasher.finalize()
+    /// Encoder voor de vingerafdruk, de gzip-body en de export.
+    ///
+    /// `sortedKeys` is geen cosmetica: `schedule`, `targets` en `exercise_notes` zijn
+    /// dictionaries, en zonder vaste sleutelvolgorde levert dezelfde data twee keer een
+    /// andere JSON op — en dus een andere vingerafdruk en een push zonder wijziging.
+    /// ISO8601 met fracties is wat PostgREST zelf ook stuurt.
+    nonisolated static func makeEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .custom { date, target in
+            var container = target.singleValueContainer()
+            try container.encode(ISODate.shared.string(from: date))
+        }
+        return encoder
     }
+
+    /// SHA-256 over de payload, als hex.
+    ///
+    /// Swift's `Hasher` kan dit niet: die is per proces willekeurig geseed, dus dezelfde
+    /// data levert na een herstart een andere waarde — precies wat je niet wil van iets
+    /// dat je in UserDefaults bewaart.
+    nonisolated static func hexDigest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    nonisolated private static func digest(_ p: Payload) throws -> String {
+        hexDigest(try makeEncoder().encode(p))
+    }
+
+    /// Encoden en hashen van de complete database op de MainActor gaf een merkbare stall.
+    /// Payload is een boom van waardetypes, dus hij mag mee naar een achtergrond-task.
+    private static func fingerprint(_ p: Payload) async throws -> String {
+        try await Task.detached(priority: .utility) { try digest(p) }.value
+    }
+
+    /// Interval van de achtergrond-lus.
+    ///
+    /// Stond op 20 seconden. Tijdens een training vink je continu sets af, dus stond
+    /// `dirty` permanent aan en pushte hij ~180 keer per training de volledige historie.
+    /// De sync is een back-up, geen live-opslag: SwiftData is al duurzaam en een
+    /// force-quit midden in een training verliest niets (`draftSnapshot` vangt dat af).
+    private static let interval: Duration = .seconds(300)
 
     static func start(_ context: ModelContext) {
         guard isConfigured, !running else { return }
@@ -540,19 +703,22 @@ enum Sync {
         }
         Task {
             while true {
-                try? await Task.sleep(for: .seconds(20))
+                try? await Task.sleep(for: interval)
                 guard appActive else { continue } // ponytail: niet stampen in de achtergrond
                 await pushIfChanged(context)
             }
         }
     }
 
-    static func pushIfChanged(_ context: ModelContext) async {
+    /// `force` markeert een bewust moment: einde training, of de app die naar de
+    /// achtergrond gaat. Die mogen ook tijdens een training pushen. De lus niet — die zou
+    /// anders elke ronde de volledige historie versturen zolang je aan het afvinken bent.
+    static func pushIfChanged(_ context: ModelContext, force: Bool = false) async {
         guard pushAllowed, dirty else { return }
+        guard force || WorkoutStatus.shared.startedAt == nil else { return }
         if let retryPushAfter, Date.now < retryPushAfter { return }
         do {
-            let uid = try await userID()
-            let h = try hash(collect(context, uid: uid))
+            let h = try await fingerprint(collect(context))
             // Niets veranderd t.o.v. de server: schoon, dus de vlag mag uit.
             guard h != lastPushedHash else { dirty = false; return }
             try await push(context)

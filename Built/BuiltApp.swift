@@ -76,7 +76,9 @@ struct RootView: View {
                 }
                 if phase == .background {
                     Notifier.shared.refresh() // meldingen herplannen op actuele staat
-                    Task { await Sync.pushIfChanged(context) }
+                    // force: de lus slaat een lopende training over, dit moment niet —
+                    // je legt de telefoon juist weg omdat je even klaar bent.
+                    Task { await Sync.pushIfChanged(context, force: true) }
                 }
             }
     }

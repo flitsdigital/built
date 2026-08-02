@@ -157,7 +157,12 @@ begin
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "own rows" on public.%I', t);
-    execute format('create policy "own rows" on public.%I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)', t);
+    -- (select auth.uid()) i.p.v. auth.uid(): met de subquery maakt de planner er een
+    -- InitPlan van — één evaluatie per query in plaats van één per rij.
+    execute format(
+      'create policy "own rows" on public.%I for all '
+      || 'using ((select auth.uid()) = user_id) '
+      || 'with check ((select auth.uid()) = user_id)', t);
     execute format('create index if not exists %I on public.%I (user_id)', t || '_user_idx', t);
   end loop;
 end $$;

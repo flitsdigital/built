@@ -561,6 +561,7 @@ struct TrainingView: View {
             workout = []
             workoutNote = ""
         }
+        syncNow()
     }
 
     private func discardWorkout() {
@@ -573,6 +574,14 @@ struct TrainingView: View {
             workout = []
             workoutNote = ""
         }
+        syncNow()
+    }
+
+    /// De sync-lus slaat een lopende training over — anders pushte hij bij elke afgevinkte
+    /// set de volledige historie. Einde training is het moment waarop het wél moet.
+    private func syncNow() {
+        Sync.markDirty() // de autosave kan nog moeten komen; niet op z'n melding wachten
+        Task { await Sync.pushIfChanged(context, force: true) }
     }
 
     private var doneCount: Int { workout.flatMap(\.sets).filter { $0.done && !$0.warmup }.count }

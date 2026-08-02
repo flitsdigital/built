@@ -38,10 +38,15 @@ func daysAgo(_ n: Int) -> Date {
 }
 
 /// In-memory store: de modellen gedragen zich als in de app zonder de echte database te raken.
+///
+/// Alle gesynchroniseerde modellen zitten erin, ook de modellen die de meeste tests niet
+/// gebruiken: `Sync.collect` fetcht ze alle twaalf en gooit op een type dat de container
+/// niet kent.
 func memoryContext() throws -> ModelContext {
     let container = try ModelContainer(
         for: Profile.self, WeightEntry.self, ProteinEntry.self, SetEntry.self,
         DayHabits.self, HabitLog.self, CustomHabit.self, FoodProduct.self,
+        Routine.self, Meal.self, Exercise.self, Scale.self,
         configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     return ModelContext(container)
 }

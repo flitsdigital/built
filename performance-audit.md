@@ -173,6 +173,22 @@ Task {
 mapt alles naar Row-structs en JSON-encodeert de complete payload — alleen om een hash te
 berekenen en te zien óf er iets veranderd is. Alles op de main thread, elke 20 seconden.
 
+**Aangepakt** (issues #12, #14, #17):
+
+- Het interval staat op **5 minuten**, en de lus slaat een lópende training over. Tijdens een
+  training zette elke afgevinkte set `dirty`, dus dit draaide daar elke 20 seconden. Nu pusht
+  hij bij het afronden van de training en bij het naar de achtergrond gaan.
+- **JSON-encode en SHA-256 staan niet meer op de MainActor.** De payload is een boom van
+  waardetypes (`Sendable`), dus die gaat mee naar een `Task.detached`. Wat er op de MainActor
+  overblijft zijn de fetches zelf; #23 (per-tabel dirty-tracking) haalt ook die weg door alleen
+  gewijzigde rijen op te halen.
+- De hash is nu SHA-256 in plaats van Swift's `Hasher`, en staat in UserDefaults. `Hasher` is
+  per proces willekeurig geseed, dus bewaren had geen zin — en zonder bewaarde hash pushte elke
+  koude start de volledige database.
+
+Nog te meten in **Release**, met de synthetische dataset hieronder: de voor/na-getallen van deze
+stap staan er nog niet in.
+
 ---
 
 ### 10. Nergens een `LazyVStack`
