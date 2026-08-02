@@ -248,6 +248,21 @@ enum Sync {
 
     static var isConfigured: Bool { client != nil }
 
+    /// POST naar een edge function, met de sessie erin. nil als Supabase niet
+    /// geconfigureerd is of er (nog) geen sessie is — de beller moet dan zelf iets anders
+    /// verzinnen, niet wachten.
+    static func functionRequest(_ name: String, body: Data) -> URLRequest? {
+        guard let config, let token = client?.auth.currentSession?.accessToken else { return nil }
+        var request = URLRequest(url: config.url.appending(path: "functions/v1/\(name)"))
+        request.httpMethod = "POST"
+        request.setValue(config.key, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 12
+        request.httpBody = body
+        return request
+    }
+
     /// Beslist of een mislukte `auth.session` mag uitmonden in een nieuw anoniem account.
     ///
     /// `auth.session` gooit zowel bij "geen opgeslagen sessie" als bij "token-refresh

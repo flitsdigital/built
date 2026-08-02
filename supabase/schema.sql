@@ -684,3 +684,118 @@ begin
       using older_than;
   end loop;
 end $$;
+
+
+-- MARK: - OpenFoodFacts-cache (migration 0016)
+--
+-- Gedeelde, niet-persoonlijke data: lezen mag iedereen die is aangemeld, schrijven doet
+-- alleen de off-proxy edge function met de service role.
+
+create table if not exists public.off_products (
+  -- 'search:volle melk' of 'barcode:8712800147008'. Eén sleutel per soort vraag, zodat
+  -- beide paden dezelfde tabel gebruiken.
+  cache_key text primary key,
+  payload jsonb not null,
+  fetched_at timestamptz not null default now()
+);
+
+-- Verlopen entries opruimen kan op fetched_at.
+create index if not exists off_products_fetched_idx on public.off_products (fetched_at);
+
+alter table public.off_products enable row level security;
+
+drop policy if exists "off cache readable" on public.off_products;
+create policy "off cache readable" on public.off_products
+  for select
+  to authenticated
+  using (true);
+
+-- Geen insert/update/delete-policy: schrijven kan alleen met de service role, en die gaat
+-- langs RLS heen. Zo kan een client de cache niet vergiftigen.
+
+revoke insert, update, delete on public.off_products from anon, authenticated;
+
+-- Producten wijzigen zelden; weken tot maanden is ruim genoeg. Draai dit periodiek, of
+-- laat de function verlopen entries zelf verversen bij een hit.
+create or replace function public.off_prune(older_than interval default '90 days')
+returns void
+language sql
+security invoker
+as $$
+  delete from public.off_products where fetched_at < now() - older_than;
+$$;
+
+
+-- MARK: - Autovacuum op de tabellen met het meeste rij-verloop (migration 0015)
+--
+-- Nodig zolang er clients zijn die nog sync_push (v1, full-replace) aanroepen. Daarna mag
+-- dit terug naar de standaard met `alter table ... reset (...)`.
+
+do $$
+declare t text;
+begin
+  foreach t in array array['set_entries','protein_entries','day_habits',
+                           'weight_entries','food_products']
+  loop
+    execute format('alter table public.%I set ('
+                || 'autovacuum_vacuum_scale_factor = 0.02, '
+                || 'autovacuum_vacuum_cost_delay = 0, '
+                || 'autovacuum_analyze_scale_factor = 0.05)', t);
+  end loop;
+end $$;
+
+
+-- MARK: - Anonieme accounts opruimen (migration 0017)
+
+create or replace function public.stale_anonymous_users(older_than interval default '90 days')
+returns table (id uuid, created_at timestamptz, last_sign_in_at timestamptz)
+language sql
+security definer
+set search_path = ''
+as $$
+  select u.id, u.created_at, u.last_sign_in_at
+  from auth.users u
+  where u.is_anonymous
+    and u.created_at < now() - older_than
+    and coalesce(u.last_sign_in_at, u.created_at) < now() - older_than
+    and not exists (select 1 from public.profiles        p where p.user_id  = u.id)
+    and not exists (select 1 from public.set_entries     s where s.user_id  = u.id)
+    and not exists (select 1 from public.weight_entries  w where w.user_id  = u.id)
+    and not exists (select 1 from public.protein_entries e where e.user_id  = u.id)
+    and not exists (select 1 from public.day_habits      h where h.user_id  = u.id)
+    and not exists (select 1 from public.routines        r where r.user_id  = u.id);
+$$;
+
+create or replace function public.purge_stale_anonymous(older_than interval default '90 days')
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare removed integer;
+begin
+  delete from auth.users
+  where id in (select id from public.stale_anonymous_users(older_than));
+  get diagnostics removed = row_count;
+  return removed;
+end;
+$$;
+
+-- Niet aanroepbaar vanaf de app. Dit draait alleen als geplande taak.
+revoke all on function public.stale_anonymous_users(interval) from public, anon, authenticated;
+revoke all on function public.purge_stale_anonymous(interval) from public, anon, authenticated;
+
+-- Wekelijks, op een rustig moment. pg_cron zit niet standaard aan; is het er niet, dan
+-- laat deze migratie de functies staan en moet je 'm zelf inplannen (of aanzetten via
+-- Dashboard → Database → Extensions).
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.schedule('purge-stale-anonymous',
+                          '17 4 * * 0',
+                          $job$select public.purge_stale_anonymous()$job$);
+  else
+    raise notice 'pg_cron staat uit — purge_stale_anonymous() is aangemaakt maar niet ingepland.';
+  end if;
+end $$;
+

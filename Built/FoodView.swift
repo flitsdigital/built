@@ -52,10 +52,16 @@ enum OFF {
     static func search(_ query: String) async -> [Product]? {
         let key = query.lowercased()
         if let cached = queryCache[key] { return cached } // eerder gezocht → instant
-        var result = await raceSearch(query)
-        if result == nil { // storing → één korte retry voordat we opgeven
-            try? await Task.sleep(for: .milliseconds(600))
+        // Eerst onze eigen gecachete catalogus: één snelle round-trip in plaats van een
+        // race tussen drie externe servers, en OFF krijgt één request per uniek product
+        // in plaats van één per gebruiker.
+        var result = await proxy(["search": query])
+        if result == nil {
             result = await raceSearch(query)
+            if result == nil { // storing → één korte retry voordat we opgeven
+                try? await Task.sleep(for: .milliseconds(600))
+                result = await raceSearch(query)
+            }
         }
         if let result, !result.isEmpty {
             queryCache[key] = result
@@ -63,6 +69,23 @@ enum OFF {
         }
         return result
     }
+
+    // MARK: - Eigen proxy (gedeelde cache)
+
+    /// Vraagt de `off-proxy` edge function. nil = niet beschikbaar (niet uitgerold, geen
+    /// sessie, netwerk stuk) — dan valt de beller terug op OFF rechtstreeks, zodat het
+    /// uitrollen van de function geen harde afhankelijkheid is.
+    private static func proxy(_ body: [String: String]) async -> [Product]? {
+        guard let data = try? JSONEncoder().encode(body),
+              let request = await Sync.functionRequest("off-proxy", body: data),
+              let (payload, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let decoded = try? JSONDecoder().decode(ProxyResponse.self, from: payload)
+        else { return nil }
+        return decoded.products.items.compactMap(product(from:))
+    }
+
+    private struct ProxyResponse: Decodable { var products: Lenient<RawProduct> }
 
     /// Drie endpoints tegelijk; de eerste met resultaten wint. Zo faalt zoeken alleen
     /// als álle drie onbereikbaar zijn — één trage/platte server blokkeert niets.
@@ -111,6 +134,9 @@ enum OFF {
     // MARK: - Barcode (met retry)
 
     static func lookup(barcode: String) async -> Product? {
+        // Barcodes zijn de beste cache-kandidaten: één product, nooit een tikfout, en het
+        // scannen van dezelfde reep door duizend mensen hoort één OFF-request te zijn.
+        if let hit = await proxy(["barcode": barcode]) { return hit.first }
         for attempt in 0..<2 {
             if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
             guard let url = URL(string: "https://world.openfoodfacts.org/api/v2/product/\(barcode).json?fields=\(fields)"),
