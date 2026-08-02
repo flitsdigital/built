@@ -45,6 +45,9 @@ alter table public.routines add column if not exists supersets jsonb not null de
 alter table public.routines add column if not exists rest_by_exercise jsonb not null default '{}';
 alter table public.profiles add column if not exists schedule jsonb not null default '{}';
 alter table public.profiles add column if not exists tracks_food boolean not null default true;
+-- Eten bijhouden en eten láten meetellen zijn twee dingen: uit betekent loggen zonder
+-- dat een vergeten dag punten en streak kost.
+alter table public.profiles add column if not exists food_counts_for_score boolean not null default true;
 
 create table if not exists public.exercises (
   id uuid primary key default gen_random_uuid(),
@@ -177,7 +180,7 @@ begin
   end if;
 
   if jsonb_typeof(payload->'profile') = 'object' then
-    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days, kcal_target, schedule, tracks_food)
+    insert into public.profiles (user_id, name, age, height_cm, start_weight, goal_weight, start_date, goal_date, trainings_per_week, tracks_creatine, tracks_sleep, training_days, kcal_target, schedule, tracks_food, food_counts_for_score)
     values (
       uid,
       payload#>>'{profile,name}',
@@ -193,7 +196,8 @@ begin
       coalesce(payload#>'{profile,training_days}', '[]'::jsonb),
       coalesce((payload#>>'{profile,kcal_target}')::int, 0),
       coalesce(payload#>'{profile,schedule}', '{}'::jsonb),
-      coalesce((payload#>>'{profile,tracks_food}')::boolean, true)
+      coalesce((payload#>>'{profile,tracks_food}')::boolean, true),
+      coalesce((payload#>>'{profile,food_counts_for_score}')::boolean, true)
     )
     on conflict (user_id) do update set
       name = excluded.name,
@@ -209,7 +213,8 @@ begin
       training_days = excluded.training_days,
       kcal_target = excluded.kcal_target,
       schedule = excluded.schedule,
-      tracks_food = excluded.tracks_food;
+      tracks_food = excluded.tracks_food,
+      food_counts_for_score = excluded.food_counts_for_score;
   end if;
 
   delete from public.weight_entries where user_id = uid;

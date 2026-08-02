@@ -54,7 +54,6 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         var sleepOpen = false
         var trainedToday = false
         var checkedInToday = false
-        var tracksFood = true
         var streak = 0
         var perfectToday = false
         var trainingsThisWeek = 0
@@ -75,8 +74,9 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
 
         var s = DayState()
         let todayProtein = proteins.filter { cal.isDateInToday($0.date) }.map(\.grams).reduce(0, +)
-        s.tracksFood = profile.tracksFood
-        s.proteinRemaining = profile.tracksFood ? max(profile.proteinTarget - todayProtein, 0) : 0
+        // Alleen aandringen op eiwit als het ook punten kost: "nog 80 g eiwit" onder een
+        // melding over je streak klopt niet meer zodra eten niet meer meetelt.
+        s.proteinRemaining = profile.foodInScore ? max(profile.proteinTarget - todayProtein, 0) : 0
         let todayHabits = habits.first { cal.isDateInToday($0.date) }
         s.checkedInToday = todayHabits?.checkedIn == true
         s.creatineOpen = profile.tracksCreatine && todayHabits?.creatine != true

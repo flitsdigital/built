@@ -175,6 +175,48 @@ struct DayCheckTests {
         #expect(DayCheck.perfect(maandag, index: dag, profile: profile))
     }
 
+    /// Twee losse knoppen, want het zijn twee wensen: eten helemáál niet volgen, of eten
+    /// wél loggen maar niet elke dag — en dan geen 30 punten verliezen op een dag dat het
+    /// er niet van kwam.
+    @Test("Eten telt niet mee voor de score terwijl je het wel blijft bijhouden")
+    func etenTeltNietMee() {
+        let dag = index(maandag, trained: true, weighed: true, creatine: true, slept: true) // niets gegeten
+        #expect(DayCheck.score(maandag, index: dag, profile: profile) == 70)
+
+        profile.foodCountsForScore = false
+        // Eten blijft aan: de Eten-tab en de eiwitkaart op het dashboard hangen hieraan.
+        #expect(profile.tracksFood)
+        #expect(profile.foodInScore == false)
+
+        let factors = DayCheck.factors(maandag, index: dag, profile: profile)
+        #expect(factors.contains { $0.name == "Eiwit" } == false)
+        #expect(factors.reduce(0) { $0 + $1.weight } == 70)
+        #expect(DayCheck.score(maandag, index: dag, profile: profile) == 100)
+        #expect(DayCheck.perfect(maandag, index: dag, profile: profile))
+    }
+
+    @Test("Gelogd eiwit levert geen punten meer op als eten niet meetelt")
+    func etenTeltNietMeeOokNietBijInvoer() {
+        profile.foodCountsForScore = false
+        let alleenEiwit = index(maandag, protein: 100)
+        #expect(DayCheck.score(maandag, index: alleenEiwit, profile: profile) == 0)
+    }
+
+    @Test("Eten telt standaard mee")
+    func etenTeltStandaardMee() {
+        #expect(profile.foodCountsForScore)
+        #expect(profile.foodInScore)
+    }
+
+    @Test("Eten bijhouden uit weegt zwaarder dan de score-knop")
+    func etenUitOverruleertScoreKnop() {
+        profile.tracksFood = false
+        profile.foodCountsForScore = true
+        #expect(profile.foodInScore == false)
+        #expect(DayCheck.factors(maandag, index: index(maandag), profile: profile)
+            .contains { $0.name == "Eiwit" } == false)
+    }
+
     @Test("Alle tracking uit laat training en gewicht over")
     func alleTrackingUit() {
         profile.tracksFood = false

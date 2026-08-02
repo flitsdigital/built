@@ -59,6 +59,7 @@ enum Sync {
         var kcal_target: Int
         var schedule: [String: String]
         var tracks_food: Bool? = true
+        var food_counts_for_score: Bool? = true
     }
     private struct WeightRow: Codable { var user_id: UUID; var date: Date; var kg: Double; var scale: String }
     private struct ProteinRow: Codable {
@@ -168,7 +169,8 @@ enum Sync {
                                    trainings_per_week: profile.trainingsPerWeek,
                                    tracks_creatine: profile.tracksCreatine, tracks_sleep: profile.tracksSleep,
                                    training_days: profile.trainingDays, kcal_target: profile.kcalTarget,
-                                   schedule: profile.schedule, tracks_food: profile.tracksFood)
+                                   schedule: profile.schedule, tracks_food: profile.tracksFood,
+                                   food_counts_for_score: profile.foodCountsForScore)
         }
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)]))
             .map { WeightRow(user_id: uid, date: $0.date, kg: $0.kg, scale: $0.scale) }
@@ -274,6 +276,7 @@ enum Sync {
             profile.kcalTarget = profileRow.kcal_target
             profile.schedule = profileRow.schedule
             profile.tracksFood = profileRow.tracks_food ?? true
+            profile.foodCountsForScore = profileRow.food_counts_for_score ?? true
             context.insert(profile)
 
             for r in weights { context.insert(WeightEntry(date: r.date, kg: r.kg, scale: r.scale)) }
