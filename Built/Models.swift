@@ -603,19 +603,93 @@ final class Routine {
     var name: String
     var exercises: [String]
     var createdAt: Date
-    /// Vervangers per oefening, voor als een toestel bezet of stuk is.
+    /// Vervangers per plek, voor als een toestel bezet of stuk is.
     var alternatives: [String: [String]] = [:]
-    /// Doel per oefening als [sets, reps], bijv. "3× dumbbell press" = [3, 10].
+    /// Doel per plek als [sets, reps], bijv. "3× dumbbell press" = [3, 10].
     var targets: [String: [Int]] = [:]
-    /// Superset-groep per oefening (naam → "A"/"B"/…). Zelfde groep = weinig rust ertussen.
+    /// Superset-groep per plek ("A"/"B"/…). Zelfde groep = weinig rust ertussen.
     var supersets: [String: String] = [:]
-    /// Rusttijd per oefening in seconden; ontbreekt = de globale instelling.
+    /// Rusttijd per plek in seconden; ontbreekt = de globale instelling.
     var restByExercise: [String: Int] = [:]
     init(name: String, exercises: [String] = []) {
         self.syncID = UUID()
         self.name = name
         self.exercises = exercises
         self.createdAt = .now
+    }
+
+    // MARK: - Plekken
+    //
+    // Dezelfde oefening mag twee keer in een routine staan — zwaar aan het begin, een
+    // burnout-blok aan het eind, of om en om in een superset. De vier kaarten hierboven
+    // gaan daarom niet over de oefening maar over de *plek*.
+    //
+    // De sleutel blijft de naam, en pas een herhaling krijgt "#2" erachter. Dat is bewust
+    // geen los id: de kaarten staan zo al in ieders routines en in de sync, en zonder
+    // achtervoegsel blijft een routine zonder dubbele oefeningen exact op de sleutels
+    // staan die hij had.
+
+    /// Sleutel per plek, in de volgorde van `exercises`. Altijd even lang als `exercises`
+    /// en gegarandeerd uniek — ook als iemand een oefening letterlijk "Squat#2" noemt.
+    var slotKeys: [String] {
+        var used: Set<String> = []
+        return exercises.map { (name: String) -> String in
+            var key = name
+            var n = 1
+            while !used.insert(key).inserted {
+                n += 1
+                key = "\(name)#\(n)"
+            }
+            return key
+        }
+    }
+
+    /// Herschikt de oefeningen naar `order` (indices in de huidige lijst) en verhuist
+    /// doelen, superset, rust en alternatieven mee. Wat niet in `order` staat verdwijnt,
+    /// dus verwijderen is hetzelfde als herschikken zónder die plek.
+    func reorderExercises(to order: [Int]) {
+        guard order.allSatisfy({ exercises.indices.contains($0) }) else { return }
+        let before = slotKeys
+        let reordered = order.map { exercises[$0] }
+        exercises = reordered
+        let after = slotKeys
+        var moved: [String: String] = [:]
+        for (position, source) in order.enumerated() { moved[before[source]] = after[position] }
+        applySlotKeys(moved)
+    }
+
+    /// Hernoemt een oefening overal in deze routine. De sleutels dragen de naam in zich,
+    /// dus die verhuizen mee — inclusief de "#2" van een herhaling.
+    func renameExercise(from old: String, to new: String) {
+        guard old != new else { return }
+        if exercises.contains(old) {
+            let before = slotKeys
+            exercises = exercises.map { $0 == old ? new : $0 }
+            let after = slotKeys
+            var moved: [String: String] = [:]
+            for i in before.indices { moved[before[i]] = after[i] }
+            applySlotKeys(moved)
+        }
+        // Ook als de oefening hier alleen als vervanger voorkomt.
+        alternatives = alternatives.mapValues { alts in alts.map { $0 == old ? new : $0 } }
+    }
+
+    /// Verhuist alle per-plek instellingen naar hun nieuwe sleutel. Sleutels die er niet
+    /// in staan horen bij een plek die niet meer bestaat en verdwijnen — zo bevatten de
+    /// vier kaarten na elke bewerking precies de plekken van deze routine.
+    private func applySlotKeys(_ moved: [String: String]) {
+        alternatives = Self.rekeyed(alternatives, moved)
+        targets = Self.rekeyed(targets, moved)
+        supersets = Self.rekeyed(supersets, moved)
+        restByExercise = Self.rekeyed(restByExercise, moved)
+    }
+
+    private static func rekeyed<Value>(_ table: [String: Value], _ moved: [String: String]) -> [String: Value] {
+        var out: [String: Value] = [:]
+        for (key, value) in table {
+            if let new = moved[key] { out[new] = value }
+        }
+        return out
     }
 }
 

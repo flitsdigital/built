@@ -155,7 +155,12 @@ struct ExerciseRow: View {
 
 /// Kiest een oefening uit de bibliotheek of maakt een nieuwe met spiergroep + type.
 struct ExercisePickerSheet: View {
+    /// Namen die hier niet te kiezen zijn — de oefening zelf bij het kiezen van een
+    /// alternatief, bijvoorbeeld. Wordt verborgen.
     var exclude: Set<String> = []
+    /// Namen die al in de training of routine staan. Alleen gemarkeerd, níet verborgen:
+    /// dezelfde oefening mag er twee keer in (zwaar blok en burnout-blok).
+    var inUse: Set<String> = []
     var onPick: (String) -> Void
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -187,7 +192,18 @@ struct ExercisePickerSheet: View {
                     Button {
                         pick(ex.name)
                     } label: {
-                        ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
+                        HStack(spacing: 8) {
+                            ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
+                            if inUse.contains(ex.name) {
+                                Spacer(minLength: 0)
+                                Text("staat er al in")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(.builtTint(.gray), in: Capsule())
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -431,14 +447,9 @@ struct ExerciseEditor: View {
         guard !new.isEmpty, new != original else { return }
         exercise.name = new
         for s in sets where s.exercise == original { s.exercise = new }
-        for r in routines {
-            r.exercises = r.exercises.map { $0 == original ? new : $0 }
-            if let v = r.alternatives.removeValue(forKey: original) { r.alternatives[new] = v }
-            if let v = r.targets.removeValue(forKey: original) { r.targets[new] = v }
-            if let v = r.supersets.removeValue(forKey: original) { r.supersets[new] = v }
-            if let v = r.restByExercise.removeValue(forKey: original) { r.restByExercise[new] = v }
-            r.alternatives = r.alternatives.mapValues { list in list.map { $0 == original ? new : $0 } }
-        }
+        // De routine sleutelt doelen, superset en rust op de plek, en die sleutel draagt
+        // de naam in zich — hernoemen is daar dus meer dan de lijst aanpassen.
+        for r in routines { r.renameExercise(from: original, to: new) }
         original = new
     }
 }

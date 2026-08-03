@@ -27,6 +27,10 @@ struct DraftExercise: Identifiable {
     var superset: String?
     /// Rusttijd-override voor deze oefening (seconden); nil = globaal.
     var restSeconds: Int?
+    /// Plek in de routine waar deze oefening vandaan komt (`Routine.slotKeys`); nil bij
+    /// een oefening die je tijdens de training zelf toevoegde. Alleen de alternatieven
+    /// hangen er nog aan — de rest staat hierboven al klaar.
+    var slot: String?
 }
 
 /// Lopende training op schijf, zodat een force-quit hem niet weggooit.
@@ -49,6 +53,7 @@ struct SavedWorkout: Codable, Equatable {
         var originalName: String?
         var superset: String?
         var restSeconds: Int?
+        var slot: String?
     }
     var startedAt: Date
     var exercises: [SavedExercise]
@@ -258,7 +263,11 @@ struct TrainingView: View {
 
     // MARK: - Doelgerichte voorstellen (dubbele progressie)
 
-    private func draft(for name: String, target: [Int]? = nil, _ history: HistoryIndex) -> DraftExercise {
+    /// `repeated` = deze oefening staat al eerder in de training. De historie kent geen
+    /// plekken, dus `last` bevat dan de sets van álle blokken van vorige keer bij elkaar;
+    /// zonder doel is een kort blok een betere gok dan dat hele aantal nog eens.
+    private func draft(for name: String, target: [Int]? = nil, repeated: Bool = false,
+                       _ history: HistoryIndex) -> DraftExercise {
         let last = lastSession(for: name, history)
         let bw = history.isBodyweight(name)
         let goalSets = target.map { max($0.first ?? 3, 1) }
@@ -288,7 +297,7 @@ struct TrainingView: View {
                ? "Vorige keer alles gehaald → vandaag \((top + 2.5).kgText) kg"
                : "Zelfde gewicht, probeer 1 rep meer per set.")
         // Aantal sets uit het target (of het aantal van vorige keer), reps uit het target
-        let count = goalSets ?? last.count
+        let count = goalSets ?? (repeated ? min(last.count, 3) : last.count)
         return DraftExercise(name: name, tip: tip, sets: (0..<count).map { i in
             let prev = i < last.count ? last[i] : last.last
             let kg = bw ? top : (allEnough ? top + 2.5 : top)
@@ -316,8 +325,11 @@ struct TrainingView: View {
     }
 
     /// Effectieve rusttijd voor een oefening (per-oefening override of globaal).
-    private func restFor(_ name: String) -> Int {
-        workout.first { $0.name == name }?.restSeconds ?? restSeconds
+    ///
+    /// Op id en niet op naam: dezelfde oefening kan twee keer in de training staan, en
+    /// het zware blok vooraan verdient een andere rust dan het burnout-blok achteraan.
+    private func restFor(_ id: DraftExercise.ID) -> Int {
+        workout.first { $0.id == id }?.restSeconds ?? restSeconds
     }
 
     /// Volledige vorige sessie van deze oefening, bijv. "40×8  40×8  37,5×7".
@@ -362,10 +374,13 @@ struct TrainingView: View {
     }
 
     /// Nieuw geschat 1RM-record t.o.v. je historie én eerdere sets deze sessie?
+    ///
+    /// Álle plekken van deze oefening tellen mee voor `sessionBest`: een record is een
+    /// record, ook als je 'm in het eerste blok zette en nu in het tweede staat.
     private func isNewPR(exercise name: String, kg: Double, reps: Int, _ history: HistoryIndex) -> Bool {
         let now = epley(kg, reps)
         let historical = bestBefore(name, history) ?? 0
-        let sessionBest = workout.first { $0.name == name }?.sets
+        let sessionBest = workout.filter { $0.name == name }.flatMap(\.sets)
             .filter { $0.done && !$0.warmup }.map { epley($0.kg, $0.reps) }.max() ?? 0
         return now > max(historical, sessionBest) + 0.1 && historical > 0
     }
@@ -374,6 +389,23 @@ struct TrainingView: View {
         guard let doneMax = ex.sets.filter({ $0.done && !$0.warmup }).map({ epley($0.kg, $0.reps) }).max() else { return nil }
         guard let prev = bestBefore(ex.name, history), doneMax > prev + 0.1 else { return nil }
         return (doneMax, prev)
+    }
+
+    /// Records van deze sessie, één per oefening in de volgorde van de training. Staat een
+    /// oefening er twee keer in, dan telt het hoogste — de samenvatting en het deelbericht
+    /// gaan op naam, en dezelfde naam twee keer leest als twee records.
+    private func sessionPRs(_ history: HistoryIndex) -> [(exercise: String, new: Double, old: Double)] {
+        var best: [String: (new: Double, old: Double)] = [:]
+        for ex in workout {
+            guard let pr = prInfo(ex, history) else { continue }
+            if let current = best[ex.name], current.new >= pr.new { continue }
+            best[ex.name] = pr
+        }
+        var seen: Set<String> = []
+        return workout.compactMap { ex -> (exercise: String, new: Double, old: Double)? in
+            guard let pr = best[ex.name], seen.insert(ex.name).inserted else { return nil }
+            return (exercise: ex.name, new: pr.new, old: pr.old)
+        }
     }
 
     // MARK: - Acties
@@ -392,7 +424,8 @@ struct TrainingView: View {
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
             .init(name: ex.name, tip: ex.tip, note: ex.note,
                   sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) },
-                  originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
+                  originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds,
+                  slot: ex.slot)
         }, alternatives: alternatives.isEmpty ? nil : alternatives,
            restEndsAt: workoutStatus.restEndsAt,
            workoutNote: workoutNote.isEmpty ? nil : workoutNote,
@@ -409,7 +442,8 @@ struct TrainingView: View {
         workout = saved.exercises.map { ex in
             DraftExercise(name: ex.name, tip: ex.tip,
                           sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false, seconds: $0.seconds ?? 0) },
-                          note: ex.note, originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
+                          note: ex.note, originalName: ex.originalName, superset: ex.superset,
+                          restSeconds: ex.restSeconds, slot: ex.slot)
         }
         alternatives = saved.alternatives ?? [:]
         workoutNote = saved.workoutNote ?? ""
@@ -430,7 +464,10 @@ struct TrainingView: View {
     /// Vervangers voor deze oefening: de alternatieven uit de routine + de originele om terug te wisselen.
     private func swapOptions(_ ex: DraftExercise) -> [String] {
         let original = ex.originalName ?? ex.name
-        let alts = alternatives[original] ?? []
+        // Alternatieven staan per plek in de routine. Zonder plek — zelf toegevoegd, of
+        // een training die nog van vóór deze versie op schijf stond — valt het terug op
+        // de naam, precies zoals de sleutel van een eerste plek eruitziet.
+        let alts = alternatives[ex.slot ?? original] ?? []
         guard !alts.isEmpty else { return [] }
         return ([original] + alts).filter { $0 != ex.name }
     }
@@ -454,8 +491,8 @@ struct TrainingView: View {
     }
 
     /// Na een superset-set (niet de laatste van de groep in de volgorde) sla je de rust over.
-    private func shouldRest(after name: String) -> Bool {
-        guard let i = workout.firstIndex(where: { $0.name == name }),
+    private func shouldRest(after id: DraftExercise.ID) -> Bool {
+        guard let i = workout.firstIndex(where: { $0.id == id }),
               let group = workout[i].superset else { return true }
         let next = workout.indices.contains(i + 1) ? workout[i + 1].superset : nil
         return next != group
@@ -465,31 +502,50 @@ struct TrainingView: View {
     // opbouwen goedkoper dan 'm doorgeven vanuit body.
     private func swapExercise(_ id: UUID, to newName: String) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
-        let original = workout[i].originalName ?? workout[i].name
-        var replacement = draft(for: newName, makeHistory())
-        replacement.originalName = original
+        let old = workout[i]
+        let elsewhere = workout.contains { $0.id != id && $0.name == newName }
+        var replacement = draft(for: newName, repeated: elsewhere, makeHistory())
+        replacement.originalName = old.originalName ?? old.name
+        // De plek blijft de plek: superset, rust en de vervangerslijst horen erbij, niet
+        // bij de oefening die er toevallig op staat.
+        replacement.slot = old.slot
+        replacement.superset = old.superset
+        replacement.restSeconds = old.restSeconds
         withAnimation(.snappy(duration: 0.25)) { workout[i] = replacement }
     }
 
-    private func startWorkout(with names: [String], alternatives alts: [String: [String]] = [:],
-                             targets: [String: [Int]] = [:], supersets: [String: String] = [:],
-                             restByExercise: [String: Int] = [:]) {
+    /// Start een training uit een routine, of leeg als `routine` nil is. Doelen, superset
+    /// en rust komen per plek: dezelfde oefening kan er twee keer in staan met verschillende
+    /// instellingen.
+    private func startWorkout(from routine: Routine?) {
         startedAt = .now
         workoutNote = ""
-        let history = makeHistory()
-        workout = names.map { name in
-            var d = draft(for: name, target: targets[name], history)
-            d.superset = supersets[name]
-            d.restSeconds = restByExercise[name]
-            return d
+        if let routine {
+            let history = makeHistory()
+            let keys = routine.slotKeys
+            var seen: Set<String> = []
+            workout = routine.exercises.indices.map { i in
+                let name = routine.exercises[i]
+                let key = keys[i]
+                let again = !seen.insert(name).inserted
+                var d = draft(for: name, target: routine.targets[key], repeated: again, history)
+                d.slot = key
+                d.superset = routine.supersets[key]
+                d.restSeconds = routine.restByExercise[key]
+                return d
+            }
+            alternatives = routine.alternatives
+        } else {
+            workout = []
+            alternatives = [:]
         }
-        alternatives = alts
         WorkoutStatus.shared.startWorkout(at: startedAt)
         withAnimation(.snappy(duration: 0.3)) { active = true }
     }
 
     private func addExercise(_ name: String) {
-        let d = draft(for: name, makeHistory())
+        let again = workout.contains { $0.name == name }
+        let d = draft(for: name, repeated: again, makeHistory())
         withAnimation(.snappy(duration: 0.25)) { workout.append(d) }
     }
 
@@ -521,13 +577,19 @@ struct TrainingView: View {
         return h
     }
 
+    /// Notities per oefening op de dag bewaren. `exerciseNotes` gaat op naam en de dag
+    /// kent geen blokken, dus twee blokken van dezelfde oefening komen samen op één
+    /// regel — anders overschreef de tweede stilletjes wat je bij de eerste schreef.
     private func saveExerciseNotes() {
-        let notes = workout
-            .map { ($0.name, $0.note.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            .filter { !$0.1.isEmpty }
+        var notes: [String: [String]] = [:]
+        for ex in workout {
+            let text = ex.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, !(notes[ex.name]?.contains(text) ?? false) else { continue }
+            notes[ex.name, default: []].append(text)
+        }
         guard !notes.isEmpty else { return }
         let record = habitsRecord(for: workoutDate)
-        for (name, text) in notes { record.exerciseNotes[name] = text }
+        for (name, lines) in notes { record.exerciseNotes[name] = lines.joined(separator: "\n") }
     }
 
     /// Naam en algemene notitie op de dag bewaren (los van de per-oefening notities).
@@ -574,7 +636,7 @@ struct TrainingView: View {
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
             volume: volume(history),
             sets: doneCount,
-            prs: workout.compactMap { ex in prInfo(ex, history).map { (ex.name, $0.new, $0.old) } },
+            prs: sessionPRs(history),
             previousVolume: previousVolume,
             muscles: sessionMuscles(history),
             lines: workout.compactMap { ex in
@@ -757,12 +819,11 @@ struct TrainingView: View {
         .navigationDestination(item: $editingRoutine) { routine in
             RoutineEditorView(routine: routine) { r in
                 editingRoutine = nil
-                startWorkout(with: r.exercises, alternatives: r.alternatives, targets: r.targets,
-                             supersets: r.supersets, restByExercise: r.restByExercise)
+                startWorkout(from: r)
             }
         }
         .sheet(isPresented: $showExercisePicker) {
-            ExercisePickerSheet(exclude: Set(workout.map(\.name))) { name in
+            ExercisePickerSheet(inUse: Set(workout.map(\.name))) { name in
                 addExercise(name)
             }
         }
@@ -884,8 +945,7 @@ struct TrainingView: View {
     private func plannedCard(_ planned: Routine, _ history: HistoryIndex) -> some View {
         let tint = routineColor(planned, history)
         return Button {
-            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets,
-                         supersets: planned.supersets, restByExercise: planned.restByExercise)
+            startWorkout(from: planned)
         } label: {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
@@ -954,9 +1014,7 @@ struct TrainingView: View {
                 Menu {
                     if !routine.exercises.isEmpty {
                         Button("Start meteen", systemImage: "play.fill") {
-                            startWorkout(with: routine.exercises, alternatives: routine.alternatives,
-                                         targets: routine.targets, supersets: routine.supersets,
-                                         restByExercise: routine.restByExercise)
+                            startWorkout(from: routine)
                         }
                     }
                     Button("Wijzig routine", systemImage: "pencil") { editingRoutine = routine }
@@ -1052,7 +1110,7 @@ struct TrainingView: View {
         }
 
         Button {
-            startWorkout(with: [])
+            startWorkout(from: nil)
         } label: {
             Label("Lege training starten", systemImage: "plus")
                 .font(.subheadline.bold())
@@ -1192,8 +1250,8 @@ struct TrainingView: View {
     }
 
     /// Voedt de Live Activity: oefening, set-voortgang en een PR-tip op basis van je vorige sessie.
-    private func updateActivity(exercise name: String, currentKg: Double, _ history: HistoryIndex) {
-        guard let ex = workout.first(where: { $0.name == name }) else { return }
+    private func updateActivity(_ id: DraftExercise.ID, name: String, currentKg: Double, _ history: HistoryIndex) {
+        guard let ex = workout.first(where: { $0.id == id }) else { return }
         WorkoutStatus.shared.updateContext(exercise: name,
                                            setsDone: ex.sets.filter(\.done).count,
                                            setsTotal: ex.sets.count,
@@ -1262,7 +1320,7 @@ struct TrainingView: View {
         .listRowSeparator(.hidden)
 
         ForEach(exercise.sets) { $set in
-            setRow($set, number: numbers[set.id] ?? 0, exercise: ex.name,
+            setRow($set, number: numbers[set.id] ?? 0, exercise: ex.name, exerciseID: ex.id,
                    bodyweight: bodyweight, cardio: cardio, history: history,
                    duplicate: { duplicateSet(exercise: ex.id, set: set.id) })
         }
@@ -1397,7 +1455,10 @@ struct TrainingView: View {
         return s
     }
 
-    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, bodyweight: Bool,
+    /// `exercise` is de naam (voor de opgeslagen set en het eiland), `exerciseID` de plek
+    /// in de training — rust en superset horen bij de plek, niet bij de naam.
+    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String,
+                        exerciseID: DraftExercise.ID, bodyweight: Bool,
                         cardio: Bool, history: HistoryIndex, duplicate: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Menu {
@@ -1474,8 +1535,8 @@ struct TrainingView: View {
                             set.wrappedValue.savedEntry = e
                         }
                         // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
-                        if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
-                            WorkoutStatus.shared.startRest(seconds: restFor(exercise))
+                        if !set.wrappedValue.warmup, !cardio, shouldRest(after: exerciseID) {
+                            WorkoutStatus.shared.startRest(seconds: restFor(exerciseID))
                         }
                         if !set.wrappedValue.warmup, !cardio,
                            isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps, history) {
@@ -1491,7 +1552,7 @@ struct TrainingView: View {
                         if let e, !e.isDeleted { context.deleteSynced(e) }
                         set.wrappedValue.savedEntry = nil
                     }
-                    updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg, history)
+                    updateActivity(exerciseID, name: exercise, currentKg: set.wrappedValue.kg, history)
                 }
             } label: {
                 Image(systemName: set.wrappedValue.done ? "checkmark.circle.fill" : "circle")
@@ -1838,13 +1899,21 @@ struct RoutineEditorView: View {
     @Query private var exercises: [Exercise]
     @State private var showPicker = false
 
-    private func subtitle(for name: String) -> String {
+    /// Elke plek in de routine met z'n sleutel. Dezelfde oefening mag er twee keer in
+    /// staan, en dan heeft de tweede eigen doelen, superset en rust.
+    private var slots: [(key: String, name: String)] {
+        let keys = routine.slotKeys
+        let names = routine.exercises
+        return names.indices.map { i in (key: keys[i], name: names[i]) }
+    }
+
+    private func subtitle(key: String, name: String) -> String {
         var parts: [String] = []
-        if let t = routine.targets[name], t.count > 1 {
+        if let t = routine.targets[key], t.count > 1 {
             parts.append(exercises.isCardio(name) ? "\(t[1]) min" : "\(t[0]) × \(t[1])")
         }
-        if let group = routine.supersets[name] { parts.append("Superset \(group)") }
-        let alts = routine.alternatives[name] ?? []
+        if let group = routine.supersets[key] { parts.append("Superset \(group)") }
+        let alts = routine.alternatives[key] ?? []
         if !alts.isEmpty { parts.append("Alt: \(alts.joined(separator: ", "))") }
         return parts.joined(separator: "  ·  ")
     }
@@ -1852,24 +1921,24 @@ struct RoutineEditorView: View {
     /// Wat je in totaal gaat doen — de kern van de preview.
     private var totals: String {
         let count = routine.exercises.count
-        let setCount = routine.exercises.reduce(0) { $0 + (routine.targets[$1]?.first ?? 3) }
+        let setCount = routine.slotKeys.reduce(0) { $0 + (routine.targets[$1]?.first ?? 3) }
         return "\(count) oefening\(count == 1 ? "" : "en") · \(setCount) sets"
     }
 
     var body: some View {
         List {
             Section {
-                ForEach(routine.exercises, id: \.self) { name in
+                ForEach(slots, id: \.key) { slot in
                     NavigationLink {
-                        RoutineExerciseEditor(routine: routine, exercise: name)
+                        RoutineExerciseEditor(routine: routine, slot: slot.key, name: slot.name)
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "line.3.horizontal")
                                 .foregroundStyle(.secondary)
                                 .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(name).foregroundStyle(.primary)
-                                let sub = subtitle(for: name)
+                                Text(slot.name).foregroundStyle(.primary)
+                                let sub = subtitle(key: slot.key, name: slot.name)
                                 if !sub.isEmpty {
                                     Text(sub)
                                         .font(.caption)
@@ -1880,13 +1949,16 @@ struct RoutineEditorView: View {
                         }
                     }
                 }
-                .onMove { routine.exercises.move(fromOffsets: $0, toOffset: $1) }
+                // Verplaatsen en verwijderen gaan via de routine zelf: doelen, superset,
+                // rust en alternatieven hangen aan de plek en moeten mee.
+                .onMove { offsets, destination in
+                    var order = Array(routine.exercises.indices)
+                    order.move(fromOffsets: offsets, toOffset: destination)
+                    routine.reorderExercises(to: order)
+                }
                 .onDelete { offsets in
-                    for i in offsets {
-                        routine.alternatives[routine.exercises[i]] = nil
-                        routine.targets[routine.exercises[i]] = nil
-                    }
-                    routine.exercises.remove(atOffsets: offsets)
+                    let kept = routine.exercises.indices.filter { !offsets.contains($0) }
+                    routine.reorderExercises(to: kept)
                 }
                 Button {
                     showPicker = true
@@ -1919,24 +1991,27 @@ struct RoutineEditorView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { EditButton() }
         .sheet(isPresented: $showPicker) {
-            ExercisePickerSheet(exclude: Set(routine.exercises)) { name in
-                if !routine.exercises.contains(name) { routine.exercises.append(name) }
+            ExercisePickerSheet(inUse: Set(routine.exercises)) { name in
+                routine.exercises.append(name)
             }
         }
     }
 }
 
-/// Per oefening: doel (sets × reps) en alternatieven.
+/// Per plek in de routine: doel (sets × reps), superset, rust en alternatieven.
 struct RoutineExerciseEditor: View {
     @Bindable var routine: Routine
-    let exercise: String
+    /// Sleutel van de plek, niet de naam: dezelfde oefening kan twee keer in de routine
+    /// staan en dan heeft elke plek eigen instellingen.
+    let slot: String
+    let name: String
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @Query private var exercises: [Exercise]
     @State private var showAltPicker = false
 
-    private var cardio: Bool { exercises.isCardio(exercise) }
-    private var target: [Int] { routine.targets[exercise] ?? (cardio ? [1, 20] : [3, 8]) }
-    private func setTarget(sets s: Int, reps r: Int) { routine.targets[exercise] = [s, r] }
+    private var cardio: Bool { exercises.isCardio(name) }
+    private var target: [Int] { routine.targets[slot] ?? (cardio ? [1, 20] : [3, 8]) }
+    private func setTarget(sets s: Int, reps r: Int) { routine.targets[slot] = [s, r] }
 
     var body: some View {
         List {
@@ -1965,8 +2040,8 @@ struct RoutineExerciseEditor: View {
 
             Section {
                 Picker("Superset", selection: Binding(
-                    get: { routine.supersets[exercise] ?? "" },
-                    set: { routine.supersets[exercise] = $0.isEmpty ? nil : $0 }
+                    get: { routine.supersets[slot] ?? "" },
+                    set: { routine.supersets[slot] = $0.isEmpty ? nil : $0 }
                 )) {
                     Text("Geen").tag("")
                     ForEach(["A", "B", "C", "D"], id: \.self) { Text("Groep \($0)").tag($0) }
@@ -1977,8 +2052,8 @@ struct RoutineExerciseEditor: View {
 
             Section {
                 Picker("Rusttijd", selection: Binding(
-                    get: { routine.restByExercise[exercise] ?? 0 },
-                    set: { routine.restByExercise[exercise] = $0 == 0 ? nil : $0 }
+                    get: { routine.restByExercise[slot] ?? 0 },
+                    set: { routine.restByExercise[slot] = $0 == 0 ? nil : $0 }
                 )) {
                     Text("Standaard").tag(0)
                     Text("1:00").tag(60)
@@ -1991,13 +2066,13 @@ struct RoutineExerciseEditor: View {
             }
 
             Section {
-                ForEach(routine.alternatives[exercise] ?? [], id: \.self) { alt in
+                ForEach(routine.alternatives[slot] ?? [], id: \.self) { alt in
                     Text(alt)
                 }
                 .onDelete { offsets in
-                    var alts = routine.alternatives[exercise] ?? []
+                    var alts = routine.alternatives[slot] ?? []
                     alts.remove(atOffsets: offsets)
-                    routine.alternatives[exercise] = alts.isEmpty ? nil : alts
+                    routine.alternatives[slot] = alts.isEmpty ? nil : alts
                 }
                 Button {
                     showAltPicker = true
@@ -2010,11 +2085,13 @@ struct RoutineExerciseEditor: View {
                 Text("Vervangers als dit toestel bezet of stuk is — kies je tijdens de training via het ⋯-menu.")
             }
         }
-        .navigationTitle(exercise)
+        .navigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAltPicker) {
-            ExercisePickerSheet(exclude: Set([exercise] + (routine.alternatives[exercise] ?? []))) { name in
-                routine.alternatives[exercise, default: []].append(name)
+            // Hier wél verbergen: een oefening is geen vervanger van zichzelf, en
+            // dezelfde vervanger twee keer in de lijst zegt niets extra's.
+            ExercisePickerSheet(exclude: Set([name] + (routine.alternatives[slot] ?? []))) { alt in
+                routine.alternatives[slot, default: []].append(alt)
             }
         }
     }
