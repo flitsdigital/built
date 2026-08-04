@@ -698,7 +698,7 @@ struct TrainingView: View {
         .task { restoreDraft() }
         .sheet(isPresented: $showStopwatch) {
             StopwatchSheet()
-                .presentationDetents([.height(320)])
+                .presentationDetents([.height(400)])
         }
         .onChange(of: draftSnapshot) { _, snap in
             if let snap, let data = try? JSONEncoder().encode(snap) {
@@ -762,7 +762,10 @@ struct TrainingView: View {
             }
         }
         .sheet(isPresented: $showExercisePicker) {
-            ExercisePickerSheet(exclude: Set(workout.map(\.name))) { name in
+            // ponytail: geen exclude — dezelfde oefening twee keer in één training mag
+            // (bench voor en na de superset, tweede ronde curls). Rijen zijn op id, dus
+            // duplicaten staan los van elkaar; opgeslagen sets groeperen later op naam.
+            ExercisePickerSheet { name in
                 addExercise(name)
             }
         }
@@ -1192,8 +1195,9 @@ struct TrainingView: View {
     }
 
     /// Voedt de Live Activity: oefening, set-voortgang en een PR-tip op basis van je vorige sessie.
-    private func updateActivity(exercise name: String, currentKg: Double, _ history: HistoryIndex) {
-        guard let ex = workout.first(where: { $0.name == name }) else { return }
+    private func updateActivity(_ id: DraftExercise.ID, currentKg: Double, _ history: HistoryIndex) {
+        guard let ex = workout.first(where: { $0.id == id }) else { return }
+        let name = ex.name
         WorkoutStatus.shared.updateContext(exercise: name,
                                            setsDone: ex.sets.filter(\.done).count,
                                            setsTotal: ex.sets.count,
@@ -1250,7 +1254,7 @@ struct TrainingView: View {
             if cardio {
                 Text("MINUTEN").frame(width: 56)
             } else {
-                Text(bodyweight ? "+KG" : "KG").frame(width: 56)
+                Text(bodyweight ? "±KG" : "KG").frame(width: 56)
                 Text("REPS").frame(width: 48)
             }
             Spacer()
@@ -1262,7 +1266,7 @@ struct TrainingView: View {
         .listRowSeparator(.hidden)
 
         ForEach(exercise.sets) { $set in
-            setRow($set, number: numbers[set.id] ?? 0, exercise: ex.name,
+            setRow($set, number: numbers[set.id] ?? 0, exercise: ex.name, exerciseID: ex.id,
                    bodyweight: bodyweight, cardio: cardio, history: history,
                    duplicate: { duplicateSet(exercise: ex.id, set: set.id) })
         }
@@ -1397,8 +1401,9 @@ struct TrainingView: View {
         return s
     }
 
-    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, bodyweight: Bool,
-                        cardio: Bool, history: HistoryIndex, duplicate: @escaping () -> Void) -> some View {
+    private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, exerciseID: DraftExercise.ID,
+                        bodyweight: Bool, cardio: Bool, history: HistoryIndex,
+                        duplicate: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Menu {
                 Button("Set dupliceren", systemImage: "plus.square.on.square", action: duplicate)
@@ -1444,9 +1449,9 @@ struct TrainingView: View {
                     .opacity(set.wrappedValue.done ? 0.55 : 1)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
-                NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "+kg" : "kg",
+                NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "±kg" : "kg",
                              focus: $focusedSet, id: set.wrappedValue.id,
-                             disabled: set.wrappedValue.done)
+                             disabled: set.wrappedValue.done, signed: bodyweight)
                     .frame(width: 56)
                     .padding(.vertical, 6)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
@@ -1491,7 +1496,7 @@ struct TrainingView: View {
                         if let e, !e.isDeleted { context.deleteSynced(e) }
                         set.wrappedValue.savedEntry = nil
                     }
-                    updateActivity(exercise: exercise, currentKg: set.wrappedValue.kg, history)
+                    updateActivity(exerciseID, currentKg: set.wrappedValue.kg, history)
                 }
             } label: {
                 Image(systemName: set.wrappedValue.done ? "checkmark.circle.fill" : "circle")
@@ -1520,7 +1525,21 @@ struct StopwatchSheet: View {
     private var running: Bool { startedAt != nil }
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
+            // Zonder deze twee regels is het een kaal getal met twee knoppen: niet duidelijk
+            // waarvoor het is, en niet duidelijk of de tijd ergens landt. Dat laatste is de
+            // vraag die je je stelt vlak voordat je 'm durft te gebruiken.
+            VStack(spacing: 6) {
+                Text("Stopwatch")
+                    .font(.headline)
+                Text("Voor holds, planks en intervallen. De rusttimer telt af, deze telt op — losse tijd, hij wordt niet bij je training opgeslagen.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 32)
+
             Group {
                 if let startedAt {
                     Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
@@ -1555,7 +1574,7 @@ struct StopwatchSheet: View {
             }
             .font(.headline)
         }
-        .padding(.top, 40)
+        .padding(.top, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDragIndicator(.visible)
         .sensoryFeedback(.selection, trigger: running)
@@ -1786,12 +1805,13 @@ struct SessionDetailView: View {
                                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                                 Text("min").font(.footnote).foregroundStyle(.secondary)
                             } else {
-                                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "+kg" : "kg",
-                                             focus: $focused, id: nil, disabled: false)
+                                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "±kg" : "kg",
+                                             focus: $focused, id: nil, disabled: false,
+                                             signed: exercises.isBodyweight(group.name))
                                     .frame(width: 64)
                                     .padding(.vertical, 6)
                                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
-                                Text(exercises.isBodyweight(group.name) ? "+kg" : "kg").font(.footnote).foregroundStyle(.secondary)
+                                Text(exercises.isBodyweight(group.name) ? "±kg" : "kg").font(.footnote).foregroundStyle(.secondary)
                                 NumericField(value: reps(set), decimal: false, placeholder: "reps",
                                              focus: $focused, id: nil, disabled: false)
                                     .frame(width: 52)
@@ -2031,9 +2051,13 @@ struct NumericField: UIViewRepresentable {
     var focus: FocusState<UUID?>.Binding
     var id: UUID?
     var disabled: Bool
+    /// Toont een ±-knop boven het toetsenbord. De decimalPad heeft geen minteken, en
+    /// zonder die knop kun je assisted dips (−40 kg van je lichaamsgewicht) niet invoeren.
+    var signed: Bool = false
 
     func makeUIView(context: Context) -> UITextField {
         let tf = UITextField()
+        context.coordinator.field = tf
         tf.delegate = context.coordinator
         tf.keyboardType = decimal ? .decimalPad : .numberPad
         tf.textAlignment = .center
@@ -2046,10 +2070,16 @@ struct NumericField: UIViewRepresentable {
         // Numpad heeft geen return-toets, dus zonder deze balk kun je het toetsenbord
         // alleen wegkrijgen door de lijst weg te slepen.
         let bar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 0, height: 44))
-        bar.items = [UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
-                     UIBarButtonItem(title: "Klaar", style: .done,
-                                     target: context.coordinator,
-                                     action: #selector(Coordinator.dismissKeyboard))]
+        var items: [UIBarButtonItem] = []
+        if signed {
+            items.append(UIBarButtonItem(title: "±", style: .plain, target: context.coordinator,
+                                         action: #selector(Coordinator.toggleSign)))
+        }
+        items += [UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil),
+                  UIBarButtonItem(title: "Klaar", style: .done,
+                                  target: context.coordinator,
+                                  action: #selector(Coordinator.dismissKeyboard))]
+        bar.items = items
         bar.sizeToFit()
         tf.inputAccessoryView = bar
         return tf
@@ -2072,6 +2102,7 @@ struct NumericField: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextFieldDelegate {
         var parent: NumericField
+        weak var field: UITextField?
         init(_ parent: NumericField) { self.parent = parent }
 
         func string(from value: Double) -> String {
@@ -2081,6 +2112,11 @@ struct NumericField: UIViewRepresentable {
                     : String(value).replacingOccurrences(of: ".", with: ",")
             }
             return String(Int(value))
+        }
+
+        @objc func toggleSign() {
+            parent.value = -parent.value
+            field?.text = string(from: parent.value)
         }
 
         @objc func dismissKeyboard() {

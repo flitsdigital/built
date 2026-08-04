@@ -10,3 +10,6 @@ xcuserdata/
 
 # Xcode derived data from local builds
 build/
+
+# Supabase CLI — lokale state (projectkoppeling, versiecache)
+supabase/.temp/
