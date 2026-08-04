@@ -313,11 +313,13 @@ func epley(_ weight: Double, _ reps: Int) -> Double {
 }
 
 /// Set-notatie voor overzichten. Cardio toont de duur ("25 min"); bodyweight zonder
-/// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; anders "40×8".
+/// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; met ondersteuning
+/// (assisted dip/pull-up) "-40×8"; anders "40×8".
 func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0) -> String {
     if seconds > 0 { return "\(seconds / 60) min" }
     guard bodyweight else { return "\(kg.kgText)×\(reps)" }
-    return kg > 0 ? "+\(kg.kgText)×\(reps)" : "×\(reps)"
+    if kg == 0 { return "×\(reps)" }
+    return "\(kg > 0 ? "+" : "")\(kg.kgText)×\(reps)"
 }
 
 /// Platte tekst van een afgeronde training om te delen — werkt in elke app.
@@ -333,9 +335,10 @@ func workoutShareText(title: String, duration: String, volume: Int, sets: Int,
 }
 
 /// Effectieve last voor volume/spierkaart: bodyweight-oefeningen tellen mee met
-/// lichaamsgewicht + eventueel extra gewicht, zodat ze niet op 0 uitkomen.
+/// lichaamsgewicht + eventueel extra gewicht, zodat ze niet op 0 uitkomen. Negatief
+/// gewicht is ondersteuning (assisted dips) en gaat er dus af — nooit onder nul.
 func liftLoad(kg: Double, bodyweight: Double, bodyweightExercise: Bool) -> Double {
-    bodyweightExercise ? max(bodyweight, 0) + kg : kg
+    bodyweightExercise ? max(max(bodyweight, 0) + kg, 0) : kg
 }
 
 /// Schijven per kant voor een barbell-gewicht, greedy vanaf de zwaarste schijf.
