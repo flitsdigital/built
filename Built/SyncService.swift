@@ -19,7 +19,16 @@ private final class ISODate: @unchecked Sendable {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
+    /// Zonder fracties, voor het teruglezen van wat een andere schrijver geleverd heeft.
+    private let plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
     func string(from date: Date) -> String { formatter.string(from: date) }
+    func date(from string: String) -> Date? {
+        formatter.date(from: string) ?? plain.date(from: string)
+    }
 }
 
 /// Presentatie-anker voor de Google OAuth-websessie.
@@ -197,6 +206,14 @@ enum Sync {
             profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
                 && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty && deletions.isEmpty
+        }
+
+        /// Hoeveel rijen er in zitten — voor de veiligheidskopie, die wil kunnen zeggen
+        /// hoeveel er in staat en niets wil bewaren wat leeg is.
+        var rowCount: Int {
+            (profile == nil ? 0 : 1) + weights.count + proteins.count + sets.count + habits.count
+                + routines.count + meals.count + foods.count + exercises.count + scales.count
+                + customHabits.count + habitLogs.count
         }
     }
 
@@ -555,6 +572,10 @@ enum Sync {
                 pushAllowed = true // server is leeg → pushen kan geen data vernietigen
                 return
             }
+            // Laatste moment waarop de lokale staat nog bestaat. Wat hierna volgt wist 'm,
+            // en als de automatische push dagenlang klemde (zie `pushAllowed`) staat dat
+            // nergens anders. Zie #41.
+            saveLocalBackup(context)
             try applyFull(response, profile: profileRow, context)
             lastPushedHash = try await fingerprint(collect(context))
         } else {
@@ -586,25 +607,50 @@ enum Sync {
                                   _ context: ModelContext) throws {
         try context.transaction {
             try wipeLocal(context)
-
-            let profile = Profile(name: profileRow.name, age: profileRow.age, heightCm: profileRow.height_cm,
-                                  startWeight: profileRow.start_weight, goalWeight: profileRow.goal_weight,
-                                  goalDate: profileRow.goal_date, trainingsPerWeek: profileRow.trainings_per_week)
-            apply(profileRow, to: profile)
-            context.insert(profile)
-
-            for x in r.weights { context.insert(make(x)) }
-            for x in r.proteins { context.insert(make(x)) }
-            for x in r.sets { context.insert(make(x)) }
-            for x in r.habits { context.insert(make(x)) }
-            for x in r.routines { context.insert(make(x)) }
-            for x in r.meals { context.insert(make(x)) }
-            for x in r.foods { context.insert(make(x)) }
-            for x in r.exercises { context.insert(make(x)) }
-            for x in r.scales { context.insert(make(x)) }
-            for x in r.customHabits { context.insert(make(x)) }
-            for x in r.habitLogs { context.insert(make(x)) }
+            insertAll(payload(r, profile: profileRow), context)
         }
+    }
+
+    /// Het antwoord van de server als payload. Zelfde rijtypes, dus het invoegen kan
+    /// gedeeld worden met het terugzetten van de lokale kopie.
+    private static func payload(_ r: PullResponse, profile: ProfileRow) -> Payload {
+        var p = Payload()
+        p.profile = profile
+        p.weights = r.weights
+        p.proteins = r.proteins
+        p.sets = r.sets
+        p.habits = r.habits
+        p.routines = r.routines
+        p.meals = r.meals
+        p.foods = r.foods
+        p.exercises = r.exercises
+        p.scales = r.scales
+        p.customHabits = r.customHabits
+        p.habitLogs = r.habitLogs
+        return p
+    }
+
+    /// Een payload in een lege store zetten. Hoort binnen een transactie die eerst
+    /// `wipeLocal` doet — hij voegt alleen toe en ruimt zelf niets op.
+    private static func insertAll(_ p: Payload, _ context: ModelContext) {
+        if let row = p.profile {
+            let profile = Profile(name: row.name, age: row.age, heightCm: row.height_cm,
+                                  startWeight: row.start_weight, goalWeight: row.goal_weight,
+                                  goalDate: row.goal_date, trainingsPerWeek: row.trainings_per_week)
+            apply(row, to: profile)
+            context.insert(profile)
+        }
+        for x in p.weights { context.insert(make(x)) }
+        for x in p.proteins { context.insert(make(x)) }
+        for x in p.sets { context.insert(make(x)) }
+        for x in p.habits { context.insert(make(x)) }
+        for x in p.routines { context.insert(make(x)) }
+        for x in p.meals { context.insert(make(x)) }
+        for x in p.foods { context.insert(make(x)) }
+        for x in p.exercises { context.insert(make(x)) }
+        for x in p.scales { context.insert(make(x)) }
+        for x in p.customHabits { context.insert(make(x)) }
+        for x in p.habitLogs { context.insert(make(x)) }
     }
 
     /// Samenvoegen op `syncID`: bestaande rij bijwerken, onbekende toevoegen, tombstone
@@ -759,6 +805,105 @@ enum Sync {
         return s
     }
 
+    // MARK: - Lokale veiligheidskopie
+    //
+    // "Data ophalen van server" en uitloggen wissen het toestel. Zolang de automatische
+    // push zijn werk doet is dat geen verlies, maar precies dán gebruik je die knop niet:
+    // je gebruikt 'm omdat de sync klemt — en dan staat er lokaal iets wat nergens anders
+    // staat. `pushAllowed = false` (server bevat andere data) is daar het schoolvoorbeeld
+    // van: dagenlang niets gepusht, en de foutmelding wijst je naar de knop die het
+    // opruimt. Daarom: vlak vóór het wissen een kopie op schijf, en een knop om 'm terug
+    // te zetten. Zie #41.
+
+    private static var backupURL: URL? {
+        guard let dir = try? FileManager.default.url(for: .applicationSupportDirectory,
+                                                     in: .userDomainMask,
+                                                     appropriateFor: nil, create: true)
+        else { return nil }
+        return dir.appending(path: "built-local-backup.json")
+    }
+
+    private static let backupStampKey = "localBackupAt"
+    private static let backupRowsKey = "localBackupRows"
+    /// Van wélk account de kopie is. Zonder dit zou je na het wisselen van account de data
+    /// van de vorige gebruiker in je eigen account kunnen terugzetten.
+    private static let backupUserKey = "localBackupUser"
+
+    /// Wanneer de laatste kopie gemaakt is, of nil als er geen (meer) ligt.
+    static var localBackupDate: Date? {
+        let stamp = UserDefaults.standard.double(forKey: backupStampKey)
+        guard stamp > 0, let url = backupURL,
+              FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return nil }
+        return Date(timeIntervalSinceReferenceDate: stamp)
+    }
+
+    /// Aantal rijen in de kopie — genoeg om te zien of het ergens over gaat.
+    static var localBackupRowCount: Int { UserDefaults.standard.integer(forKey: backupRowsKey) }
+
+    /// Staat er lokaal iets wat (voor zover we weten) niet op de server staat? Leest de
+    /// bewaarde vlag, dus dit overleeft een herstart — anders zou juist het geval dat
+    /// ertoe doet (dagen niets gepusht, app tussendoor afgesloten) schoon lijken.
+    static var hasUnsyncedChanges: Bool { !isClean }
+
+    /// Huidige staat naar schijf. Overschrijft een bestaande kopie alleen als er iets te
+    /// bewaren valt: een lege store mag de kopie van vlak vóór het wissen niet wegvagen.
+    @discardableResult
+    static func saveLocalBackup(_ context: ModelContext) -> Bool {
+        guard let url = backupURL, let payload = try? collect(context) else { return false }
+        let rows = payload.rowCount
+        guard rows > 0, let data = try? makeEncoder().encode(payload) else { return false }
+        do {
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: backupStampKey)
+            UserDefaults.standard.set(rows, forKey: backupRowsKey)
+            UserDefaults.standard.set(client?.auth.currentSession?.user.id.uuidString ?? "",
+                                      forKey: backupUserKey)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Zet het toestel terug naar de kopie. Bewaart eerst de huidige staat, zodat ook dit
+    /// terug te draaien is, en zet de sync-boekhouding zo dat de teruggezette data als
+    /// volledige push naar de server gaat in plaats van bij de volgende pull te verdampen.
+    @discardableResult
+    static func restoreLocalBackup(_ context: ModelContext) throws -> Int {
+        guard let url = backupURL, let data = try? Data(contentsOf: url) else {
+            throw backupError("Er staat geen lokale kopie op dit toestel.")
+        }
+        let owner = UserDefaults.standard.string(forKey: backupUserKey) ?? ""
+        if let current = client?.auth.currentSession?.user.id.uuidString,
+           !owner.isEmpty, owner != current {
+            throw backupError("Deze kopie hoort bij een ander account.")
+        }
+        let backup = try makeDecoder().decode(Payload.self, from: data)
+        // De huidige (net opgehaalde) staat wordt de nieuwe kopie: één keer terugzetten is
+        // dan geen eenrichtingsverkeer meer.
+        saveLocalBackup(context)
+        try context.transaction {
+            try wipeLocal(context)
+            insertAll(backup, context)
+        }
+        // Terugzetten betekent: het toestel staat er weer bij zoals op het moment van de
+        // kopie. Dus ook de openstaande verwijderingen van toen — anders zou een rij die
+        // je had weggegooid via de kopie terugkomen en blijven staan.
+        lastPushedHash = nil
+        pullAnchor = nil // geen incrementele pull die de teruggezette rijen weer wegtrekt
+        deletions = backup.deletions
+        changes.removeAll()
+        deltaValid = false // volgende push is een volledige: dit toestel is de waarheid
+        pushFailures = 0
+        retryPushAfter = nil
+        pushAllowed = true
+        markDirty()
+        return backup.rowCount
+    }
+
+    private static func backupError(_ message: String) -> Error {
+        NSError(domain: "Sync", code: 2, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
     private static func wipeLocal(_ context: ModelContext) throws {
         try context.delete(model: Profile.self)
         try context.delete(model: WeightEntry.self)
@@ -778,6 +923,7 @@ enum Sync {
     /// een achtergebleven lokale kopie zou bij de volgende login met een ánder account
     /// gaan botsen. Je data blijft op je account staan; opnieuw inloggen haalt 'm terug.
     static func signOut(context: ModelContext) async {
+        saveLocalBackup(context) // vóór het uitloggen: hierna is de sessie er niet meer
         try? await client?.auth.signOut()
         pushAllowed = false
         resetSyncState()
@@ -1035,6 +1181,22 @@ enum Sync {
             try container.encode(ISODate.shared.string(from: date))
         }
         return encoder
+    }
+
+    /// Tegenhanger van `makeEncoder`, voor het teruglezen van de lokale kopie. Alleen de
+    /// datumstrategie hoeft te spiegelen; de rest is standaard-JSON.
+    nonisolated static func makeDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { source in
+            let container = try source.singleValueContainer()
+            let raw = try container.decode(String.self)
+            guard let date = ISODate.shared.date(from: raw) else {
+                throw DecodingError.dataCorruptedError(in: container,
+                                                       debugDescription: "Geen ISO8601-datum: \(raw)")
+            }
+            return date
+        }
+        return decoder
     }
 
     nonisolated static func hexDigest(_ data: Data) -> String {

@@ -109,6 +109,87 @@ struct SyncTests {
         Sync.clearDeletionsForTesting()
     }
 
+    // MARK: - Lokale veiligheidskopie
+    //
+    // "Data ophalen van server" wist het toestel. Wie die knop gebruikt doet dat meestal
+    // juist omdat de sync klemt — en dan staat het nieuwste werk alleen lokaal. De kopie
+    // die er vlak vóór het wissen uit gaat is het enige wat dat terug kan halen. Zie #41.
+    //
+    // Serieel: er is één kopiebestand op schijf, dus deze tests kunnen niet door elkaar.
+    @Suite("Lokale kopie", .serialized)
+    struct LocalBackupTests {
+
+        @Test("Kopie zet het toestel terug zoals het vlak vóór het ophalen was")
+        @MainActor func kopieZetToestelTerug() throws {
+            let context = try memoryContext()
+            context.insert(Profile(name: "Jordi", age: 30, heightCm: 180, startWeight: 60,
+                                   goalWeight: 62.5, goalDate: nlDate(2026, 1, 1), trainingsPerWeek: 4))
+            let eigen = store([SetEntry(date: daysAgo(2), exercise: "Squat", weightKg: 100, reps: 5),
+                               SetEntry(date: daysAgo(1), exercise: "Bench Press", weightKg: 80, reps: 8)],
+                              in: context)
+            store([DayHabits(date: daysAgo(1), creatine: true)], in: context)
+            try context.save()
+            let squatID = eigen[0].syncID
+
+            #expect(Sync.saveLocalBackup(context))
+            #expect(Sync.localBackupRowCount == 4) // profiel + twee sets + één dag
+            #expect(Sync.localBackupDate != nil)
+
+            // De server wint: alles lokaal weg, de serverversie ervoor in de plaats.
+            try context.delete(model: SetEntry.self)
+            try context.delete(model: DayHabits.self)
+            context.insert(SetEntry(date: daysAgo(9), exercise: "Deadlift", weightKg: 140, reps: 3))
+            try context.save()
+
+            #expect(try Sync.restoreLocalBackup(context) == 4)
+
+            let sets = try context.fetch(FetchDescriptor<SetEntry>())
+            #expect(Set(sets.map(\.exercise)) == ["Squat", "Bench Press"])
+            #expect(sets.first { $0.exercise == "Squat" }?.weightKg == 100)
+            // Zelfde syncID: de teruggezette rijen zijn dezelfde rijen, dus een push erna
+            // werkt de serverrijen bij in plaats van er dubbelgangers naast te zetten.
+            #expect(sets.first { $0.exercise == "Squat" }?.syncID == squatID)
+            #expect(try context.fetch(FetchDescriptor<DayHabits>()).first?.creatine == true)
+            #expect(try context.fetch(FetchDescriptor<Profile>()).first?.name == "Jordi")
+        }
+
+        /// Terugzetten mag geen eenrichtingsverkeer zijn: wie zich vergist moet terug kunnen.
+        @Test("Terugzetten maakt de vervangen staat zelf de nieuwe kopie")
+        @MainActor func terugzettenIsOmkeerbaar() throws {
+            let context = try memoryContext()
+            context.insert(Profile(name: "Jordi", age: 30, heightCm: 180, startWeight: 60,
+                                   goalWeight: 62.5, goalDate: nlDate(2026, 1, 1), trainingsPerWeek: 4))
+            store([SetEntry(date: daysAgo(2), exercise: "Squat", weightKg: 100, reps: 5)], in: context)
+            try context.save()
+            #expect(Sync.saveLocalBackup(context))
+
+            try context.delete(model: SetEntry.self)
+            store([SetEntry(date: daysAgo(9), exercise: "Deadlift", weightKg: 140, reps: 3)], in: context)
+            try context.save()
+
+            try Sync.restoreLocalBackup(context)
+            #expect(try context.fetch(FetchDescriptor<SetEntry>()).map(\.exercise) == ["Squat"])
+
+            try Sync.restoreLocalBackup(context)
+            #expect(try context.fetch(FetchDescriptor<SetEntry>()).map(\.exercise) == ["Deadlift"])
+        }
+
+        /// Een lege store mag de kopie van vlak vóór het wissen niet overschrijven — anders
+        /// wist de tweede pull op rij precies het vangnet van de eerste.
+        @Test("Lege staat overschrijft een bestaande kopie niet")
+        @MainActor func legeStaatBewaartDeKopie() throws {
+            let context = try memoryContext()
+            store([SetEntry(date: daysAgo(2), exercise: "Squat", weightKg: 100, reps: 5)], in: context)
+            try context.save()
+            #expect(Sync.saveLocalBackup(context))
+
+            let leeg = try memoryContext()
+            #expect(Sync.saveLocalBackup(leeg) == false)
+            #expect(try Sync.restoreLocalBackup(context) == 1)
+            #expect(try context.fetch(FetchDescriptor<SetEntry>()).map(\.exercise) == ["Squat"])
+        }
+    }
+
     // MARK: - Gzip
 
     @Test("CRC32 volgt de standaard-testvector")

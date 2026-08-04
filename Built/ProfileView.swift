@@ -26,6 +26,10 @@ struct ProfileView: View {
     @State private var busy = false
     @State private var backupMessage: String?
     @State private var confirmRestore = false
+    @State private var confirmUndo = false
+    /// Wanneer de laatste veiligheidskopie gemaakt is. Als @State, want de knop moet
+    /// verschijnen zodra een pull er een wegschrijft.
+    @State private var localBackupDate: Date?
     @State private var showLogin = false
     @State private var confirmLogout = false
     @State private var confirmDelete = false
@@ -328,13 +332,28 @@ struct ProfileView: View {
                         Label("Data ophalen van server", systemImage: "icloud.and.arrow.down")
                     }
                     .disabled(busy)
+                    if Sync.hasUnsyncedChanges {
+                        Label("Er staat werk op dit toestel dat de server nog niet heeft. Doe eerst \"Sync nu\" — \"Data ophalen\" vervangt het.",
+                              systemImage: "exclamationmark.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                    if let made = localBackupDate {
+                        Button {
+                            confirmUndo = true
+                        } label: {
+                            Label("Zet lokale kopie terug (\(made.formatted(date: .abbreviated, time: .shortened)))",
+                                  systemImage: "arrow.uturn.backward")
+                        }
+                        .disabled(busy)
+                    }
                     if let backupMessage {
                         Text(backupMessage).font(.footnote).foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("Synchronisatie")
                 } footer: {
-                    Text("Elke wijziging gaat automatisch naar de server. \"Data ophalen\" vervangt alles op dit toestel door de serverversie — je account raakt nooit iets kwijt.")
+                    Text("Elke wijziging gaat automatisch naar de server. \"Data ophalen\" vervangt alles op dit toestel door de serverversie — je account raakt nooit iets kwijt. Vlak vóór het vervangen legt de app een kopie van dit toestel weg; die zet je hierboven met één tik weer terug.")
                 }
             } else {
                 Section("Synchronisatie") {
@@ -389,6 +408,7 @@ struct ProfileView: View {
         .tabBarClearance()
         .navigationTitle("Profiel")
         .scrollDismissesKeyboard(.interactively)
+        .onAppear { localBackupDate = Sync.localBackupDate }
         .alert("Nieuwe habit", isPresented: $showAddHabit) {
             TextField("bijv. Vitamine D", text: $habitName)
             Button("Toevoegen") {
@@ -430,8 +450,23 @@ struct ProfileView: View {
             Button("Annuleer", role: .cancel) { scaleToDelete = nil }
         }
         .confirmationDialog("Alle lokale data vervangen door de server?", isPresented: $confirmRestore, titleVisibility: .visible) {
+            // Eerst uploaden staat bovenaan: wie deze knop gebruikt omdat de sync klemt,
+            // is meestal juist de partij met het nieuwste werk.
+            if Sync.hasUnsyncedChanges {
+                Button("Eerst dit toestel naar de server") { runPush() }
+            }
             Button("Data ophalen", role: .destructive) { runPull() }
             Button("Annuleer", role: .cancel) {}
+        } message: {
+            Text(Sync.hasUnsyncedChanges
+                 ? "Let op: dit toestel heeft wijzigingen die de server nog niet heeft. Die zijn na het ophalen weg. Er wordt wel eerst een kopie op dit toestel bewaard."
+                 : "Alles op dit toestel wordt vervangen door de serverversie. Er wordt eerst een kopie op dit toestel bewaard.")
+        }
+        .confirmationDialog("Lokale kopie terugzetten?", isPresented: $confirmUndo, titleVisibility: .visible) {
+            Button("Terugzetten", role: .destructive) { runUndo() }
+            Button("Annuleer", role: .cancel) {}
+        } message: {
+            Text("Dit toestel komt terug zoals het was op \(localBackupDate?.formatted(date: .abbreviated, time: .shortened) ?? "de kopie") (\(Sync.localBackupRowCount) regels), en gaat daarna naar de server. Wat er nu op dit toestel staat wordt zelf de nieuwe kopie, dus dit is omkeerbaar.")
         }
         .sheet(isPresented: $showLogin) { AccountLoginSheet() }
         .confirmationDialog("Uitloggen?", isPresented: $confirmLogout, titleVisibility: .visible) {
@@ -537,9 +572,34 @@ struct ProfileView: View {
         Task {
             do {
                 try await Sync.pull(context)
-                backupMessage = "Opgehaald ✓"
+                localBackupDate = Sync.localBackupDate
+                backupMessage = localBackupDate == nil
+                    ? "Opgehaald ✓"
+                    : "Opgehaald ✓ — de vorige inhoud van dit toestel staat in een kopie."
             } catch {
                 backupMessage = "Mislukt: \(error.localizedDescription)"
+            }
+            busy = false
+        }
+    }
+
+    /// De kopie terugzetten en meteen naar de server sturen: anders staat het toestel vol
+    /// en de server nog steeds leeg, en is de eerstvolgende pull weer een verlies.
+    private func runUndo() {
+        busy = true
+        backupMessage = nil
+        Task {
+            do {
+                let rows = try Sync.restoreLocalBackup(context)
+                localBackupDate = Sync.localBackupDate
+                do {
+                    try await Sync.push(context)
+                    backupMessage = "\(rows) regels teruggezet en naar de server gestuurd ✓"
+                } catch {
+                    backupMessage = "\(rows) regels teruggezet. Naar de server sturen lukte nog niet: \(error.localizedDescription)"
+                }
+            } catch {
+                backupMessage = "Terugzetten mislukt: \(error.localizedDescription)"
             }
             busy = false
         }

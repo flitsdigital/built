@@ -219,6 +219,28 @@ struct TrainingView: View {
         sets.contains { dayKey($0.date) == dayKey(day) }
     }
 
+    /// Hoe de training van díé dag heet, als je 'm een naam gaf. Leeg = naamloos.
+    private func sessionName(on day: Date) -> String? {
+        let name = habits.first { dayKey($0.date) == dayKey(day) }?.workoutName ?? ""
+        return name.isEmpty ? nil : name
+    }
+
+    /// De training van één dag benoemen. Bewust níét via `profile.schedule`: dat is de
+    /// terugkerende weekplanning, en die aanpassen om te noteren wat je op één dag deed
+    /// gooide de planning voor élke volgende week van die weekdag om. Zie #40.
+    private func setSessionName(_ name: String?, on day: Date) {
+        guard let name else {
+            // Alleen een bestaande record leegmaken; voor "naamloos" hoeft er geen dag
+            // aangemaakt te worden.
+            habits.first { dayKey($0.date) == dayKey(day) }?.workoutName = ""
+            return
+        }
+        // Middaguur, zoals het logboek ook doet: een dagrecord op middernacht schuift bij
+        // een tijdzonewissel naar de dag ervoor.
+        let noon = cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
+        habitsRecord(for: noon).workoutName = name
+    }
+
     private func routineSubtitle(_ routine: Routine) -> String {
         guard !routine.exercises.isEmpty else { return "Nog geen oefeningen — tik om toe te voegen" }
         return "\(routine.exercises.count) oefeningen · " + routine.exercises.prefix(3).joined(separator: ", ")
@@ -471,11 +493,16 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.25)) { workout[i] = replacement }
     }
 
-    private func startWorkout(with names: [String], alternatives alts: [String: [String]] = [:],
+    /// `named` is de routine waarmee je begint. Die naam landt op de dag, zodat het
+    /// logboek en de weekstrip weten wélke training je deed — ook als het een dag was die
+    /// normaal een rustdag is. Zonder dit moest je daarvoor de weekplanning aanpassen.
+    private func startWorkout(with names: [String], named routineName: String? = nil,
+                             alternatives alts: [String: [String]] = [:],
                              targets: [String: [Int]] = [:], supersets: [String: String] = [:],
                              restByExercise: [String: Int] = [:]) {
         startedAt = .now
         workoutNote = ""
+        workoutName = routineName ?? ""
         let history = makeHistory()
         workout = names.map { name in
             var d = draft(for: name, target: targets[name], history)
@@ -603,6 +630,7 @@ struct TrainingView: View {
             active = false
             workout = []
             workoutNote = ""
+            workoutName = ""
         }
         syncNow()
     }
@@ -757,8 +785,9 @@ struct TrainingView: View {
         .navigationDestination(item: $editingRoutine) { routine in
             RoutineEditorView(routine: routine) { r in
                 editingRoutine = nil
-                startWorkout(with: r.exercises, alternatives: r.alternatives, targets: r.targets,
-                             supersets: r.supersets, restByExercise: r.restByExercise)
+                startWorkout(with: r.exercises, named: r.name, alternatives: r.alternatives,
+                             targets: r.targets, supersets: r.supersets,
+                             restByExercise: r.restByExercise)
             }
         }
         .sheet(isPresented: $showExercisePicker) {
@@ -807,23 +836,48 @@ struct TrainingView: View {
         .builtCard()
     }
 
-    /// Eén dag: gedaan (vol), gepland (routine-kleur), of leeg. Tik = routine koppelen.
+    /// Eén dag: gedaan (vol), gepland (routine-kleur), of leeg.
+    ///
+    /// Het menu houdt twee dingen uit elkaar die eerder één knop waren: wát je die dag
+    /// gedaan hébt (staat op de dag zelf) en wat er elke week op die weekdag gepland
+    /// staat. Trainde je op een rustdag, dan noteer je dat bovenin zonder je planning
+    /// overhoop te gooien.
     private func weekDay(_ day: Date, _ history: HistoryIndex) -> some View {
         let did = !sets(on: day, history).isEmpty
         let weekday = cal.component(.weekday, from: day)
         let planned = profile.plannedRoutine(weekday: weekday)
-        let routine = routines.first { $0.name == planned }
+        let done = sessionName(on: day)
+        // Een gedane training toont z'n eigen naam; alleen zonder naam valt hij terug op
+        // wat er gepland stond.
+        let shown = did ? (done ?? planned) : planned
+        let routine = routines.first { $0.name == shown }
         let tint = routine.map { routineColor($0, history) } ?? .green
         let isToday = cal.isDateInToday(day)
+        let dayLabel = day.formatted(.dateTime.weekday(.wide))
 
         return Menu {
-            Button("Rustdag") { assignRoutine(nil, to: weekday) }
-            Divider()
-            ForEach(routines) { r in
-                Button {
-                    assignRoutine(r.name, to: weekday)
-                } label: {
-                    if planned == r.name { Label(r.name, systemImage: "checkmark") } else { Text(r.name) }
+            if did {
+                Section("Getraind op deze dag") {
+                    ForEach(routines) { r in
+                        Button {
+                            setSessionName(r.name, on: day)
+                        } label: {
+                            if done == r.name { Label(r.name, systemImage: "checkmark") } else { Text(r.name) }
+                        }
+                    }
+                    if done != nil {
+                        Button("Naam weghalen") { setSessionName(nil, on: day) }
+                    }
+                }
+            }
+            Section(did ? "Elke \(dayLabel) plannen" : "Planning") {
+                Button("Rustdag") { assignRoutine(nil, to: weekday) }
+                ForEach(routines) { r in
+                    Button {
+                        assignRoutine(r.name, to: weekday)
+                    } label: {
+                        if planned == r.name { Label(r.name, systemImage: "checkmark") } else { Text(r.name) }
+                    }
                 }
             }
         } label: {
@@ -860,7 +914,9 @@ struct TrainingView: View {
             .contentShape(Rectangle())
         }
         .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).day().month()))
-        .accessibilityValue(did ? "Getraind" : (planned.map { "Gepland: \($0)" } ?? "Rustdag"))
+        .accessibilityValue(did
+                            ? (done.map { "Getraind: \($0)" } ?? "Getraind")
+                            : (planned.map { "Gepland: \($0)" } ?? "Rustdag"))
     }
 
     // MARK: - Routine-identiteit
@@ -884,8 +940,9 @@ struct TrainingView: View {
     private func plannedCard(_ planned: Routine, _ history: HistoryIndex) -> some View {
         let tint = routineColor(planned, history)
         return Button {
-            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets,
-                         supersets: planned.supersets, restByExercise: planned.restByExercise)
+            startWorkout(with: planned.exercises, named: planned.name, alternatives: planned.alternatives,
+                         targets: planned.targets, supersets: planned.supersets,
+                         restByExercise: planned.restByExercise)
         } label: {
             HStack(spacing: 14) {
                 RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
@@ -954,7 +1011,8 @@ struct TrainingView: View {
                 Menu {
                     if !routine.exercises.isEmpty {
                         Button("Start meteen", systemImage: "play.fill") {
-                            startWorkout(with: routine.exercises, alternatives: routine.alternatives,
+                            startWorkout(with: routine.exercises, named: routine.name,
+                                         alternatives: routine.alternatives,
                                          targets: routine.targets, supersets: routine.supersets,
                                          restByExercise: routine.restByExercise)
                         }
@@ -1048,7 +1106,7 @@ struct TrainingView: View {
 
         weekCard(history)
         if !routines.isEmpty {
-            BuiltFootnote("Tik op een dag om er een routine aan te koppelen.")
+            BuiltFootnote("Tik op een dag: bovenin noteer je wat je die dag deed, daaronder plan je die weekdag in.")
         }
 
         Button {
