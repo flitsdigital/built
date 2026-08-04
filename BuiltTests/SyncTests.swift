@@ -66,6 +66,16 @@ struct SyncTests {
 
     // MARK: - Sync-identiteit
 
+    /// De standaardcatalogus zaait elk toestel zelf. Vallen die id's niet overal hetzelfde
+    /// uit, dan zet een merge-pull dezelfde oefening er een tweede keer naast. Deze waarde
+    /// mag dus nooit meer veranderen — vandaar vastgepind en niet "a == a".
+    @Test("Afgeleid id blijft over versies heen hetzelfde")
+    func stabielIDIsVastgepind() {
+        #expect(UUID.stable(from: "Bench Press").uuidString == "80E59534-C87E-5A38-A691-43017AE26A1B")
+        #expect(UUID.stable(from: "Bench Press") == UUID.stable(from: "Bench Press"))
+        #expect(UUID.stable(from: "Bench Press") != UUID.stable(from: "Deadlift"))
+    }
+
     /// Zonder stabiel id kan de client geen enkele rij aanwijzen, en is "alles wissen en
     /// opnieuw schrijven" het enige dat server en toestel gelijk trekt.
     @Test("Nieuwe rijen krijgen meteen een eigen syncID")

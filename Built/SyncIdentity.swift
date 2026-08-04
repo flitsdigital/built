@@ -1,5 +1,24 @@
 import Foundation
 import SwiftData
+import CryptoKit
+
+extension UUID {
+    /// Een id dat op elk toestel hetzelfde uitvalt, afgeleid van een naam.
+    ///
+    /// Voor rijen die geen invoer zijn maar een gegeven: de standaardcatalogus met
+    /// oefeningen zaait elk toestel zelf. Met een willekeurig id levert dat op een tweede
+    /// toestel dezelfde vijftig oefeningen op met andere id's, en omdat een pull sinds #42
+    /// samenvoegt in plaats van vervangt, staat "Bench Press" er daarna twee keer. Met een
+    /// afgeleid id is het simpelweg dezelfde rij en valt de merge samen tot niets.
+    static func stable(from name: String) -> UUID {
+        var bytes = Array(SHA256.hash(data: Data(name.utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50 // versie 5-achtig: naam-gebaseerd
+        bytes[8] = (bytes[8] & 0x3F) | 0x80 // RFC 4122-variant
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+                           bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
+                           bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+}
 
 /// Alles rond de identiteit van gesynchroniseerde rijen: het eenmalig uitdelen van
 /// `syncID` aan rijen van vóór deze versie, en verwijderen mét spoor.

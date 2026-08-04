@@ -47,19 +47,26 @@ final class Exercise {
         let existing = (try? context.fetch(FetchDescriptor<Exercise>())) ?? []
         var known = Set(existing.map(\.name))
 
-        if existing.isEmpty {
-            for (name, muscle, type) in seed {
-                context.insert(Exercise(name: name, muscle: muscle, type: type))
-                known.insert(name)
-            }
+        // Standaardcatalogus krijgt een van de naam afgeleid id, zodat elk toestel dezelfde
+        // rij zaait en een merge-pull er geen tweede exemplaar naast zet. Zie UUID.stable.
+        func seedRow(_ name: String, _ muscle: String, _ type: String) {
+            let exercise = Exercise(name: name, muscle: muscle, type: type)
+            exercise.syncID = .stable(from: name)
+            context.insert(exercise)
+            known.insert(name)
         }
-        // Cardio kwam later — eenmalig bijplaatsen, ook bij bestaande installs.
+
+        if existing.isEmpty {
+            for (name, muscle, type) in seed { seedRow(name, muscle, type) }
+            // Cardio hoort bij de standaardcatalogus. Het stond alleen achter de vlag
+            // hieronder, en die blijft na één keer draaien permanent aan — een toestel dat
+            // leeggemaakt werd kreeg z'n cardio-oefeningen daardoor nooit terug.
+            for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
+        }
+        // Cardio kwam later — eenmalig bijplaatsen bij installs van vóór die versie.
         if !UserDefaults.standard.bool(forKey: "seededCardio") {
             UserDefaults.standard.set(true, forKey: "seededCardio")
-            for name in cardioSeed where !known.contains(name) {
-                context.insert(Exercise(name: name, muscle: "Cardio", type: "Cardio"))
-                known.insert(name)
-            }
+            for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
         }
 
         // Vrije-tekst-oefeningen uit historie en routines opnemen als "Overig"

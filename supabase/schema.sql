@@ -15,14 +15,7 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists tracks_creatine boolean not null default true;
 alter table public.profiles add column if not exists tracks_sleep boolean not null default true;
 alter table public.profiles add column if not exists training_days jsonb not null default '[]';
-alter table public.protein_entries add column if not exists meal text not null default '';
-alter table public.protein_entries add column if not exists carbs int not null default 0;
-alter table public.protein_entries add column if not exists fat int not null default 0;
--- Portie zoals gelogd; 0 = oudere invoer zonder portie (dan blijft bewerken op macro-niveau).
-alter table public.protein_entries add column if not exists amount float8 not null default 0;
-alter table public.protein_entries add column if not exists unit   text   not null default 'g';
 alter table public.profiles add column if not exists kcal_target int not null default 0;
-alter table public.meals add column if not exists favorite boolean not null default false;
 
 create table if not exists public.food_products (
   id uuid primary key default gen_random_uuid(),
@@ -39,10 +32,6 @@ create table if not exists public.food_products (
 );
 alter table public.food_products add column if not exists image_url text not null default '';
 alter table public.food_products add column if not exists serving_grams float8 not null default 0;
-alter table public.routines add column if not exists alternatives jsonb not null default '{}';
-alter table public.routines add column if not exists targets jsonb not null default '{}';
-alter table public.routines add column if not exists supersets jsonb not null default '{}';
-alter table public.routines add column if not exists rest_by_exercise jsonb not null default '{}';
 alter table public.profiles add column if not exists schedule jsonb not null default '{}';
 alter table public.profiles add column if not exists tracks_food boolean not null default true;
 -- Eten bijhouden en eten láten meetellen zijn twee dingen: uit betekent loggen zonder
@@ -82,6 +71,12 @@ create table if not exists public.protein_entries (
   label text not null,
   kcal int not null default 0
 );
+alter table public.protein_entries add column if not exists meal text not null default '';
+alter table public.protein_entries add column if not exists carbs int not null default 0;
+alter table public.protein_entries add column if not exists fat int not null default 0;
+-- Portie zoals gelogd; 0 = oudere invoer zonder portie (dan blijft bewerken op macro-niveau).
+alter table public.protein_entries add column if not exists amount float8 not null default 0;
+alter table public.protein_entries add column if not exists unit   text   not null default 'g';
 
 create table if not exists public.set_entries (
   id uuid primary key default gen_random_uuid(),
@@ -124,6 +119,10 @@ create table if not exists public.routines (
   exercises jsonb not null default '[]',
   created_at timestamptz not null
 );
+alter table public.routines add column if not exists alternatives jsonb not null default '{}';
+alter table public.routines add column if not exists targets jsonb not null default '{}';
+alter table public.routines add column if not exists supersets jsonb not null default '{}';
+alter table public.routines add column if not exists rest_by_exercise jsonb not null default '{}';
 
 create table if not exists public.meals (
   id uuid primary key default gen_random_uuid(),
@@ -135,6 +134,7 @@ create table if not exists public.meals (
   servings float8 not null default 1,
   ingredients jsonb not null default '[]'
 );
+alter table public.meals add column if not exists favorite boolean not null default false;
 
 create table if not exists public.scales (
   id uuid primary key default gen_random_uuid(),
@@ -356,13 +356,13 @@ grant execute on function public.delete_account() to authenticated;
 -- geeft alleen terug wat sinds een tijdstip gewijzigd is.
 
 
--- `full_replace = false` (het normale pad): alleen de meegestuurde rijen worden geraakt.
--- Een rij die de client niet noemt blijft staan zoals hij is.
+-- Uitsluitend samenvoegend: alleen de meegestuurde rijen worden geraakt, en een rij die de
+-- client niet noemt blijft staan zoals hij is. Ook "Sync nu" en de wekelijkse volledige
+-- push gaan hier doorheen — die sturen simpelweg álle rijen mee.
 --
--- `full_replace = true`: dit toestel is de waarheid. Alles wat de client níet meestuurt
--- wordt als tombstone gemarkeerd, en de conflictregel wordt genegeerd. Dit is wat "Sync
--- nu" in Profiel doet, en waar de app op terugvalt als hij niet weet wat er sinds de
--- laatste push gewijzigd is (koude start met openstaande wijzigingen).
+-- `full_replace` staat er alleen nog voor oudere clients die het argument meesturen; het
+-- doet niets. De modus erachter ("dit toestel is de waarheid, de rest is verwijderd") is in
+-- #42 geschrapt: divergentie hoort samengevoegd te worden, niet gewist. Zie 0019.
 --
 -- Retourneert de servertijd; die bewaart de client als anker voor de volgende pull.
 create or replace function public.sync_push_v2(payload jsonb, full_replace boolean default false)
@@ -376,11 +376,7 @@ declare
   tables text[] := array['weight_entries','protein_entries','set_entries','day_habits',
                          'routines','meals','scales','custom_habits','habit_logs',
                          'food_products','exercises'];
-  keys   text[] := array['weights','proteins','sets','habits',
-                         'routines','meals','scales','customHabits','habitLogs',
-                         'foods','exercises'];
   rec record;
-  i int;
 begin
   if uid is null then
     raise exception 'not authenticated';
@@ -440,7 +436,8 @@ begin
   -- coalesce op kolommen die de client niet meestuurt (scales.correction).
   --
   -- De conflictregel: een rij met een oudere updated_at overschrijft nooit een nieuwere.
-  -- Bij full_replace vervalt die regel — dan is dit toestel per definitie de waarheid.
+  -- Er is geen uitzondering meer op die regel (#42): geen enkele push mag een nieuwere
+  -- versie van een rij overschrijven met een oudere.
 
   insert into public.weight_entries as t (id, user_id, date, kg, scale, updated_at, deleted_at)
   select r.id, uid, r.date, r.kg, coalesce(r.scale, ''), least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
@@ -448,7 +445,7 @@ begin
   on conflict (id, user_id) do update set
     date = excluded.date, kg = excluded.kg, scale = excluded.scale,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.protein_entries as t (id, user_id, date, grams, label, kcal, carbs, fat, meal, amount, unit, updated_at, deleted_at)
   select r.id, uid, r.date, r.grams, r.label, coalesce(r.kcal, 0), coalesce(r.carbs, 0),
@@ -459,7 +456,7 @@ begin
     date = excluded.date, grams = excluded.grams, label = excluded.label, kcal = excluded.kcal,
     carbs = excluded.carbs, fat = excluded.fat, meal = excluded.meal, amount = excluded.amount,
     unit = excluded.unit, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, seconds, updated_at, deleted_at)
   select r.id, uid, r.date, r.exercise, r.weight_kg, r.reps, coalesce(r.dropset, false),
@@ -469,7 +466,7 @@ begin
     date = excluded.date, exercise = excluded.exercise, weight_kg = excluded.weight_kg,
     reps = excluded.reps, dropset = excluded.dropset, failure = excluded.failure,
     seconds = excluded.seconds, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, workout_name, updated_at, deleted_at)
   select r.id, uid, r.date, coalesce(r.creatine, false), coalesce(r.slept_enough, false),
@@ -486,7 +483,7 @@ begin
     workout_note = excluded.workout_note, energy = excluded.energy, mood = excluded.mood,
     soreness = excluded.soreness, stress = excluded.stress, exercise_notes = excluded.exercise_notes,
     workout_name = excluded.workout_name, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.routines as t (id, user_id, name, exercises, alternatives, targets, supersets, rest_by_exercise, created_at, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.exercises, '[]'::jsonb), coalesce(r.alternatives, '{}'::jsonb),
@@ -498,7 +495,7 @@ begin
     targets = excluded.targets, supersets = excluded.supersets,
     rest_by_exercise = excluded.rest_by_exercise, created_at = excluded.created_at,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.meals as t (id, user_id, name, protein, kcal, created_at, servings, ingredients, favorite, updated_at, deleted_at)
   select r.id, uid, r.name, r.protein, coalesce(r.kcal, 0), r.created_at, coalesce(r.servings, 1),
@@ -510,7 +507,7 @@ begin
     created_at = excluded.created_at, servings = excluded.servings,
     ingredients = excluded.ingredients, favorite = excluded.favorite,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.food_products as t (id, user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, image_url, serving_grams, serving_name, created_at, unit, last_amount, categories, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.brand, ''), coalesce(r.barcode, ''), r.protein100, r.kcal100,
@@ -526,7 +523,7 @@ begin
     serving_grams = excluded.serving_grams, serving_name = excluded.serving_name,
     created_at = excluded.created_at, unit = excluded.unit, last_amount = excluded.last_amount,
     categories = excluded.categories, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.exercises as t (id, user_id, name, muscle, type, created_at, secondary_muscles, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.muscle, 'Overig'), coalesce(r.type, 'Overig'),
@@ -537,7 +534,7 @@ begin
     name = excluded.name, muscle = excluded.muscle, type = excluded.type,
     created_at = excluded.created_at, secondary_muscles = excluded.secondary_muscles,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.scales as t (id, user_id, name, correction, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.correction, 0), least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
@@ -545,7 +542,7 @@ begin
   on conflict (id, user_id) do update set
     name = excluded.name, correction = excluded.correction,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.custom_habits as t (id, user_id, name, created_at, updated_at, deleted_at)
   select r.id, uid, r.name, r.created_at, least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
@@ -553,7 +550,7 @@ begin
   on conflict (id, user_id) do update set
     name = excluded.name, created_at = excluded.created_at,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   insert into public.habit_logs as t (id, user_id, name, date, updated_at, deleted_at)
   select r.id, uid, r.name, r.date, least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
@@ -561,7 +558,7 @@ begin
   on conflict (id, user_id) do update set
     name = excluded.name, date = excluded.date,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
-  where full_replace or t.updated_at <= excluded.updated_at;
+  where t.updated_at <= excluded.updated_at;
 
   -- Verwijderingen. De client stuurt ze apart mee: de rij zelf heeft hij niet meer, dus
   -- alleen tabel + id. De tabelnaam gaat door een whitelist voordat hij in dynamische SQL
@@ -578,19 +575,6 @@ begin
                 || 'where id = $2 and user_id = $3 and deleted_at is null', rec.tbl)
       using rec.at, rec.row_id, uid;
   end loop;
-
-  -- Volledige push: wat de client níet noemt, bestaat niet meer. Als tombstone, niet als
-  -- delete — anders ziet een tweede toestel de verwijdering nooit.
-  if full_replace then
-    for i in 1 .. array_length(tables, 1) loop
-      execute format(
-        'update public.%I t set deleted_at = $1, updated_at = $1 '
-     || 'where t.user_id = $2 and t.deleted_at is null '
-     || 'and not exists (select 1 from jsonb_array_elements($3) e where (e->>''id'')::uuid = t.id)',
-        tables[i])
-        using stamp, uid, coalesce(payload->keys[i], '[]'::jsonb);
-    end loop;
-  end if;
 
   return stamp;
 
