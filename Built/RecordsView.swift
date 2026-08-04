@@ -43,6 +43,14 @@ struct RecordsView: View {
         return out.sorted { $0.e1rm > $1.e1rm }
     }
 
+    /// Per spiergroep, sterkste groep eerst. De kleur stond al op elke kaart maar deed
+    /// niets; als kop maakt hij de lijst scanbaar zonder dat je elk woord moet lezen.
+    private func grouped(_ records: [Record]) -> [(muscle: String, records: [Record])] {
+        Dictionary(grouping: records, by: \.muscle)
+            .map { (muscle: $0.key, records: $0.value.sorted { $0.e1rm > $1.e1rm }) }
+            .sorted { ($0.records.first?.e1rm ?? 0) > ($1.records.first?.e1rm ?? 0) }
+    }
+
     var body: some View {
         // `records` liep over de volledige sets-tabel en werd vier keer per render
         // opgevraagd (titel, telling, leeg-check, ForEach). Nu één keer.
@@ -50,69 +58,88 @@ struct RecordsView: View {
         let prCount = records.filter(\.recentPR).count
         return ScrollView {
             LazyVStack(spacing: 14) {
-                BuiltScreenTitle("Records", records.isEmpty ? "Nog leeg" : "\(records.count) oefeningen")
-                if prCount > 0 {
-                    Label("\(prCount) verse \(prCount == 1 ? "PR" : "PR's") in de laatste 2 weken",
-                          systemImage: "trophy.fill")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .builtCard()
+                BuiltScreenTitle(eyebrow: "Records",
+                                 title: records.isEmpty ? "Nog leeg" : "\(records.count) oefeningen") {
+                    if prCount > 0 {
+                        Label("\(prCount) vers", systemImage: "trophy.fill")
+                            .font(.caption.bold())
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(.builtTint(.orange), in: Capsule())
+                            .accessibilityLabel("\(prCount) verse PR's in de laatste 2 weken")
+                    }
                 }
                 if records.isEmpty {
                     ContentUnavailableView("Nog geen records", systemImage: "trophy",
                                            description: Text("Vink je eerste sets af — dan verschijnen hier je PR's."))
                         .builtCard()
                 }
-                ForEach(records) { r in
-                    recordCard(r)
+                ForEach(grouped(records), id: \.muscle) { group in
+                    BuiltSectionHeader(group.muscle)
+                    VStack(spacing: 0) {
+                        ForEach(Array(group.records.enumerated()), id: \.element.id) { i, r in
+                            if i > 0 { Divider().padding(.leading, 15) }
+                            recordRow(r)
+                        }
+                    }
+                    .builtCard(padding: 0)
                 }
+                BuiltFootnote("1RM is geschat uit je beste set (Epley). Tik een oefening voor je hele historie.")
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
         }
         .background(Color(.systemGroupedBackground))
         .tabBarClearance()
-        .toolbar(.hidden, for: .navigationBar)
+        // Bewust géén verborgen navigatiebalk: dit scherm wordt gepusht, en de balk is
+        // de enige terugweg — verbergen nam ook de swipe-terug mee.
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func recordCard(_ r: Record) -> some View {
+    /// Eén regel per oefening: naam, de twee andere records klein eronder, e1RM groot
+    /// rechts. Zeven kaarten van drie kolommen waren twee schermen scrollen zonder dat
+    /// één getal eruit sprong.
+    private func recordRow(_ r: Record) -> some View {
         let tint = Color.muscle(r.muscle)
         return NavigationLink {
             ExerciseDetailView(exercise: r.name)
         } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 3, height: 18)
-                    Text(r.name).font(.headline).foregroundStyle(.primary)
-                    if r.recentPR {
-                        Text("PR").font(.caption2.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(.green, in: Capsule())
-                            .foregroundStyle(.white)
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 3, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(r.name)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if r.recentPR {
+                            Text("PR").font(.caption2.bold())
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(.green, in: Capsule())
+                                .foregroundStyle(.white)
+                        }
                     }
-                    Spacer()
-                    Text(r.muscle.uppercased())
-                        .font(.caption2.weight(.semibold)).tracking(0.6)
-                        .foregroundStyle(tint)
+                    Text("beste set \(r.topWeight.kgText) kg · sessie \(r.bestVolume) kg")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                HStack(spacing: 0) {
-                    recordStat("1RM", "\(r.e1rm.kgText) kg", "🏆")
-                    recordStat("Gewicht", "\(r.topWeight.kgText) kg", nil)
-                    recordStat("Volume", "\(r.bestVolume) kg", nil)
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("\(r.e1rm.kgText) kg")
+                        .font(.headline.monospacedDigit())
+                        .foregroundStyle(.primary)
+                    Text("1RM").font(.caption2).foregroundStyle(.secondary)
                 }
+                Image(systemName: "chevron.right")
+                    .font(.caption.bold())
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
-            .builtCard()
+            .padding(.horizontal, 15)
+            .padding(.vertical, 12)
         }
         .buttonStyle(PressableStyle(scale: 0.985))
-    }
-
-    private func recordStat(_ label: String, _ value: String, _ badge: String?) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text("\(value)\(badge.map { " \($0)" } ?? "")")
-                .font(.subheadline.bold().monospacedDigit())
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

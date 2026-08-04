@@ -98,7 +98,9 @@ struct WeightView: View {
                 HStack(spacing: 0) {
                     headTile("Start", profile.startWeight.kgText)
                     Divider()
-                    headTile("Huidig", current?.kgText ?? "—")
+                    // "Huidig" las als "wat de weegschaal vanochtend zei"; het is het
+                    // 7-daags gemiddelde. Zelfde getal, eerlijk label.
+                    headTile("Gem. 7d", current?.kgText ?? "—")
                     Divider()
                     headTile("Verschil",
                              current.map { "\($0 - profile.startWeight >= 0 ? "+" : "")\(($0 - profile.startWeight).kgText)" } ?? "—",

@@ -798,8 +798,7 @@ struct FoodLogSheet: View {
                 withAnimation(.snappy(duration: 0.25)) { expandedKey = open ? nil : key }
             } label: {
                 HStack(spacing: 10) {
-                    productRow(food.name, food.brand, food.protein100, food.kcal100,
-                               favorite: favorite, imageURL: food.imageURL)
+                    productRow(food, favorite: favorite, lastAmount: lastAmount)
                     Image(systemName: "chevron.down")
                         .font(.caption.bold())
                         .foregroundStyle(.tertiary)
@@ -850,26 +849,38 @@ struct FoodLogSheet: View {
         withAnimation(.snappy(duration: 0.25)) { added.append(food.name) }
     }
 
-    private func productRow(_ name: String, _ brand: String, _ p100: Double, _ k100: Double,
-                            favorite: Bool, imageURL: String) -> some View {
-        HStack(spacing: 10) {
-            FoodThumb(url: imageURL)
-            VStack(alignment: .leading, spacing: 1) {
+    /// De rij toont wat jíj normaal neemt, al doorgerekend — niet per 100 g. Zo is de rij
+    /// zelf de beslissing in plaats van een som die je nog moet maken. Volgorde: laatste
+    /// portie → portiegrootte van het pak → 100 g.
+    private func productRow(_ food: PendingFood, favorite: Bool, lastAmount: Double) -> some View {
+        let amount = lastAmount > 0 ? lastAmount : (food.servingGrams > 0 ? food.servingGrams : 100)
+        let factor = amount / 100
+        let kcal = Int((food.kcal100 * factor).rounded())
+        let protein = Int((food.protein100 * factor).rounded())
+        return HStack(spacing: 10) {
+            FoodThumb(url: food.imageURL)
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(name).foregroundStyle(.primary).lineLimit(1)
+                    Text(food.name).foregroundStyle(.primary).lineLimit(1)
                     if favorite {
                         Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
                             .accessibilityLabel("Favoriet")
                     }
+                    if !food.brand.isEmpty {
+                        Text(food.brand).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
-                if !brand.isEmpty {
-                    Text(brand).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                // Waarde links onder de naam i.p.v. rechts uitgelijnd: één kolom om langs
+                // te scannen in plaats van heen-en-weer per rij.
+                HStack(spacing: 4) {
+                    Text("\(kcal) kcal").foregroundStyle(.green)
+                    Text("· \(protein) g eiwit · \(amount.kgText) \(food.unit.label)")
+                        .foregroundStyle(.secondary)
                 }
-            }
-            Spacer()
-            Text("\(Int(p100.rounded())) g · \(Int(k100.rounded())) kcal")
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 4)
         }
     }
 
@@ -914,8 +925,8 @@ struct FoodLogSheet: View {
             }
             if let scanned {
                 Section("Gevonden") {
-                    productRow(scanned.name, scanned.brand, scanned.protein100, scanned.kcal100,
-                               favorite: false, imageURL: scanned.imageURL)
+                    productRow(scanned, favorite: false,
+                               lastAmount: products.first { !scanned.barcode.isEmpty && $0.barcode == scanned.barcode }?.lastAmount ?? 0)
                     PortionEditor(food: scanned,
                                   lastAmount: products.first { !scanned.barcode.isEmpty && $0.barcode == scanned.barcode }?.lastAmount ?? 0) { amount, unit in
                         logFood(scanned, amount: amount, unit: unit)

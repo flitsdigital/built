@@ -312,16 +312,20 @@ struct InsightsView: View {
         return ScrollView {
             LazyVStack(spacing: 14) {
                 BuiltScreenTitle("Inzicht", "Week \(profile.daysIn / 7 + 1)")
+                // Volgorde = wat je ermee moet. Eerst hoe het gaat en wat je nu kunt doen,
+                // dan je kracht, dan patronen, en het archief onderaan. De coach stond
+                // eerder onder de bodymap — een scherm hoog scrollen voor het enige blok
+                // dat je iets vraagt.
                 weekBlock(idx)
-                bodyMapBlock
                 coachBlock(idx, plateaus: plateaus)
                 perfectDaysBlock(idx)
-                yearBlock(idx)
-                correlationsBlock(correlations)
-                habitsBlock(idx, factorNames)
+                bodyMapBlock
                 volumeBlock
                 plateauBlock(plateaus)
                 strengthBlock(stats)
+                habitsBlock(idx, factorNames)
+                correlationsBlock(correlations)
+                yearBlock(idx)
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
