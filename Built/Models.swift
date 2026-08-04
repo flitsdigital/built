@@ -312,12 +312,55 @@ func epley(_ weight: Double, _ reps: Int) -> Double {
     reps <= 1 ? weight : weight * (1 + Double(reps) / 30)
 }
 
+// MARK: - Wat een gelogd gewicht betekent
+//
+// Het getal dat je in een set typt betekent niet overal hetzelfde. Bij een barbell ís het
+// de last. Bij een dip is het extra gewicht bovenop jezelf. En bij een assisted dip is het
+// hoeveel de machine van je afhaalt — daar is een hóger getal juist slechter. Die drie
+// gevallen staan hieronder één keer, zodat notatie, volume en records het niet elk apart
+// hoeven te raden.
+
+/// Hoe het gelogde gewicht zich verhoudt tot wat je tilt. Volgt uit `Exercise.type`.
+enum LoadStyle {
+    /// Het gelogde gewicht ís de last: barbell, dumbbell, machine, kabel.
+    case external
+    /// Je eigen gewicht plus optioneel extra gewicht ("+kg"): pull up, dip.
+    case bodyweight
+    /// Je eigen gewicht mínus de hulp van de machine ("−kg"): assisted pull up.
+    /// De enige stijl waar een hoger getal slechter is — minder hulp is vooruitgang.
+    case assisted
+
+    /// Wat er bij het gewichtsveld staat. Het teken maakt meteen duidelijk welke kant
+    /// het getal op werkt: erbij, of eraf.
+    var kgLabel: String {
+        switch self {
+        case .external: "kg"
+        case .bodyweight: "+kg"
+        case .assisted: "−kg"
+        }
+    }
+
+    /// Uitleg waar je het type kiest. nil als er niets uit te leggen valt: het gelogde
+    /// gewicht ís dan gewoon de last.
+    var inputHint: String? {
+        switch self {
+        case .external: return nil
+        case .bodyweight: return "Je logt het gewicht dat je extra meeneemt, bovenop je lichaamsgewicht."
+        case .assisted: return "Je logt hoeveel de machine van je afhaalt. Minder hulp is vooruitgang."
+        }
+    }
+}
+
 /// Set-notatie voor overzichten. Cardio toont de duur ("25 min"); bodyweight zonder
-/// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; anders "40×8".
-func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0) -> String {
+/// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; met hulp van de
+/// machine "−20×8"; anders "40×8".
+func setNotation(kg: Double, reps: Int, style: LoadStyle, seconds: Int = 0) -> String {
     if seconds > 0 { return "\(seconds / 60) min" }
-    guard bodyweight else { return "\(kg.kgText)×\(reps)" }
-    return kg > 0 ? "+\(kg.kgText)×\(reps)" : "×\(reps)"
+    switch style {
+    case .external: return "\(kg.kgText)×\(reps)"
+    case .bodyweight: return kg > 0 ? "+\(kg.kgText)×\(reps)" : "×\(reps)"
+    case .assisted: return kg > 0 ? "−\(kg.kgText)×\(reps)" : "×\(reps)"
+    }
 }
 
 /// Platte tekst van een afgeronde training om te delen — werkt in elke app.
@@ -333,9 +376,27 @@ func workoutShareText(title: String, duration: String, volume: Int, sets: Int,
 }
 
 /// Effectieve last voor volume/spierkaart: bodyweight-oefeningen tellen mee met
-/// lichaamsgewicht + eventueel extra gewicht, zodat ze niet op 0 uitkomen.
-func liftLoad(kg: Double, bodyweight: Double, bodyweightExercise: Bool) -> Double {
-    bodyweightExercise ? max(bodyweight, 0) + kg : kg
+/// lichaamsgewicht + eventueel extra gewicht, zodat ze niet op 0 uitkomen. De hulp van een
+/// assisted-machine gaat er juist af — nooit onder 0, want minder dan niets til je niet.
+func liftLoad(kg: Double, bodyweight: Double, style: LoadStyle) -> Double {
+    let own = max(bodyweight, 0)
+    switch style {
+    case .external: return kg
+    case .bodyweight: return own + kg
+    case .assisted: return max(own - kg, 0)
+    }
+}
+
+/// Waarop een record voor deze oefening telt.
+///
+/// Normaal het gelogde gewicht: meer is beter, en dat is ook wat er in je historie staat.
+/// Bij hulp van de machine is minder hulp beter, dus telt daar wat je zélf tilt — anders
+/// zou tien kilo méér hulp binnenkomen als persoonlijk record.
+///
+/// Bodyweight blijft bewust op het gelogde extra gewicht staan: daar is het getal al
+/// oplopend met je kracht, en de records die er nu in staan blijven zo kloppen.
+func recordLoad(kg: Double, bodyweight: Double, style: LoadStyle) -> Double {
+    style == .assisted ? liftLoad(kg: kg, bodyweight: bodyweight, style: .assisted) : kg
 }
 
 /// Schijven per kant voor een barbell-gewicht, greedy vanaf de zwaarste schijf.

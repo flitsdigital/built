@@ -28,7 +28,11 @@ final class Exercise {
 
     static let muscles = ["Borst", "Rug", "Schouders", "Biceps", "Triceps",
                           "Benen", "Hamstrings", "Bilspieren", "Kuiten", "Core", "Onderrug", "Cardio", "Overig"]
-    static let types = ["Barbell", "Dumbbell", "Machine", "Kabel", "Bodyweight", "Kettlebell", "Band", "Cardio", "Overig"]
+    static let types = ["Barbell", "Dumbbell", "Machine", "Kabel", "Bodyweight", "Assisted",
+                        "Kettlebell", "Band", "Cardio", "Overig"]
+
+    /// Hoe het gelogde gewicht telt. `type` is het enige dat dit bepaalt.
+    var loadStyle: LoadStyle { LoadStyle(type: type) }
 
     static let typeIcon = [
         "Barbell": "figure.strengthtraining.traditional",
@@ -36,6 +40,7 @@ final class Exercise {
         "Machine": "figure.strengthtraining.functional",
         "Kabel": "figure.rower",
         "Bodyweight": "figure.core.training",
+        "Assisted": "figure.climbing",
         "Kettlebell": "figure.cross.training",
         "Band": "figure.flexibility",
         "Cardio": "figure.run",
@@ -61,6 +66,15 @@ final class Exercise {
                 known.insert(name)
             }
         }
+        // Assisted ook: zonder deze drie zou je zelf een oefening moeten aanmaken om te
+        // ontdekken dat het type bestaat.
+        if !UserDefaults.standard.bool(forKey: "seededAssisted") {
+            UserDefaults.standard.set(true, forKey: "seededAssisted")
+            for (name, muscle) in assistedSeed where !known.contains(name) {
+                context.insert(Exercise(name: name, muscle: muscle, type: "Assisted"))
+                known.insert(name)
+            }
+        }
 
         // Vrije-tekst-oefeningen uit historie en routines opnemen als "Overig"
         let usedInSets = (try? context.fetch(FetchDescriptor<SetEntry>()))?.map(\.exercise) ?? []
@@ -73,6 +87,13 @@ final class Exercise {
 
     private static let cardioSeed = ["Loopband", "Hardlopen", "Fietsen", "Hometrainer",
                                      "Roeimachine", "Crosstrainer", "Stairmaster", "Wandelen"]
+
+    /// De machines die gewicht van je áfhalen; het gelogde getal is de hulp.
+    private static let assistedSeed: [(String, String)] = [
+        ("Assisted Pull Up", "Rug"),
+        ("Assisted Chin Up", "Rug"),
+        ("Assisted Dip", "Triceps"),
+    ]
 
     private static let seed: [(String, String, String)] = [
         ("Bench Press", "Borst", "Barbell"),
@@ -109,10 +130,22 @@ final class Exercise {
     ]
 }
 
+extension LoadStyle {
+    /// Uit `Exercise.type`. Onbekend, leeg of een oefening die niet in de bibliotheek
+    /// staat = gewoon extern gewicht, precies zoals de app het altijd behandeld heeft.
+    init(type: String?) {
+        switch type {
+        case "Bodyweight": self = .bodyweight
+        case "Assisted": self = .assisted
+        default: self = .external
+        }
+    }
+}
+
 extension Array where Element == Exercise {
-    /// Bodyweight-oefening? Dan is het gewicht optioneel extra gewicht ("+kg").
-    func isBodyweight(_ name: String) -> Bool {
-        first { $0.name == name }?.type == "Bodyweight"
+    /// Telt het gelogde gewicht als last, als extra bovenop jezelf, of als hulp eraf?
+    func loadStyle(_ name: String) -> LoadStyle {
+        first { $0.name == name }?.loadStyle ?? .external
     }
     /// Barbell-oefening? Dan tonen we de schijven-per-kant.
     func isBarbell(_ name: String) -> Bool {
@@ -276,6 +309,11 @@ struct NewExerciseSheet: View {
                 Picker("Type", selection: $type) {
                     ForEach(Exercise.types, id: \.self) { Text($0) }
                 }
+                // Zonder dit is "Assisted" een woord in een lijst; het verandert wat het
+                // kg-veld betekent, dus dat hoort er meteen bij te staan.
+                if let hint = LoadStyle(type: type).inputHint {
+                    Text(hint).font(.caption).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Nieuwe oefening")
             .navigationBarTitleDisplayMode(.inline)
@@ -292,7 +330,7 @@ struct NewExerciseSheet: View {
                 if name.isEmpty { name = presetName }
             }
         }
-        .presentationDetents([.height(280)])
+        .presentationDetents([.height(320)])
     }
 
     private func create() {
@@ -408,6 +446,9 @@ struct ExerciseEditor: View {
             }
             Picker("Type", selection: $exercise.type) {
                 ForEach(Exercise.types, id: \.self) { Text($0) }
+            }
+            if let hint = exercise.loadStyle.inputHint {
+                Text(hint).font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 // Aantikken in plaats van een tweede Picker: het zijn er meestal drie of

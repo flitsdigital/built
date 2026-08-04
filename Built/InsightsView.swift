@@ -750,6 +750,7 @@ struct WeeklyReviewSheet: View {
     @Query private var proteins: [ProteinEntry]
     @Query private var sets: [SetEntry]
     @Query private var habits: [DayHabits]
+    @Query private var exercises: [Exercise]
     @State private var bounced = false
 
     private var cal: Calendar { .current }
@@ -776,8 +777,13 @@ struct WeeklyReviewSheet: View {
         }.count
     }
 
+    /// Rekent op wat je zélf tilt, zodat een assisted-oefening niet als beste lift van
+    /// de week bovenkomt omdat je er véél hulp bij nam.
     private var bestLift: (name: String, e1rm: Double)? {
-        weekSets.map { ($0.exercise, epley($0.weightKg, $0.reps)) }
+        let bw = weights.last?.kg ?? 0
+        return weekSets
+            .map { ($0.exercise, epley(recordLoad(kg: $0.weightKg, bodyweight: bw,
+                                                  style: exercises.loadStyle($0.exercise)), $0.reps)) }
             .max { $0.1 < $1.1 }
             .map { (name: $0.0, e1rm: $0.1) }
     }
@@ -848,6 +854,9 @@ struct ExerciseDetailView: View {
     let exercise: String
     @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
     @Query private var allExercises: [Exercise]
+    /// Voor assisted-oefeningen: records tellen daar op wat je zélf tilt, en dat is je
+    /// lichaamsgewicht min de hulp van de machine.
+    @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
     @AppStorage("exerciseChartMetric") private var metric = ChartMetric.topWeight
     @AppStorage("exerciseChartRange") private var range = ChartRange.year
 
@@ -864,11 +873,13 @@ struct ExerciseDetailView: View {
             }
         }
         var unit: String { self == .setVolume ? "kg volume" : "kg" }
-        func value(_ s: SetEntry) -> Double {
+        /// `load` is wat de set waard is: het gelogde gewicht, of bij hulp van de
+        /// machine wat je zelf tilt.
+        func value(load: Double, reps: Int) -> Double {
             switch self {
-            case .topWeight: s.weightKg
-            case .e1rm: epley(s.weightKg, s.reps)
-            case .setVolume: s.weightKg * Double(s.reps)
+            case .topWeight: load
+            case .e1rm: epley(load, reps)
+            case .setVolume: load * Double(reps)
             }
         }
     }
@@ -895,6 +906,20 @@ struct ExerciseDetailView: View {
     private var cal: Calendar { .current }
     private var sets: [SetEntry] { allSets.filter { $0.exercise == exercise } }
 
+    /// Hoe het gelogde gewicht van deze oefening telt.
+    private var style: LoadStyle { allExercises.loadStyle(exercise) }
+
+    /// Lichaamsgewicht rond een dag; valt terug op de laatste weging die er is.
+    private func bodyWeight(on d: Date) -> Double {
+        (allWeights.last { $0.date <= d } ?? allWeights.last)?.kg ?? 0
+    }
+
+    /// Waarop een record telt. Voor alles behalve assisted is dat het gelogde gewicht,
+    /// dus voor bestaande oefeningen verandert er niets aan deze cijfers.
+    private func load(_ s: SetEntry) -> Double {
+        recordLoad(kg: s.weightKg, bodyweight: bodyWeight(on: s.date), style: style)
+    }
+
     private var days: [Date] {
         Set(sets.map { cal.startOfDay(for: $0.date) }).sorted(by: >)
     }
@@ -904,7 +929,7 @@ struct ExerciseDetailView: View {
         let cutoff = range.days.flatMap { cal.date(byAdding: .day, value: -$0, to: .now) }
         let inRange = cutoff.map { c in sets.filter { $0.date >= c } } ?? sets
         return Dictionary(grouping: inRange) { cal.startOfDay(for: $0.date) }
-            .map { ($0.key, $0.value.map(metric.value).max() ?? 0) }
+            .map { ($0.key, $0.value.map { metric.value(load: load($0), reps: $0.reps) }.max() ?? 0) }
             .sorted { $0.0 < $1.0 }
     }
 
@@ -913,7 +938,7 @@ struct ExerciseDetailView: View {
     private var repMaxes: [(reps: Int, kg: Double)] {
         Dictionary(grouping: sets.filter { (1...12).contains($0.reps) }, by: \.reps)
             .compactMap { reps, group in
-                guard let best = group.map(\.weightKg).max(), best > 0 else { return nil }
+                guard let best = group.map(load).max(), best > 0 else { return nil }
                 return (reps, best)
             }
             .sorted { $0.reps < $1.reps }
@@ -925,16 +950,17 @@ struct ExerciseDetailView: View {
         var out: [UUID: [String]] = [:]
         var bestWeight = 0.0, bestE1rm = 0.0, bestVolume = 0.0
         for s in sets.sorted(by: { $0.date < $1.date }) {
-            let volume = s.weightKg * Double(s.reps)
+            let kg = load(s)
+            let volume = kg * Double(s.reps)
             var badges: [String] = []
             // Alleen records tégen een bestaande historie: anders krijgt de allereerste
             // set van een oefening alle drie de badges en zegt het niets.
-            if bestWeight > 0, s.weightKg > bestWeight + 0.01 { badges.append("Gewicht") }
-            if bestE1rm > 0, epley(s.weightKg, s.reps) > bestE1rm + 0.01 { badges.append("1RM") }
+            if bestWeight > 0, kg > bestWeight + 0.01 { badges.append("Gewicht") }
+            if bestE1rm > 0, epley(kg, s.reps) > bestE1rm + 0.01 { badges.append("1RM") }
             if bestVolume > 0, volume > bestVolume + 0.01 { badges.append("Volume") }
             if !badges.isEmpty { out[s.syncID] = badges }
-            bestWeight = max(bestWeight, s.weightKg)
-            bestE1rm = max(bestE1rm, epley(s.weightKg, s.reps))
+            bestWeight = max(bestWeight, kg)
+            bestE1rm = max(bestE1rm, epley(kg, s.reps))
             bestVolume = max(bestVolume, volume)
         }
         return out
@@ -942,14 +968,14 @@ struct ExerciseDetailView: View {
 
     private var tops: [(day: Date, kg: Double)] {
         Dictionary(grouping: sets) { cal.startOfDay(for: $0.date) }
-            .map { ($0.key, $0.value.map(\.weightKg).max() ?? 0) }
+            .map { ($0.key, $0.value.map(load).max() ?? 0) }
             .sorted { $0.0 < $1.0 }
     }
 
     /// Geschat 1RM (beste) per sessie.
     private var e1rmSessions: [(day: Date, kg: Double)] {
         Dictionary(grouping: sets) { cal.startOfDay(for: $0.date) }
-            .map { ($0.key, $0.value.map { epley($0.weightKg, $0.reps) }.max() ?? 0) }
+            .map { ($0.key, $0.value.map { epley(load($0), $0.reps) }.max() ?? 0) }
             .sorted { $0.0 < $1.0 }
     }
 
@@ -976,12 +1002,16 @@ struct ExerciseDetailView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent("Beste gewicht", value: "\(sets.map(\.weightKg).max()?.kgText ?? "—") kg 🏆")
-                LabeledContent("Geschat 1RM", value: "\(sets.map { epley($0.weightKg, $0.reps) }.max()?.kgText ?? "—") kg")
+                LabeledContent("Beste gewicht", value: "\(sets.map(load).max()?.kgText ?? "—") kg 🏆")
+                LabeledContent("Geschat 1RM", value: "\(sets.map { epley(load($0), $0.reps) }.max()?.kgText ?? "—") kg")
                 LabeledContent("Sessies", value: "\(days.count)")
                 LabeledContent("Totaal sets", value: "\(sets.count)")
             } footer: {
-                Text("Geschat 1RM via de Epley-formule: gewicht × (1 + reps ÷ 30).")
+                if style == .assisted {
+                    Text("De machine haalt gewicht van je af, dus records tellen hier op wat je zélf tilt: je lichaamsgewicht min de hulp. Minder hulp is vooruitgang.")
+                } else {
+                    Text("Geschat 1RM via de Epley-formule: gewicht × (1 + reps ÷ 30).")
+                }
             }
 
             if let record = allExercises.first(where: { $0.name == exercise }) {
@@ -1030,7 +1060,7 @@ struct ExerciseDetailView: View {
                 // wel. Vanaf de tweede sessie neemt de trendgrafiek hierboven het over.
                 Section {
                     Chart(Array(sets.enumerated()), id: \.offset) { index, set in
-                        BarMark(x: .value("Set", index + 1), y: .value("kg", set.weightKg))
+                        BarMark(x: .value("Set", index + 1), y: .value("kg", load(set)))
                             .annotation(position: .top) {
                                 Text("×\(set.reps)")
                                     .font(.caption2)
@@ -1093,7 +1123,7 @@ struct ExerciseDetailView: View {
                 let badges = prBadges
                 ForEach(days, id: \.self) { day in
                     let daySets = sets.filter { dayKey($0.date) == dayKey(day) }
-                    let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+                    let vol = Int(daySets.map { load($0) * Double($0.reps) }.reduce(0, +))
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(day.formatted(.dateTime.weekday(.wide).day().month()))
@@ -1107,7 +1137,7 @@ struct ExerciseDetailView: View {
                         // alleen dát er die dag een record viel.
                         ForEach(daySets, id: \.syncID) { set in
                             HStack(spacing: 6) {
-                                Text("\(set.weightKg.kgText)×\(set.reps)")
+                                Text(setNotation(kg: set.weightKg, reps: set.reps, style: style, seconds: set.seconds))
                                     .font(.footnote.monospacedDigit())
                                     .foregroundStyle(.secondary)
                                 ForEach(badges[set.syncID] ?? [], id: \.self) { badge in

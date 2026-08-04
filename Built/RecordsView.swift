@@ -5,8 +5,16 @@ import SwiftData
 struct RecordsView: View {
     @Query(sort: \SetEntry.date) private var sets: [SetEntry]
     @Query private var exercises: [Exercise]
+    /// Voor assisted-oefeningen: daar telt een record op wat je zélf tilt, en dat is je
+    /// lichaamsgewicht min de hulp.
+    @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
 
     private var cal: Calendar { .current }
+
+    /// Lichaamsgewicht rond een dag; valt terug op de laatste weging die er is.
+    private func bodyWeight(on d: Date) -> Double {
+        (weights.last { $0.date <= d } ?? weights.last)?.kg ?? 0
+    }
 
     private struct Record: Identifiable {
         let name: String
@@ -24,17 +32,24 @@ struct RecordsView: View {
         var out: [Record] = []
         // ponytail: cardio kent geen 1RM/gewicht — hoort niet op de PR-muur
         for (name, group) in Dictionary(grouping: sets, by: \.exercise) where typeOf[name] != "Cardio" {
-            let e1rm = group.map { epley($0.weightKg, $0.reps) }.max() ?? 0
-            let topWeight = group.map(\.weightKg).max() ?? 0
+            // Het getal waarop een record telt. Alleen bij assisted wijkt dat af van het
+            // gelogde gewicht: daar is minder hulp beter, dus telt wat je zelf tilt.
+            let style = LoadStyle(type: typeOf[name])
+            func load(_ s: SetEntry) -> Double {
+                recordLoad(kg: s.weightKg, bodyweight: bodyWeight(on: s.date), style: style)
+            }
+            func e1rmOf(_ s: SetEntry) -> Double { epley(load(s), s.reps) }
+            let e1rm = group.map(e1rmOf).max() ?? 0
+            let topWeight = group.map(load).max() ?? 0
             let byDay = Dictionary(grouping: group) { dayKey($0.date) }
-            let bestVolume = byDay.values.map { day in Int(day.map { $0.weightKg * Double($0.reps) }.reduce(0, +)) }.max() ?? 0
+            let bestVolume = byDay.values.map { day in Int(day.map { load($0) * Double($0.reps) }.reduce(0, +)) }.max() ?? 0
             // Recente PR? beste e1RM van de laatste sessie > alles ervoor, en die
             // sessie hoogstens 14 dagen oud (anders blijft de badge eeuwig staan).
             let days = byDay.keys.sorted()
             var recentPR = false
             if let last = days.last, days.count >= 2, dayKey(.now) - last <= 14 {
-                let lastBest = (byDay[last] ?? []).map { epley($0.weightKg, $0.reps) }.max() ?? 0
-                let before = group.filter { dayKey($0.date) < last }.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+                let lastBest = (byDay[last] ?? []).map(e1rmOf).max() ?? 0
+                let before = group.filter { dayKey($0.date) < last }.map(e1rmOf).max() ?? 0
                 recentPR = before > 0 && lastBest > before + 0.1
             }
             out.append(Record(name: name, muscle: muscleOf[name] ?? "Overig",

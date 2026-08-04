@@ -401,13 +401,13 @@ struct DayDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(setsByExercise, id: \.name) { group in
-                        let bw = exercises.isBodyweight(group.name)
+                        let style = exercises.loadStyle(group.name)
                         NavigationLink {
                             ExerciseDetailView(exercise: group.name)
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.name).font(.headline)
-                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
+                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, style: style, seconds: $0.seconds) }.joined(separator: "  "))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }

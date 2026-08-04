@@ -147,7 +147,7 @@ struct TrainingView: View {
         var typeOf: [String: String] = [:]
         var muscleOf: [String: String] = [:]
 
-        func isBodyweight(_ name: String) -> Bool { typeOf[name] == "Bodyweight" }
+        func style(_ name: String) -> LoadStyle { LoadStyle(type: typeOf[name]) }
         func isBarbell(_ name: String) -> Bool { typeOf[name] == "Barbell" }
         func isCardio(_ name: String) -> Bool { typeOf[name] == "Cardio" }
     }
@@ -237,6 +237,16 @@ struct TrainingView: View {
         history.byDay[dayKey(day)] ?? []
     }
 
+    /// Geschat 1RM waar een record op telt. Bij een assisted-oefening gaat dat over wat je
+    /// zélf tilt: het gelogde getal is daar de hulp, en méér hulp is geen record.
+    private func recordE1RM(kg: Double, reps: Int, style: LoadStyle) -> Double {
+        epley(recordLoad(kg: kg, bodyweight: bodyWeight, style: style), reps)
+    }
+
+    private func recordE1RM(_ s: SetEntry, _ history: HistoryIndex) -> Double {
+        recordE1RM(kg: s.weightKg, reps: s.reps, style: history.style(s.exercise))
+    }
+
     /// Dag met minstens één nieuw e1RM-record.
     private func isPRDay(_ day: Date, _ history: HistoryIndex) -> Bool {
         let start = cal.startOfDay(for: day)
@@ -249,10 +259,10 @@ struct TrainingView: View {
             } else {
                 best = (history.byExercise[s.exercise] ?? [])
                     .filter { $0.date < start }
-                    .map { epley($0.weightKg, $0.reps) }.max() ?? 0
+                    .map { recordE1RM($0, history) }.max() ?? 0
                 bestBefore[s.exercise] = best
             }
-            if best > 0, epley(s.weightKg, s.reps) > best + 0.1 { return true }
+            if best > 0, recordE1RM(s, history) > best + 0.1 { return true }
         }
         return false
     }
@@ -269,7 +279,7 @@ struct TrainingView: View {
     private func draft(for name: String, target: [Int]? = nil, repeated: Bool = false,
                        _ history: HistoryIndex) -> DraftExercise {
         let last = lastSession(for: name, history)
-        let bw = history.isBodyweight(name)
+        let style = history.style(name)
         let goalSets = target.map { max($0.first ?? 3, 1) }
         let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
         // Cardio: één blok met een duur. Doel-reps zijn hier minuten.
@@ -283,28 +293,44 @@ struct TrainingView: View {
         guard !last.isEmpty else {
             let n = goalSets ?? 3
             let reps = goalReps ?? 8
-            let tip = bw ? "Eerste keer — log je reps (extra gewicht is optioneel)."
-                         : "Eerste keer — kies een gewicht dat je \(reps) reps aankan."
+            let tip: String
+            switch style {
+            case .bodyweight: tip = "Eerste keer — log je reps (extra gewicht is optioneel)."
+            case .assisted: tip = "Eerste keer — kies hoeveel hulp de machine geeft."
+            case .external: tip = "Eerste keer — kies een gewicht dat je \(reps) reps aankan."
+            }
+            let start: Double = style == .bodyweight ? 0 : 20
             return DraftExercise(name: name, tip: tip,
-                                 sets: (0..<n).map { _ in DraftSet(kg: bw ? 0 : 20, reps: reps) })
+                                 sets: (0..<n).map { _ in DraftSet(kg: start, reps: reps) })
         }
-        let top = last.map(\.weightKg).max() ?? (bw ? 0 : 20)
+        // Beste set van vorige keer: normaal het zwaarste getal, bij hulp juist het laagste.
+        let kgs = last.map(\.weightKg)
+        let top = (style == .assisted ? kgs.min() : kgs.max()) ?? (style == .bodyweight ? 0 : 20)
         let allEnough = last.allSatisfy { $0.reps >= (goalReps ?? 8) }
+        // De volgende stap: zwaarder, of juist een stap minder hulp. Nooit onder nul —
+        // wie geen hulp meer nodig heeft hoort bij de gewone variant.
+        let next = style == .assisted ? max(top - 2.5, 0) : top + 2.5
         // Bodyweight progresseert op reps, niet op gewicht.
-        let tip = bw
-            ? "Zelfde, probeer 1 rep meer per set."
-            : (allEnough
-               ? "Vorige keer alles gehaald → vandaag \((top + 2.5).kgText) kg"
-               : "Zelfde gewicht, probeer 1 rep meer per set.")
+        let tip: String
+        switch style {
+        case .bodyweight:
+            tip = "Zelfde, probeer 1 rep meer per set."
+        case .assisted:
+            tip = allEnough ? "Vorige keer alles gehaald → vandaag \(next.kgText) kg hulp"
+                            : "Zelfde hulp, probeer 1 rep meer per set."
+        case .external:
+            tip = allEnough ? "Vorige keer alles gehaald → vandaag \(next.kgText) kg"
+                            : "Zelfde gewicht, probeer 1 rep meer per set."
+        }
         // Aantal sets uit het target (of het aantal van vorige keer), reps uit het target
         let count = goalSets ?? (repeated ? min(last.count, 3) : last.count)
         return DraftExercise(name: name, tip: tip, sets: (0..<count).map { i in
             let prev = i < last.count ? last[i] : last.last
-            let kg = bw ? top : (allEnough ? top + 2.5 : top)
-            let reps = goalReps ?? (bw ? min((prev?.reps ?? 8) + 1, 30)
-                                       : (allEnough ? 8 : min((prev?.reps ?? 8) + 1, 12)))
+            let kg = style == .bodyweight ? top : (allEnough ? next : top)
+            let reps = goalReps ?? (style == .bodyweight ? min((prev?.reps ?? 8) + 1, 30)
+                                                         : (allEnough ? 8 : min((prev?.reps ?? 8) + 1, 12)))
             return DraftSet(kg: kg, reps: reps,
-                            previous: prev.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) })
+                            previous: prev.map { setNotation(kg: $0.weightKg, reps: $0.reps, style: style, seconds: $0.seconds) })
         })
     }
 
@@ -336,8 +362,8 @@ struct TrainingView: View {
     private func lastSessionSummary(_ name: String, _ history: HistoryIndex) -> String? {
         let last = lastSession(for: name, history)
         guard !last.isEmpty else { return nil }
-        let bw = history.isBodyweight(name)
-        return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+        let style = history.style(name)
+        return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, style: style, seconds: $0.seconds) }.joined(separator: "  ")
     }
 
     private func restLabel(_ seconds: Int) -> String {
@@ -370,7 +396,7 @@ struct TrainingView: View {
     /// Beste geschat 1RM voor deze oefening vóór de huidige sessie.
     private func bestBefore(_ name: String, _ history: HistoryIndex) -> Double? {
         (history.byExercise[name] ?? []).filter { $0.date < startedAt }
-            .map { epley($0.weightKg, $0.reps) }.max()
+            .map { recordE1RM($0, history) }.max()
     }
 
     /// Nieuw geschat 1RM-record t.o.v. je historie én eerdere sets deze sessie?
@@ -378,15 +404,19 @@ struct TrainingView: View {
     /// Álle plekken van deze oefening tellen mee voor `sessionBest`: een record is een
     /// record, ook als je 'm in het eerste blok zette en nu in het tweede staat.
     private func isNewPR(exercise name: String, kg: Double, reps: Int, _ history: HistoryIndex) -> Bool {
-        let now = epley(kg, reps)
+        let style = history.style(name)
+        let now = recordE1RM(kg: kg, reps: reps, style: style)
         let historical = bestBefore(name, history) ?? 0
         let sessionBest = workout.filter { $0.name == name }.flatMap(\.sets)
-            .filter { $0.done && !$0.warmup }.map { epley($0.kg, $0.reps) }.max() ?? 0
+            .filter { $0.done && !$0.warmup }
+            .map { recordE1RM(kg: $0.kg, reps: $0.reps, style: style) }.max() ?? 0
         return now > max(historical, sessionBest) + 0.1 && historical > 0
     }
 
     private func prInfo(_ ex: DraftExercise, _ history: HistoryIndex) -> (new: Double, old: Double)? {
-        guard let doneMax = ex.sets.filter({ $0.done && !$0.warmup }).map({ epley($0.kg, $0.reps) }).max() else { return nil }
+        let style = history.style(ex.name)
+        guard let doneMax = ex.sets.filter({ $0.done && !$0.warmup })
+            .map({ recordE1RM(kg: $0.kg, reps: $0.reps, style: style) }).max() else { return nil }
         guard let prev = bestBefore(ex.name, history), doneMax > prev + 0.1 else { return nil }
         return (doneMax, prev)
     }
@@ -473,13 +503,18 @@ struct TrainingView: View {
     }
 
     /// Warming-up-sets vóór de werksets: ramp naar het eerste werkgewicht.
-    private func addWarmup(_ id: UUID) {
+    ///
+    /// Bij een assisted-oefening loopt die ramp de andere kant op: lichter beginnen is
+    /// daar juist méér hulp, dus de percentages gaan boven de 100%.
+    private func addWarmup(_ id: UUID, _ history: HistoryIndex) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
         let work = workout[i].sets.first { !$0.warmup }
         let topKg = work?.kg ?? 20
         let reps = work?.reps ?? 8
-        let ramp: [(Double, Int)] = [(0.4, min(reps + 4, 10)), (0.6, max(reps - 2, 3)), (0.8, max(reps - 4, 2))]
-        let warmups = ramp.map { pct, r in
+        let assisted = history.style(workout[i].name) == .assisted
+        let steps: [Double] = assisted ? [1.6, 1.4, 1.2] : [0.4, 0.6, 0.8]
+        let repCounts = [min(reps + 4, 10), max(reps - 2, 3), max(reps - 4, 2)]
+        let warmups = zip(steps, repCounts).map { pct, r in
             DraftSet(kg: (topKg * pct / 2.5).rounded() * 2.5, reps: r, warmup: true)
         }
         withAnimation(.snappy(duration: 0.25)) { workout[i].sets.insert(contentsOf: warmups, at: 0) }
@@ -608,9 +643,9 @@ struct TrainingView: View {
         var totals: [String: Double] = [:]
         for ex in workout {
             let m = muscleOf[ex.originalName ?? ex.name] ?? muscleOf[ex.name] ?? "Overig"
-            let bw = history.isBodyweight(ex.name)
+            let style = history.style(ex.name)
             let vol = ex.sets.filter { $0.done && !$0.warmup }
-                .map { liftLoad(kg: $0.kg, bodyweight: bodyWeight, bodyweightExercise: bw) * Double($0.reps) }.reduce(0, +)
+                .map { liftLoad(kg: $0.kg, bodyweight: bodyWeight, style: style) * Double($0.reps) }.reduce(0, +)
             if vol > 0 { totals[m, default: 0] += vol }
         }
         guard let maxV = totals.values.max(), maxV > 0 else { return [:] }
@@ -630,7 +665,7 @@ struct TrainingView: View {
             !cal.isDateInToday(day) && sets(on: day, history).contains { names.contains($0.exercise) }
         }
         let previousVolume = previousDay.map { day in
-            Int(sets(on: day, history).map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: history.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+            Int(sets(on: day, history).map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, style: history.style($0.exercise)) * Double($0.reps) }.reduce(0, +))
         }
         summary = WorkoutSummary(
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
@@ -642,8 +677,8 @@ struct TrainingView: View {
             lines: workout.compactMap { ex in
                 let done = ex.sets.filter { $0.done && !$0.warmup }
                 guard !done.isEmpty else { return nil }
-                let bw = history.isBodyweight(ex.name)
-                return "\(ex.name): " + done.map { setNotation(kg: $0.kg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+                let style = history.style(ex.name)
+                return "\(ex.name): " + done.map { setNotation(kg: $0.kg, reps: $0.reps, style: style, seconds: $0.seconds) }.joined(separator: "  ")
             }
         )
         withAnimation(.snappy(duration: 0.3)) {
@@ -680,9 +715,9 @@ struct TrainingView: View {
     private func volume(_ history: HistoryIndex) -> Int {
         var total = 0.0
         for ex in workout {
-            let bw = history.isBodyweight(ex.name)
+            let style = history.style(ex.name)
             for s in ex.sets where s.done && !s.warmup {
-                total += liftLoad(kg: s.kg, bodyweight: bodyWeight, bodyweightExercise: bw) * Double(s.reps)
+                total += liftLoad(kg: s.kg, bodyweight: bodyWeight, style: style) * Double(s.reps)
             }
         }
         return Int(total)
@@ -1064,8 +1099,8 @@ struct TrainingView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(byExercise(daySets), id: \.name) { group in
-                    let bw = history.isBodyweight(group.name)
-                    Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
+                    let style = history.style(group.name)
+                    Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, style: style, seconds: $0.seconds) }.joined(separator: "  "))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1260,12 +1295,18 @@ struct TrainingView: View {
 
     private func activityTip(for name: String, currentKg: Double, _ history: HistoryIndex) -> String? {
         let last = lastSession(for: name, history)
-        guard let best = last.max(by: { epley($0.weightKg, $0.reps) < epley($1.weightKg, $1.reps) }) else { return nil }
-        let prevText = "Vorige keer: \(best.weightKg.kgText) kg × \(best.reps)"
-        let prevE1RM = epley(best.weightKg, best.reps)
-        if currentKg > best.weightKg {
-            // Epley omgekeerd: hoeveel reps op dit gewicht nodig zijn om je oude 1RM te kloppen
-            let reps = max(Int(30 * (prevE1RM / currentKg - 1)) + 1, 1)
+        let style = history.style(name)
+        guard let best = last.max(by: { recordE1RM($0, history) < recordE1RM($1, history) }) else { return nil }
+        let prevText = "Vorige keer: " + setNotation(kg: best.weightKg, reps: best.reps,
+                                                     style: style, seconds: best.seconds)
+        // Alles hieronder rekent op wat je zélf tilt: bij hulp van de machine is een
+        // hoger gelogd getal juist een lichtere set.
+        let prevE1RM = recordE1RM(best, history)
+        let nowLoad = recordLoad(kg: currentKg, bodyweight: bodyWeight, style: style)
+        let prevLoad = recordLoad(kg: best.weightKg, bodyweight: bodyWeight, style: style)
+        if nowLoad > prevLoad, nowLoad > 0 {
+            // Epley omgekeerd: hoeveel reps op deze last nodig zijn om je oude 1RM te kloppen
+            let reps = max(Int(30 * (prevE1RM / nowLoad - 1)) + 1, 1)
             return "\(prevText) — met \(currentKg.kgText) kg is \(reps)+ reps een PR"
         }
         return prevText
@@ -1276,13 +1317,13 @@ struct TrainingView: View {
     @ViewBuilder private func exerciseSection(_ exercise: Binding<DraftExercise>, _ history: HistoryIndex,
                                               _ pastNotes: [DayHabits]) -> some View {
         let ex = exercise.wrappedValue
-        let bodyweight = history.isBodyweight(ex.name)
+        let style = history.style(ex.name)
         let cardio = history.isCardio(ex.name)
         let numbers = setNumbers(ex.sets)
         // Beide closures één `some View`-expressie: anders kiest de compiler de
         // TableRow-variant van Section en klapt de type-inferentie eruit.
         Section {
-            exerciseRows(exercise, history, pastNotes, bodyweight: bodyweight, cardio: cardio, numbers: numbers)
+            exerciseRows(exercise, history, pastNotes, style: style, cardio: cardio, numbers: numbers)
         } header: {
             exerciseHeader(exercise, history, cardio: cardio)
         }
@@ -1291,7 +1332,7 @@ struct TrainingView: View {
     /// De rijen van één oefening: notitie, kolomkoppen, sets, schijven en 'set toevoegen'.
     @ViewBuilder private func exerciseRows(_ exercise: Binding<DraftExercise>, _ history: HistoryIndex,
                                            _ pastNotes: [DayHabits],
-                                           bodyweight: Bool, cardio: Bool, numbers: [UUID: Int]) -> some View {
+                                           style: LoadStyle, cardio: Bool, numbers: [UUID: Int]) -> some View {
         let ex = exercise.wrappedValue
         if let previousNote = lastNote(for: ex.name, pastNotes) {
             Label("Vorige keer: \u{201C}\(previousNote)\u{201D}", systemImage: "text.quote")
@@ -1308,7 +1349,7 @@ struct TrainingView: View {
             if cardio {
                 Text("MINUTEN").frame(width: 56)
             } else {
-                Text(bodyweight ? "+KG" : "KG").frame(width: 56)
+                Text(style.kgLabel.uppercased()).frame(width: 56)
                 Text("REPS").frame(width: 48)
             }
             Spacer()
@@ -1321,7 +1362,7 @@ struct TrainingView: View {
 
         ForEach(exercise.sets) { $set in
             setRow($set, number: numbers[set.id] ?? 0, exercise: ex.name, exerciseID: ex.id,
-                   bodyweight: bodyweight, cardio: cardio, history: history,
+                   style: style, cardio: cardio, history: history,
                    duplicate: { duplicateSet(exercise: ex.id, set: set.id) })
         }
         .onDelete { offsets in
@@ -1409,7 +1450,7 @@ struct TrainingView: View {
                     if ex.sets.contains(where: \.warmup) {
                         Button("Warming-up weghalen", systemImage: "flame") { removeWarmup(ex.id) }
                     } else {
-                        Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
+                        Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id, history) }
                     }
                 }
                 Menu("Rust: \(restLabel(ex.restSeconds ?? restSeconds))", systemImage: "timer") {
@@ -1458,7 +1499,7 @@ struct TrainingView: View {
     /// `exercise` is de naam (voor de opgeslagen set en het eiland), `exerciseID` de plek
     /// in de training — rust en superset horen bij de plek, niet bij de naam.
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String,
-                        exerciseID: DraftExercise.ID, bodyweight: Bool,
+                        exerciseID: DraftExercise.ID, style: LoadStyle,
                         cardio: Bool, history: HistoryIndex, duplicate: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Menu {
@@ -1505,7 +1546,7 @@ struct TrainingView: View {
                     .opacity(set.wrappedValue.done ? 0.55 : 1)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
-                NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "+kg" : "kg",
+                NumericField(value: set.kg, decimal: true, placeholder: style.kgLabel,
                              focus: $focusedSet, id: set.wrappedValue.id,
                              disabled: set.wrappedValue.done)
                     .frame(width: 56)
@@ -1746,7 +1787,7 @@ struct SessionDetailView: View {
     }
 
     private var volume: Int {
-        Int(daySets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+        Int(daySets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), style: exercises.loadStyle($0.exercise)) * Double($0.reps) }.reduce(0, +))
     }
 
     private var durationText: String {
@@ -1766,17 +1807,22 @@ struct SessionDetailView: View {
     private var volumeDelta: Int? {
         guard let prev = previousDay else { return nil }
         let pv = Int(allSets.filter { dayKey($0.date) == dayKey(prev) }
-            .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+            .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev), style: exercises.loadStyle($0.exercise)) * Double($0.reps) }.reduce(0, +))
         return pv > 0 ? volume - pv : nil
     }
 
-    /// Oefeningen met een nieuw e1RM-record deze dag t.o.v. alles ervoor.
+    /// Oefeningen met een nieuw e1RM-record deze dag t.o.v. alles ervoor. Rekent op wat
+    /// je zélf tilt, zodat méér hulp van de machine niet als record binnenkomt.
     private var prs: [(exercise: String, new: Double, old: Double)] {
         let start = cal.startOfDay(for: day)
         return byExercise.compactMap { group in
-            let best = group.sets.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+            let style = exercises.loadStyle(group.name)
+            func e1rm(_ s: SetEntry) -> Double {
+                epley(recordLoad(kg: s.weightKg, bodyweight: bodyWeight(on: s.date), style: style), s.reps)
+            }
+            let best = group.sets.map(e1rm).max() ?? 0
             let before = allSets.filter { $0.exercise == group.name && $0.date < start }
-                .map { epley($0.weightKg, $0.reps) }.max() ?? 0
+                .map(e1rm).max() ?? 0
             return best > before + 0.1 && before > 0 ? (group.name, best, before) : nil
         }
     }
@@ -1795,8 +1841,8 @@ struct SessionDetailView: View {
         workoutShareText(title: "Training van \(day.formatted(.dateTime.weekday(.wide).day().month()))",
                          duration: durationText, volume: volume, sets: daySets.count,
                          lines: byExercise.map { group in
-                             let bw = exercises.isBodyweight(group.name)
-                             return "\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+                             let style = exercises.loadStyle(group.name)
+                             return "\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, style: style, seconds: $0.seconds) }.joined(separator: "  ")
                          },
                          prs: prs)
     }
@@ -1847,12 +1893,12 @@ struct SessionDetailView: View {
                                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
                                 Text("min").font(.footnote).foregroundStyle(.secondary)
                             } else {
-                                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "+kg" : "kg",
+                                NumericField(value: kg(set), decimal: true, placeholder: exercises.loadStyle(group.name).kgLabel,
                                              focus: $focused, id: nil, disabled: false)
                                     .frame(width: 64)
                                     .padding(.vertical, 6)
                                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
-                                Text(exercises.isBodyweight(group.name) ? "+kg" : "kg").font(.footnote).foregroundStyle(.secondary)
+                                Text(exercises.loadStyle(group.name).kgLabel).font(.footnote).foregroundStyle(.secondary)
                                 NumericField(value: reps(set), decimal: false, placeholder: "reps",
                                              focus: $focused, id: nil, disabled: false)
                                     .frame(width: 52)
