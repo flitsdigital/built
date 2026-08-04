@@ -32,6 +32,26 @@ struct EpleyTests {
     }
 }
 
+/// Ondersteund gewicht (assisted dips, machine pull-up) is negatief extra gewicht. Het
+/// mag niet als "×8" wegvallen in de notatie en niet als negatief volume doorwerken.
+@Suite("Ondersteund gewicht")
+struct AssistedTests {
+    @Test("Notatie toont het teken")
+    func notatie() {
+        #expect(setNotation(kg: -40, reps: 8, bodyweight: true) == "-40×8")
+        #expect(setNotation(kg: 5, reps: 8, bodyweight: true) == "+5×8")
+        #expect(setNotation(kg: 0, reps: 8, bodyweight: true) == "×8")
+        #expect(setNotation(kg: -40, reps: 8, bodyweight: false) == "-40×8")
+    }
+
+    @Test("Volume telt de ondersteuning eraf, maar nooit onder nul")
+    func volume() {
+        #expect(liftLoad(kg: -40, bodyweight: 80, bodyweightExercise: true) == 40)
+        #expect(liftLoad(kg: 10, bodyweight: 80, bodyweightExercise: true) == 90)
+        #expect(liftLoad(kg: -200, bodyweight: 80, bodyweightExercise: true) == 0)
+    }
+}
+
 /// De schijvenberekening staat naast de setinvoer: als die te veel schijven noemt, sta je
 /// met een te zware stang.
 @Suite("Schijven per kant")
