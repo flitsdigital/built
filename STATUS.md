@@ -19,10 +19,11 @@ bestaat er geen enkele modus meer waarin één kant "de waarheid" is:
 - Een "volledige push" is een volledige *delta*: alle rijen mee, zonder tombstones voor wat
   er niet in zit.
 
-Er zijn geen sync-knoppen meer in Profiel. De sync heeft geen keuze meer voor te leggen —
-"wie wint" bestaat niet — dus valt er niets te kiezen. Wat overblijft is een statusregel,
-plus een banner op het dashboard die verschijnt zodra er meer dan een dag werk alleen op
-dit toestel staat. Die banner is de enige handmatige trigger die er nog is.
+Er zijn geen sync-knoppen meer. De sync heeft geen keuze meer voor te leggen — "wie wint"
+bestaat niet — dus valt er niets te kiezen. Wat overblijft is een statusregel onder
+Profiel → Account (met een waarschuwingsstipje op de hub-rij zelf), plus een banner op het
+dashboard die verschijnt zodra er meer dan een dag werk alleen op dit toestel staat. Die
+banner is de enige handmatige trigger die er nog is.
 
 **Een account is verplicht en heeft altijd een e-mailadres.** Anoniem inloggen bestaat niet
 meer; de onboarding laat je er niet langs zonder account. De zeven anonieme accounts uit
