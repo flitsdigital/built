@@ -42,6 +42,23 @@ final class SyncStatus {
     var lastError: String?
     var lastSyncAt: Date?
 
+    /// Sinds wanneer er lokale wijzigingen zijn die nergens anders staan. nil = de server
+    /// heeft alles. Overleeft een herstart: een toestel dat dagen niet pusht moet dat
+    /// blijven melden, ook als je de app tussendoor sluit.
+    var pendingSince: Date? {
+        didSet {
+            UserDefaults.standard.set(pendingSince?.timeIntervalSinceReferenceDate ?? 0,
+                                      forKey: Self.pendingKey)
+        }
+    }
+
+    private static let pendingKey = "syncPendingSince"
+
+    init() {
+        let stamp = UserDefaults.standard.double(forKey: Self.pendingKey)
+        pendingSince = stamp > 0 ? Date(timeIntervalSinceReferenceDate: stamp) : nil
+    }
+
     /// Laatste geslaagde sync, ook van vóór deze app-start: `lastSyncAt` begint bij
     /// elke start op nil, de timestamp in UserDefaults overleeft dat.
     var lastSuccess: Date? {
@@ -50,24 +67,32 @@ final class SyncStatus {
         return stamp > 0 ? Date(timeIntervalSinceReferenceDate: stamp) : nil
     }
 
-    /// Langer dan een dag geleden gesynct. Een mislukte push zet geen foutmelding als
-    /// het toestel simpelweg offline is, dus dit is vaak het enige signaal dat er iets
-    /// klemt. Nooit gesynct telt niet mee — dat is gewoon een verse install.
+    /// Langer dan een dag werk dat alleen op dit toestel bestaat. Bewust gemeten aan de
+    /// oudste openstaande wijziging en niet aan "laatst gesynct": een week zonder iets
+    /// invoeren is geen probleem, een week met invoer die nergens aankomt wel.
+    ///
+    /// Een mislukte push zet geen foutmelding als het toestel simpelweg offline is, dus
+    /// dit is vaak het enige signaal dat er iets klemt.
     var isStale: Bool {
-        guard let lastSuccess else { return false }
-        return Date.now.timeIntervalSince(lastSuccess) > 24 * 60 * 60
+        guard let pendingSince else { return false }
+        return Date.now.timeIntervalSince(pendingSince) > 24 * 60 * 60
     }
 }
 
-// Supabase is de source of truth: de app pusht wijzigingen automatisch en een lege
-// install haalt alles op.
+// Supabase bewaart wat het toestel heeft: de app pusht wijzigingen automatisch en een
+// lege install haalt alles op.
 //
-// Het protocol is delta: `sync_push_v2` upsert alleen de rijen die meegestuurd worden en
-// `sync_pull(since)` geeft alleen terug wat sindsdien gewijzigd is. Beide gaan via één
-// RPC, dus een push blijft één transactie — netwerkuitval laat nooit een halve staat
-// achter. Als de app niet zeker weet wélke rijen gewijzigd zijn (koude start met
-// openstaande wijzigingen), valt hij terug op een volledige push: dan is dit toestel de
-// waarheid, precies zoals het oude protocol deed.
+// Het protocol is delta én uitsluitend samenvoegend. `sync_push_v2` upsert alleen de
+// rijen die meegestuurd worden — een rij die de payload niet noemt blijft staan — en de
+// conflictregel (`t.updated_at <= excluded.updated_at`) zorgt dat een oudere versie een
+// nieuwere nooit overschrijft. `sync_pull(since)` geeft alleen terug wat sindsdien
+// gewijzigd is, en wordt lokaal op `syncID` samengevoegd. Beide gaan via één RPC, dus een
+// push blijft één transactie — netwerkuitval laat nooit een halve staat achter.
+//
+// Wat hier bewust níet meer bestaat (#42): een modus waarin één kant "de waarheid" is.
+// Divergentie tussen toestel en server wordt opgelost door samen te voegen, nooit door te
+// wissen. Weet de app niet wélke rijen gewijzigd zijn (koude start met openstaande
+// wijzigingen), dan gaat álles mee als één grote delta — dat is duur, niet gevaarlijk.
 @MainActor
 enum Sync {
     // MARK: - Rijen (kolomnamen = snake_case zoals in Postgres)
@@ -202,7 +227,6 @@ enum Sync {
 
     private struct PushParams: Encodable, Sendable {
         let payload: Payload
-        let full_replace: Bool
     }
 
     /// Antwoord van `sync_pull`. `server_time` blijft een string — die gaat ongewijzigd
@@ -221,6 +245,13 @@ enum Sync {
         var scales: [ScaleRow] = []
         var customHabits: [CustomHabitRow] = []
         var habitLogs: [HabitLogRow] = []
+
+        /// Niets gewijzigd sinds het anker — het normale antwoord op een dagelijkse start.
+        var isEmpty: Bool {
+            profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
+                && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
+                && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty
+        }
     }
 
     private struct PullParams: Encodable, Sendable { let since: String? }
@@ -387,12 +418,6 @@ enum Sync {
 
     // MARK: - Push
 
-    /// Volledige push: dit toestel is de waarheid. Wat de server heeft en dit toestel niet,
-    /// wordt daar als verwijderd gemarkeerd. Dit is wat "Sync nu" doet.
-    static func push(_ context: ModelContext) async throws {
-        try await pushFull(context, skipIfUnchanged: false)
-    }
-
     private static func pushFull(_ context: ModelContext, skipIfUnchanged: Bool) async throws {
         _ = try await userID() // geldige sessie; zonder account komt niemand hier
         // Vóór het verzamelen, want alles wat ná dit moment binnenkomt zit niet in de
@@ -410,14 +435,13 @@ enum Sync {
         }
         guard client != nil else { return }
         do {
-            try await send(p, fullReplace: true)
+            try await send(p)
         } catch {
-            SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
+            SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
             throw error
         }
         lastPushedHash = h
         lastFullPush = .now
-        pushAllowed = true
         finishPush(upTo: cutoff, deletions: p.deletions)
     }
 
@@ -431,9 +455,9 @@ enum Sync {
         guard client != nil else { return false }
         guard !p.isEmpty else { return false }
         do {
-            try await send(p, fullReplace: false)
+            try await send(p)
         } catch {
-            SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
+            SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
             throw error
         }
         // De vingerafdruk hoort bij de volledige staat en klopt na een delta niet meer.
@@ -455,6 +479,9 @@ enum Sync {
         isClean = changes.isEmpty && deletions.isEmpty
         dirty = !isClean
         deltaValid = true
+        // Alles weg = niets staat nog alleen hier. Bleef er iets liggen (binnengekomen
+        // tijdens de push), dan begint de klok voor dát werk nu pas.
+        SyncStatus.shared.pendingSince = isClean ? nil : .now
     }
 
     private static func finishPush(upTo cutoff: Date, deletions sent: [DeletionRow]) {
@@ -486,9 +513,9 @@ enum Sync {
         set { UserDefaults.standard.set(!newValue, forKey: gzipDisabledKey) }
     }
 
-    private static func send(_ payload: Payload, fullReplace: Bool) async throws {
+    private static func send(_ payload: Payload) async throws {
         guard let db = client else { return }
-        let params = PushParams(payload: payload, full_replace: fullReplace)
+        let params = PushParams(payload: payload)
 
         var compressionRejected = false
         if gzipEnabled, let body = try await gzipped(params) {
@@ -538,10 +565,12 @@ enum Sync {
 
     // MARK: - Pull
 
-    /// `incremental` haalt alleen op wat sinds de vorige pull gewijzigd is en laat lokale
-    /// data die de server nog niet kent staan — dat is wat een tweede toestel mogelijk
-    /// maakt. Zonder anker (of expliciet volledig) wint de server en wordt het toestel
-    /// opnieuw opgebouwd; dat is wat "Data ophalen van server" doet.
+    /// Haalt de serverstaat op en voegt 'm samen met wat hier staat. `incremental` beperkt
+    /// dat tot wat sinds de vorige pull gewijzigd is; zonder anker komt alles mee.
+    ///
+    /// Beide paden mergen op `syncID` — er wordt nooit iets lokaals gewist omdat de server
+    /// het niet kent. Dat was de destructieve variant achter "Data ophalen van server", en
+    /// precies die wiste vijf dagen werk (#42).
     static func pull(_ context: ModelContext, incremental: Bool = false) async throws {
         _ = try await userID()
         guard let db = client else { return }
@@ -550,70 +579,44 @@ enum Sync {
         let response: PullResponse = try await db.rpc("sync_pull", params: PullParams(since: since))
             .execute().value
 
-        if since == nil {
-            guard let profileRow = response.profile else {
-                pushAllowed = true // server is leeg → pushen kan geen data vernietigen
-                return
-            }
-            try applyFull(response, profile: profileRow, context)
-            lastPushedHash = try await fingerprint(collect(context))
-        } else {
-            try applyIncremental(response, context)
-            lastPushedHash = nil
-        }
-
+        try applyMerge(response, context)
         pullAnchor = response.server_time
-        // Wat er nu op het toestel staat komt van de server; een push zou dezelfde data
-        // terugsturen. Mocht er een save-melding na deze regel binnenvallen, dan levert dat
-        // hooguit één overbodige push op — geen dataverlies.
-        //
-        // Hier bewust géén `clearSynced`: de rijen die `applyFull`/`applyIncremental` zelf
-        // wegschrijven komen via dezelfde observer binnen, en een tijdstempel kan die niet
-        // onderscheiden van een set die je tijdens het ophalen afvinkte. Zie #31.
-        changes.removeAll()
-        dirty = false
-        isClean = true
-        deltaValid = true
-        pushAllowed = true
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = .now
         UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
-    }
 
-    /// Server wint: wissen en terugzetten in één transactie, zodat een force-quit er
-    /// middenin de oude lokale staat laat staan i.p.v. een half gevulde database.
-    private static func applyFull(_ r: PullResponse, profile profileRow: ProfileRow,
-                                  _ context: ModelContext) throws {
-        try context.transaction {
-            try wipeLocal(context)
+        // Bracht de pull niets, dan heeft `applyMerge` ook niets geschreven en klopt de
+        // delta-boekhouding nog precies. Dit is het normale antwoord bij elke app-start.
+        guard !response.isEmpty else { return }
 
-            let profile = Profile(name: profileRow.name, age: profileRow.age, heightCm: profileRow.height_cm,
-                                  startWeight: profileRow.start_weight, goalWeight: profileRow.goal_weight,
-                                  goalDate: profileRow.goal_date, trainingsPerWeek: profileRow.trainings_per_week)
-            apply(profileRow, to: profile)
-            context.insert(profile)
-
-            for x in r.weights { context.insert(make(x)) }
-            for x in r.proteins { context.insert(make(x)) }
-            for x in r.sets { context.insert(make(x)) }
-            for x in r.habits { context.insert(make(x)) }
-            for x in r.routines { context.insert(make(x)) }
-            for x in r.meals { context.insert(make(x)) }
-            for x in r.foods { context.insert(make(x)) }
-            for x in r.exercises { context.insert(make(x)) }
-            for x in r.scales { context.insert(make(x)) }
-            for x in r.customHabits { context.insert(make(x)) }
-            for x in r.habitLogs { context.insert(make(x)) }
-        }
+        // Wél iets binnengekregen: dan kan dit toestel rijen hebben die de server níet
+        // kent (en andersom). Eén volledige push erachteraan laat beide kanten
+        // convergeren — duur, maar het is de enige manier waarop niemand iets kwijtraakt.
+        //
+        // De losse identifiers zijn daarvoor niets waard: de rijen die `applyMerge` zelf
+        // wegschrijft komen via dezelfde observer binnen, en een tijdstempel kan die niet
+        // onderscheiden van een set die je tijdens het ophalen afvinkte (#31).
+        lastPushedHash = nil
+        changes.removeAll()
+        deltaValid = false
+        markDirty()
     }
 
     /// Samenvoegen op `syncID`: bestaande rij bijwerken, onbekende toevoegen, tombstone
-    /// lokaal verwijderen. Geen `wipeLocal` — lokale data die de server nog niet kent
-    /// blijft staan.
-    private static func applyIncremental(_ r: PullResponse, _ context: ModelContext) throws {
+    /// lokaal verwijderen. Lokale data die de server nog niet kent blijft staan.
+    private static func applyMerge(_ r: PullResponse, _ context: ModelContext) throws {
         try context.transaction {
-            if let p = r.profile, let local = try context.fetch(FetchDescriptor<Profile>()).first {
-                apply(p, to: local)
+            if let p = r.profile {
+                if let local = try context.fetch(FetchDescriptor<Profile>()).first {
+                    apply(p, to: local)
+                } else {
+                    // Verse install: er is nog geen profiel om in te gieten.
+                    let new = Profile(name: p.name, age: p.age, heightCm: p.height_cm,
+                                      startWeight: p.start_weight, goalWeight: p.goal_weight,
+                                      goalDate: p.goal_date, trainingsPerWeek: p.trainings_per_week)
+                    apply(p, to: new)
+                    context.insert(new)
+                }
             }
             try merge(r.weights, WeightEntry.self, context) { apply($0, to: $1) }
             try merge(r.proteins, ProteinEntry.self, context) { apply($0, to: $1) }
@@ -729,25 +732,6 @@ enum Sync {
         m.name = r.name; m.date = r.date
     }
 
-    private static func make(_ r: WeightRow) -> WeightEntry { fresh(WeightEntry.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: ProteinRow) -> ProteinEntry { fresh(ProteinEntry.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: SetRow) -> SetEntry { fresh(SetEntry.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: HabitsRow) -> DayHabits { fresh(DayHabits.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: RoutineRow) -> Routine { fresh(Routine.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: MealRow) -> Meal { fresh(Meal.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: FoodRow) -> FoodProduct { fresh(FoodProduct.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: ExerciseRow) -> Exercise { fresh(Exercise.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: ScaleRow) -> Scale { fresh(Scale.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: CustomHabitRow) -> CustomHabit { fresh(CustomHabit.self, r.id) { apply(r, to: $0) } }
-    private static func make(_ r: HabitLogRow) -> HabitLog { fresh(HabitLog.self, r.id) { apply(r, to: $0) } }
-
-    private static func fresh<T: SyncedRecord>(_ type: T.Type, _ id: UUID, _ fill: (T) -> Void) -> T {
-        let model = T.blank()
-        model.syncID = id
-        fill(model)
-        return model
-    }
-
     // MARK: - Export en wissen
 
     /// Volledige data als JSON — back-up/portabiliteit los van de server.
@@ -759,6 +743,8 @@ enum Sync {
         return s
     }
 
+    /// Het toestel leegmaken. Nog maar één aanroeper: uitloggen. De sync gebruikt dit sinds
+    /// #42 niet meer — een pull voegt samen en wist nooit.
     private static func wipeLocal(_ context: ModelContext) throws {
         try context.delete(model: Profile.self)
         try context.delete(model: WeightEntry.self)
@@ -779,10 +765,10 @@ enum Sync {
     /// gaan botsen. Je data blijft op je account staan; opnieuw inloggen haalt 'm terug.
     static func signOut(context: ModelContext) async {
         try? await client?.auth.signOut()
-        pushAllowed = false
         resetSyncState()
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = nil
+        SyncStatus.shared.pendingSince = nil // toestel is leeg; er klemt niets meer
         UserDefaults.standard.removeObject(forKey: "lastSync")
         try? wipeLocal(context)
     }
@@ -801,39 +787,46 @@ enum Sync {
         retryPushAfter = nil
     }
 
-    // MARK: - Bootstrap: bepaal veilig of auto-push mag
+    // MARK: - Bootstrap: haal op wat er nog niet is
 
-    /// Voorkomt dat een verse (bijna lege) install de server overschrijft.
+    /// Bij de start ophalen wat elders is gebeurd, en samenvoegen.
+    ///
+    /// Hier stond een vergelijking van `start_date` die bij een verschil de push stilzette
+    /// en naar "Data ophalen van server" verwees. Beide zijn weg (#42): een profielverschil
+    /// betekent hooguit dat er ooit een tweede identiteit is geweest, en dat los je op door
+    /// samen te voegen. De push stilzetten maakte het verschil alleen groter — vijf dagen
+    /// lang, zonder dat iemand het zag.
     static func bootstrap(_ context: ModelContext) async {
         guard isConfigured, hasSession else { return } // uitgelogd = niets te syncen, geen foutmelding
         do {
             let uid = try await userID()
             let serverProfiles: [ProfileRow] = try await client!.from("profiles").select().eq("user_id", value: uid).execute().value
-            let localProfile = try context.fetch(FetchDescriptor<Profile>()).first
-
-            if serverProfiles.isEmpty {
-                pushAllowed = true
-            } else if localProfile == nil {
-                try await pull(context)
-            } else if abs(localProfile!.startDate.timeIntervalSince(serverProfiles[0].start_date)) < 1 {
-                pushAllowed = true // zelfde profiel-lijn → veilig
-                // Wijzigingen van een ander toestel ophalen. Incrementeel, dus lokale data
-                // die de server nog niet kent blijft staan.
-                if pullAnchor != nil { try await pull(context, incremental: true) }
-            } else {
-                pushAllowed = false
-                SyncStatus.shared.lastError = "De server bevat andere data dan dit toestel. Kies in Profiel: 'Data ophalen van server' (server wint) of 'Sync nu' (dit toestel wint)."
-            }
+            guard !serverProfiles.isEmpty else { return } // lege server; de eerste push vult 'm
+            let hasLocalProfile = try context.fetch(FetchDescriptor<Profile>()).first != nil
+            // Geen lokaal profiel of nooit eerder gepulld → alles ophalen. Anders de delta.
+            try await pull(context, incremental: hasLocalProfile && pullAnchor != nil)
         } catch {
-            SyncStatus.shared.lastError = "Sync-check mislukt: \(error.localizedDescription)"
+            SyncStatus.shared.lastError = "Sync-check mislukt: \(message(for: error))"
         }
     }
 
     // MARK: - Account (e-mail + wachtwoord of Google)
 
-    static var currentEmail: String? { client?.auth.currentSession?.user.email }
+    static var currentEmail: String? {
+        client?.auth.currentSession?.user.email.flatMap { $0.isEmpty ? nil : $0 }
+    }
     /// Actieve sessie? Na registreren met e-mailbevestiging-aan is die er nog niet.
     static var hasSession: Bool { client?.auth.currentSession != nil }
+
+    /// Voor de gebruiker leesbare fout. "Auth session missing." is de meest voorkomende en
+    /// de minst behulpzame: het zegt niet wat je eraan kunt doen, en zeker niet dat je
+    /// lokale data gewoon nog bestaat.
+    static func message(for error: Error) -> String {
+        if let error = error as? AuthError, case .sessionMissing = error {
+            return "Niet meer ingelogd op dit toestel. Je data staat er nog; log in via \"Ander account\" en alles gaat alsnog mee."
+        }
+        return error.localizedDescription
+    }
 
     private static func notConfigured() -> Error {
         NSError(domain: "Sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supabase niet geconfigureerd — vul Built/Secrets.plist in."])
@@ -847,7 +840,6 @@ enum Sync {
         guard let client else { throw notConfigured() }
         let result = try await client.auth.signUp(email: email, password: password)
         guard result.session != nil else { return false }
-        pushAllowed = false
         resetSyncState()
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
@@ -864,7 +856,6 @@ enum Sync {
     static func signIn(email: String, password: String, context: ModelContext) async throws {
         guard let client else { throw notConfigured() }
         try await client.auth.signIn(email: email, password: password)
-        pushAllowed = false
         resetSyncState()
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
@@ -888,7 +879,6 @@ enum Sync {
             session.start()
         }
         try await client.auth.session(from: callbackURL)
-        pushAllowed = false
         resetSyncState()
         SyncStatus.shared.lastError = nil
         await bootstrap(context)
@@ -1000,7 +990,6 @@ enum Sync {
     }
 
     private static var running = false
-    private(set) static var pushAllowed = false
     static var appActive = true
 
     /// Gaat aan bij elke lokale wijziging.
@@ -1019,6 +1008,9 @@ enum Sync {
     static func markDirty() {
         dirty = true
         isClean = false
+        // De klok begint bij de éérste openstaande wijziging, niet bij de laatste: het
+        // dashboard moet melden hoe lang er al werk klemt, niet hoe recent je iets deed.
+        if SyncStatus.shared.pendingSince == nil { SyncStatus.shared.pendingSince = .now }
     }
 
     /// Encoder voor de vingerafdruk, de gzip-body en de export.
@@ -1124,7 +1116,11 @@ enum Sync {
     /// achtergrond gaat. Die mogen ook tijdens een training pushen. De lus niet — die zou
     /// anders elke ronde pushen zolang je aan het afvinken bent.
     static func pushIfChanged(_ context: ModelContext, force: Bool = false) async {
-        guard pushAllowed, dirty else { return }
+        // Geen `pushAllowed` meer: een push kan sinds #42 niets vernietigen, dus er is geen
+        // situatie meer waarin het veiliger is om niet te pushen dan wel. Wél een sessie
+        // nodig — anders levert de onboarding een foutmelding op over een sync die er nog
+        // niet is.
+        guard hasSession, dirty else { return }
         guard force || WorkoutStatus.shared.startedAt == nil else { return }
         if let retryPushAfter, Date.now < retryPushAfter { return }
         // Koude start zonder wijzigingen: de vorige sessie eindigde schoon, dus er valt
@@ -1146,7 +1142,7 @@ enum Sync {
         } catch {
             pushFailures += 1
             retryPushAfter = .now.addingTimeInterval(min(20 * pow(2, Double(pushFailures)), 600))
-            SyncStatus.shared.lastError = "Sync mislukt: \(error.localizedDescription)"
+            SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
         }
     }
 }

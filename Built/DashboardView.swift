@@ -169,6 +169,7 @@ struct DashboardView: View {
         return ScrollView {
             LazyVStack(spacing: 16) {
                 entranced(0, header(idx, streak: streak))
+                if Sync.isConfigured, syncStatus.isStale { syncBanner }
                 entranced(1, weekCard(idx))
                 entranced(2, dayCards(idx))
             }
@@ -239,8 +240,30 @@ struct DashboardView: View {
             .animation(.easeOut(duration: 0.3).delay(Double(index) * 0.05), value: appeared)
     }
 
-    /// Stipje op het profiel-icoon: er is een fout, óf er is al een dag niets
-    /// doorgekomen — dat laatste voelt de gebruiker anders pas op een nieuw toestel.
+    /// Werk dat al meer dan een dag alleen op dit toestel bestaat, op het scherm waar je
+    /// elke dag komt. Het stipje op het profiel-icoon was te makkelijk te missen: in #42
+    /// liep dat vijf dagen door zonder dat iemand het zag.
+    private var syncBanner: some View {
+        Button {
+            Task { await Sync.pushIfChanged(context, force: true) }
+        } label: {
+            HStack(spacing: 12) {
+                BuiltIconTile(systemName: "exclamationmark.icloud.fill", color: .orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Nog niet gesynct").font(.subheadline.weight(.semibold))
+                    Text("Werk van \(syncStatus.pendingSince?.formatted(.relative(presentation: .named)) ?? "eerder") staat alleen op dit toestel. Tik om het nu te proberen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .builtCard()
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Stipje op het profiel-icoon: er is een fout, óf er staat werk klem. Bij dat laatste
+    /// staat de banner er ook — het stipje is de zachte versie, voor als het nog geen dag is.
     private var syncNeedsAttention: Bool {
         syncStatus.lastError != nil || syncStatus.isStale
     }

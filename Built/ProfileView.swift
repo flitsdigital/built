@@ -25,7 +25,6 @@ struct ProfileView: View {
     @State private var habitName = ""
     @State private var busy = false
     @State private var backupMessage: String?
-    @State private var confirmRestore = false
     @State private var showLogin = false
     @State private var confirmLogout = false
     @State private var confirmDelete = false
@@ -285,12 +284,18 @@ struct ProfileView: View {
                     } label: {
                         Label("Ander account", systemImage: "person.badge.key")
                     }
-                    Button(role: .destructive) {
-                        confirmLogout = true
-                    } label: {
-                        Label("Uitloggen", systemImage: "rectangle.portrait.and.arrow.right")
+                    // Uitloggen maakt het toestel leeg. Dat mag alleen als je ook terug
+                    // kunt komen, en dat kan precies zolang er een e-mailadres is. Bij een
+                    // verlopen sessie is er niets om mee in te loggen, en zou de knop je
+                    // data vernietigen zonder weg terug (#42).
+                    if Sync.currentEmail != nil {
+                        Button(role: .destructive) {
+                            confirmLogout = true
+                        } label: {
+                            Label("Uitloggen", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        .disabled(busy)
                     }
-                    .disabled(busy)
                     Button(role: .destructive) {
                         confirmDelete = true
                     } label: {
@@ -299,42 +304,38 @@ struct ProfileView: View {
                     .disabled(busy)
                 } header: {
                     Text("Account")
+                } footer: {
+                    if !Sync.hasSession {
+                        Text("Niet ingelogd — er gaat niets naar de server. Wat je invoert blijft gewoon op dit toestel staan; log in via \"Ander account\" en alles gaat alsnog mee.")
+                    }
                 }
 
+                // Geen knoppen meer. De sync voegt alleen nog samen en heeft dus geen
+                // keuze meer voor te leggen — "wie wint" bestaat niet. Wat overblijft is
+                // een statusregel: gaat het goed, dan is er niets te doen; gaat het mis,
+                // dan staat het hier én op het dashboard (die banner pusht op een tik).
                 Section {
                     LabeledContent("Automatische sync", value: syncStatus.lastSuccess
                         .map { "Laatst: \($0.formatted(date: .abbreviated, time: .shortened))" }
                         ?? "Nog niet gesynct")
-                    if let last = syncStatus.lastSuccess, syncStatus.isStale {
-                        Text("Laatst gelukt \(last.formatted(.relative(presentation: .named))). Met verbinding gaat het vanzelf verder; \"Sync nu\" probeert het meteen.")
+                    if let pending = syncStatus.pendingSince, syncStatus.isStale {
+                        Text("Er staat werk van \(pending.formatted(.relative(presentation: .named))) dat alleen op dit toestel bestaat. Zodra er verbinding is gaat het vanzelf.")
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.orange)
                     }
                     if let error = syncStatus.lastError {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.footnote)
                             .foregroundStyle(.orange)
-                            .lineLimit(2)
+                            .lineLimit(3)
                     }
-                    Button {
-                        runPush()
-                    } label: {
-                        if busy { ProgressView() } else { Label("Sync nu", systemImage: "arrow.triangle.2.circlepath") }
-                    }
-                    .disabled(busy)
-                    Button(role: .destructive) {
-                        confirmRestore = true
-                    } label: {
-                        Label("Data ophalen van server", systemImage: "icloud.and.arrow.down")
-                    }
-                    .disabled(busy)
                     if let backupMessage {
                         Text(backupMessage).font(.footnote).foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("Synchronisatie")
                 } footer: {
-                    Text("Elke wijziging gaat automatisch naar de server. \"Data ophalen\" vervangt alles op dit toestel door de serverversie — je account raakt nooit iets kwijt.")
+                    Text("Gaat vanzelf: elke wijziging gaat naar de server en wat elders is gebeurd komt hier binnen. Er wordt daarbij nooit iets gewist — beide kanten houden alles.")
                 }
             } else {
                 Section("Synchronisatie") {
@@ -429,10 +430,6 @@ struct ProfileView: View {
             }
             Button("Annuleer", role: .cancel) { scaleToDelete = nil }
         }
-        .confirmationDialog("Alle lokale data vervangen door de server?", isPresented: $confirmRestore, titleVisibility: .visible) {
-            Button("Data ophalen", role: .destructive) { runPull() }
-            Button("Annuleer", role: .cancel) {}
-        }
         .sheet(isPresented: $showLogin) { AccountLoginSheet() }
         .confirmationDialog("Uitloggen?", isPresented: $confirmLogout, titleVisibility: .visible) {
             Button("Uitloggen", role: .destructive) { logout() }
@@ -503,7 +500,7 @@ struct ProfileView: View {
                 let n = try CalendarSync.sync(profile: profile)
                 calMessage = n > 0 ? "\(n) trainingen in je agenda gezet ✓" : "Nog geen weekplanning ingesteld (Training-tab)."
             } catch {
-                calMessage = "Mislukt: \(error.localizedDescription)"
+                calMessage = "Mislukt: \(Sync.message(for: error))"
             }
             calBusy = false
         }
@@ -517,33 +514,6 @@ struct ProfileView: View {
         }
     }
 
-    private func runPush() {
-        busy = true
-        backupMessage = nil
-        Task {
-            do {
-                try await Sync.push(context)
-                backupMessage = "Gesynct ✓"
-            } catch {
-                backupMessage = "Mislukt: \(error.localizedDescription)"
-            }
-            busy = false
-        }
-    }
-
-    private func runPull() {
-        busy = true
-        backupMessage = nil
-        Task {
-            do {
-                try await Sync.pull(context)
-                backupMessage = "Opgehaald ✓"
-            } catch {
-                backupMessage = "Mislukt: \(error.localizedDescription)"
-            }
-            busy = false
-        }
-    }
 }
 
 /// Inloggen of registreren met e-mail + wachtwoord, of doorgaan met Google.
@@ -638,7 +608,7 @@ struct AccountLoginSheet: View {
                 try await Sync.resetPassword(email: email.trimmingCharacters(in: .whitespaces))
                 message = "We hebben je een reset-link gemaild (check ook je spam)."
             } catch {
-                message = "Mislukt: \(error.localizedDescription)"
+                message = "Mislukt: \(Sync.message(for: error))"
             }
             busy = false
         }
@@ -652,7 +622,7 @@ struct AccountLoginSheet: View {
                 try await work()
                 dismiss()
             } catch {
-                message = "Mislukt: \(error.localizedDescription)"
+                message = "Mislukt: \(Sync.message(for: error))"
             }
             busy = false
         }
