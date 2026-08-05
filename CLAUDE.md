@@ -10,9 +10,15 @@ is** — geen "server wint", geen "dit toestel wint", geen "wis en haal opnieuw 
 een keer vijf dagen trainingen gekost (#41/#42), en alles wat nodig is om het zonder te doen
 zit er al: stabiele `syncID` per rij, `updated_at` per rij, upsert op `(id, user_id)`.
 
-Rijen die de app zelf zaait (de standaardcatalogus met oefeningen) krijgen een van de naam
-afgeleid id via `UUID.stable(from:)`, niet `UUID()`. Anders staat dezelfde rij op een tweede
-toestel twee keer, want de pull vervangt niet maar voegt samen.
+Rijen die de app zelf zaait (de standaardcatalogus met oefeningen, en de namen die uit de
+historie worden ingehaald) krijgen een van de naam afgeleid id via `UUID.stable(from:)`,
+niet `UUID()`. Anders staat dezelfde rij op een tweede toestel twee keer, want de pull
+vervangt niet maar voegt samen.
+
+Wat er ondanks dat dubbel staat, voegt `Exercise.dedupe` samen op naam — bij elke start en
+na elke pull. Welke rij blijft, hangt uitsluitend van de id's af (afgeleid id eerst, anders
+het laagste): kiest het ene toestel een andere blijver dan het andere, dan wist ieder de rij
+van de ander.
 
 ## Supabase
 

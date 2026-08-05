@@ -25,6 +25,14 @@ Profiel → Account (met een waarschuwingsstipje op de hub-rij zelf), plus een b
 dashboard die verschijnt zodra er meer dan een dag werk alleen op dit toestel staat. Die
 banner is de enige handmatige trigger die er nog is.
 
+**De oefeningcatalogus wordt op naam samengevoegd.** Twee rijen met dezelfde naam zijn
+altijd dezelfde oefening — sets en routines koppelen op naam, dus verder kan de app ze niet
+uit elkaar houden. `Exercise.dedupe` voegt ze samen bij elke start en na elke pull die
+oefeningen meebrengt, mét tombstone voor de verliezer. Dat is het opruimwerk voor de
+catalogus die vóór [#43](https://github.com/flitsdigital/built/pull/43) met `UUID()` werd
+gezaaid: het afgeleide id voorkomt nieuwe dubbelen, maar de rijen die er toen al dubbel in
+stonden bleven staan.
+
 **Een account is verplicht en heeft altijd een e-mailadres.** Anoniem inloggen bestaat niet
 meer; de onboarding laat je er niet langs zonder account. De zeven anonieme accounts uit
 juli komen uit oudere builds.
@@ -39,8 +47,13 @@ juli komen uit oudere builds.
    er een e-mailadres is om mee terug te komen. Laat dat zo.
 3. **Rijen die de app zelf zaait krijgen een afgeleid id** (`UUID.stable(from:)`). Elk
    toestel zaait de standaardcatalogus zelf; met een willekeurig id staat elke oefening er
-   op een tweede toestel twee keer, want de pull vervangt niet meer maar voegt samen.
-4. **Databasewijziging = nieuwe migration.** Zie `CLAUDE.md`.
+   op een tweede toestel twee keer, want de pull vervangt niet meer maar voegt samen. Dat
+   geldt ook voor de namen die `Exercise.bootstrap` uit de historie en de routines inhaalt.
+4. **`Exercise.dedupe` kiest de blijver alleen op id.** Het afgeleide id wint, anders het
+   laagste. Maak daar nooit "de oudste" of "degene die er al stond" van: kiest toestel A
+   een andere blijver dan toestel B, dan wist ieder de rij van de ander en houd je er nul
+   over.
+5. **Databasewijziging = nieuwe migration.** Zie `CLAUDE.md`.
 
 ## Landmijnen
 

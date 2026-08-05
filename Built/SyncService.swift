@@ -630,6 +630,13 @@ enum Sync {
             try merge(r.customHabits, CustomHabit.self, context) { apply($0, to: $1) }
             try merge(r.habitLogs, HabitLog.self, context) { apply($0, to: $1) }
         }
+
+        // Een oefening kan hier onder een tweede id binnenkomen: toestellen van vóór #43
+        // zaaiden de catalogus met een willekeurig id, en samenvoegen zet die rij er dus
+        // naast in plaats van eroverheen. Meteen samenvoegen op naam, anders staat de
+        // kiezer tot de volgende start vol dubbelen. Buiten de transactie, want de
+        // tombstones die dat oplevert horen bij de sync en niet bij deze schrijfactie.
+        if !r.exercises.isEmpty { Exercise.dedupe(context) }
     }
 
     /// Eén tabel samenvoegen. De index wordt één keer opgebouwd; per rij zoeken zou een

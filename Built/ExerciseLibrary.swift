@@ -16,7 +16,7 @@ final class Exercise {
     /// één spier, anders telt een oefening meerdere keren mee in het volume.
     var secondaryMuscles: [String] = []
 
-    init(name: String, muscle: String = Exercise.muscles.last!, type: String = Exercise.types.last!,
+    init(name: String, muscle: String = Exercise.fallbackMuscle, type: String = Exercise.fallbackType,
          secondaryMuscles: [String] = []) {
         self.syncID = UUID()
         self.name = name
@@ -29,6 +29,11 @@ final class Exercise {
     static let muscles = ["Borst", "Rug", "Schouders", "Biceps", "Triceps",
                           "Benen", "Hamstrings", "Bilspieren", "Kuiten", "Core", "Onderrug", "Cardio", "Overig"]
     static let types = ["Barbell", "Dumbbell", "Machine", "Kabel", "Bodyweight", "Kettlebell", "Band", "Cardio", "Overig"]
+
+    /// "Overig" is wat een rij krijgt die nooit is ingedeeld — de default van een nieuwe
+    /// oefening, en daarmee het enige dat bij het samenvoegen mag wijken voor de andere rij.
+    static var fallbackMuscle: String { muscles.last! }
+    static var fallbackType: String { types.last! }
 
     static let typeIcon = [
         "Barbell": "figure.strengthtraining.traditional",
@@ -43,6 +48,7 @@ final class Exercise {
     ]
 
     /// Standaardcatalogus + inhalen van namen die al in de historie/routines staan.
+    @MainActor
     static func bootstrap(_ context: ModelContext) {
         let existing = (try? context.fetch(FetchDescriptor<Exercise>())) ?? []
         var known = Set(existing.map(\.name))
@@ -69,13 +75,69 @@ final class Exercise {
             for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
         }
 
-        // Vrije-tekst-oefeningen uit historie en routines opnemen als "Overig"
+        // Vrije-tekst-oefeningen uit historie en routines opnemen als "Overig". Ook dit is
+        // een rij die de app zelf zaait — twee toestellen met dezelfde training halen
+        // dezelfde naam op — dus ook hier een afgeleid id in plaats van `UUID()`.
         let usedInSets = (try? context.fetch(FetchDescriptor<SetEntry>()))?.map(\.exercise) ?? []
         let usedInRoutines = (try? context.fetch(FetchDescriptor<Routine>()))?.flatMap(\.exercises) ?? []
         for name in Set(usedInSets + usedInRoutines) where !known.contains(name) {
-            context.insert(Exercise(name: name))
-            known.insert(name)
+            seedRow(name, fallbackMuscle, fallbackType)
         }
+
+        // Wat er vóór deze versie al dubbel stond, staat er nog steeds dubbel.
+        dedupe(context)
+    }
+
+    /// Twee rijen met dezelfde naam zijn altijd dezelfde oefening — sets en routines
+    /// koppelen op naam, dus verder kán de app ze niet uit elkaar houden. Deze pass voegt
+    /// ze samen tot één.
+    ///
+    /// Ze bestaan omdat de standaardcatalogus vóór #43 met `UUID()` gezaaid werd: wie toen
+    /// al op twee toestellen zat, heeft op de server twee rijen per oefening staan, en
+    /// sinds de pull samenvoegt in plaats van vervangt komen die allebei binnen. Het
+    /// afgeleide id voorkomt nieuwe dubbelen maar ruimt de bestaande niet op; dat is dit.
+    ///
+    /// Samenvoegen, niet "de tweede wissen": wat de ene rij weet en de andere niet gaat
+    /// mee naar de blijver, en de verliezer verdwijnt mét tombstone — zonder dat spoor
+    /// staat hij er na de volgende pull gewoon weer.
+    ///
+    /// Welke rij blijft, moet op elk toestel hetzelfde uitvallen. Kiest toestel A rij X en
+    /// toestel B rij Y, dan wist ieder de ander en houd je er nul over. De regel kijkt
+    /// daarom alleen naar de rijen zelf, nooit naar volgorde of tijdstip: het van de naam
+    /// afgeleide id wint, en anders het laagste id. Twee toestellen komen daar los van
+    /// elkaar op uit, en een derde rij die later binnenkomt verandert die uitkomst niet.
+    @MainActor
+    static func dedupe(_ context: ModelContext) {
+        let all = (try? context.fetch(FetchDescriptor<Exercise>())) ?? []
+        var merged = false
+        for (name, rows) in Dictionary(grouping: all, by: \.name) where rows.count > 1 {
+            let derived = UUID.stable(from: name)
+            let ranked = rows.sorted { a, b in
+                if (a.syncID == derived) != (b.syncID == derived) { return a.syncID == derived }
+                // Een rij zonder id kan de server niet aanwijzen: de slechtst denkbare blijver.
+                if (a.syncID == .zero) != (b.syncID == .zero) { return b.syncID == .zero }
+                return a.syncID.uuidString < b.syncID.uuidString
+            }
+            let keeper = ranked[0]
+            for loser in ranked.dropFirst() {
+                absorb(loser, into: keeper)
+                context.deleteSynced(loser)
+                merged = true
+            }
+        }
+        // Zelf opslaan in plaats van op de autosave wachten: de sync houdt bij wélke rijen
+        // er wijzigen via de save-melding, en die moet bij de verwijdering horen.
+        if merged { try? context.save() }
+    }
+
+    /// Alleen schrijven als er echt iets verandert: elke toewijzing is een wijziging die de
+    /// sync moet pushen, en dit draait bij elke start en na elke pull.
+    private static func absorb(_ loser: Exercise, into keeper: Exercise) {
+        if loser.createdAt < keeper.createdAt { keeper.createdAt = loser.createdAt }
+        if keeper.muscle == fallbackMuscle, loser.muscle != fallbackMuscle { keeper.muscle = loser.muscle }
+        if keeper.type == fallbackType, loser.type != fallbackType { keeper.type = loser.type }
+        let extra = loser.secondaryMuscles.filter { !keeper.secondaryMuscles.contains($0) }
+        if !extra.isEmpty { keeper.secondaryMuscles.append(contentsOf: extra) }
     }
 
     private static let cardioSeed = ["Loopband", "Hardlopen", "Fietsen", "Hometrainer",
