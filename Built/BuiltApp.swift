@@ -201,6 +201,20 @@ struct RootView: View {
     }
 
     @ViewBuilder private var content: some View {
+        #if DEBUG
+        // PROTOTYPE — vordering per oefening, vóór de onboarding zodat het zonder account
+        // draait. Weg zodra het kopblok gekozen is.
+        if ProcessInfo.processInfo.arguments.contains("-progressPrototype") {
+            ProgressPrototypeView()
+        } else {
+            appContent
+        }
+        #else
+        appContent
+        #endif
+    }
+
+    @ViewBuilder private var appContent: some View {
         if restoring, profiles.isEmpty {
             VStack(spacing: 16) {
                 ProgressView()
