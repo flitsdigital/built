@@ -2,6 +2,8 @@ import SwiftUI
 import SwiftData
 import VisionKit
 import AVFoundation
+import PhotosUI
+import UIKit
 
 // MARK: - OpenFoodFacts (gratis, open, geen key)
 
@@ -220,18 +222,75 @@ enum OFF {
     }
 }
 
+/// Eigen foto bij een product: een bestand in de app-container, net als de progress
+/// foto's. Bewust niet in de sync — die is één JSON-transactie en daar horen geen bytes
+/// in; een mislukte upload zou een rij kunnen blokkeren, en dat mag nooit.
+///
+/// De bestandsnaam komt uit barcode-of-naam, precies de sleutel waarop de app een product
+/// al herkent (`logFood`), via `UUID.stable(from:)` — zodat hij niet van een UUID afhangt
+/// die de foto niet kent.
+enum ProductPhoto {
+    static var directory: URL {
+        let dir = URL.applicationSupportDirectory.appendingPathComponent("ProductPhotos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func url(barcode: String, name: String) -> URL {
+        let key = barcode.isEmpty ? name : barcode
+        return directory.appendingPathComponent(UUID.stable(from: key).uuidString + ".jpg")
+    }
+
+    /// Nil als er geen eigen foto is — dat is ook het antwoord op "heeft dit product er een?".
+    static func existing(barcode: String, name: String) -> URL? {
+        let url = url(barcode: barcode, name: name)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    static func save(_ data: Data, barcode: String, name: String) throws {
+        try downscaled(data).write(to: url(barcode: barcode, name: name))
+    }
+
+    static func remove(barcode: String, name: String) {
+        try? FileManager.default.removeItem(at: url(barcode: barcode, name: name))
+    }
+
+    /// Een rauwe 12MP-foto per product vult de container zonder dat je het ziet, en 1000 px
+    /// is ruim genoeg voor een thumb van 120 pt en de volledige weergave.
+    private static func downscaled(_ data: Data) -> Data {
+        guard let image = UIImage(data: data) else { return data }
+        let side = max(image.size.width, image.size.height)
+        guard side > 1000 else { return image.jpegData(compressionQuality: 0.8) ?? data }
+        let factor = 1000 / side
+        let target = CGSize(width: image.size.width * factor, height: image.size.height * factor)
+        return image.preparingThumbnail(of: target)?.jpegData(compressionQuality: 0.8) ?? data
+    }
+}
+
+extension FoodProduct {
+    var localPhoto: URL? { ProductPhoto.existing(barcode: barcode, name: name) }
+}
+
 /// Productfoto met vork-fallback; AsyncImage cachet via URLCache.
 struct FoodThumb: View {
     var url: String
     var size: CGFloat = 40
+    /// Eigen foto gaat vóór die van OpenFoodFacts: die heb je zelf uitgekozen.
+    var photo: URL?
 
     var body: some View {
-        AsyncImage(url: URL(string: url)) { image in
-            image.resizable().scaledToFill()
-        } placeholder: {
-            Image(systemName: "fork.knife")
-                .font(.system(size: size * 0.4))
-                .foregroundStyle(.tertiary)
+        Group {
+            if let photo, let ui = UIImage(contentsOfFile: photo.path) {
+                Image(uiImage: ui).resizable().scaledToFill()
+            } else {
+                AsyncImage(url: URL(string: url)) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Image(systemName: "fork.knife")
+                        .font(.system(size: size * 0.4))
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
         .frame(width: size, height: size)
         .background(Color(.tertiarySystemFill))
@@ -470,7 +529,8 @@ struct FoodView: View {
                     editingEntry = entry
                 } label: {
                     HStack(spacing: 10) {
-                        FoodThumb(url: products.first(where: { $0.name == entry.label })?.imageURL ?? "", size: 34)
+                        let product = products.first { $0.name == entry.label }
+                        FoodThumb(url: product?.imageURL ?? "", size: 34, photo: product?.localPhoto)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(entry.label)
                                 .font(.subheadline)
@@ -556,6 +616,8 @@ struct FoodLogSheet: View {
         var editable = false
         var unit: FoodUnit = .gram
         var categories: [String] = []
+
+        var localPhoto: URL? { ProductPhoto.existing(barcode: barcode, name: name) }
 
         /// Uit je eigen opgeslagen producten.
         init(_ p: FoodProduct) {
@@ -741,7 +803,11 @@ struct FoodLogSheet: View {
                             }
                     }
                     .onDelete { offsets in
-                        for i in offsets { context.deleteSynced(own[i]) }
+                        for i in offsets {
+                            // Tombstones gaan over rijen; het bestand moet er zelf mee.
+                            ProductPhoto.remove(barcode: own[i].barcode, name: own[i].name)
+                            context.deleteSynced(own[i])
+                        }
                     }
                 }
             }
@@ -859,7 +925,7 @@ struct FoodLogSheet: View {
         let kcal = Int((food.kcal100 * factor).rounded())
         let protein = Int((food.protein100 * factor).rounded())
         return HStack(spacing: 10) {
-            FoodThumb(url: food.imageURL)
+            FoodThumb(url: food.imageURL, photo: food.localPhoto)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(food.name).foregroundStyle(.primary).lineLimit(1)
@@ -1214,6 +1280,12 @@ struct FoodDetailView: View {
     @State private var amount = 100
     @State private var unit: FoodUnit = .gram
     @State private var showPhoto = false
+    /// Eigen foto in state, niet berekend: dan werkt het scherm meteen bij na kiezen of wissen.
+    @State private var photo: URL?
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var choosingPhoto = false
+    @State private var takingPhoto = false
+    @State private var photoError: String?
 
     private func scaled(_ per100: Double) -> Int { Int((per100 * Double(amount) / 100).rounded()) }
 
@@ -1222,12 +1294,14 @@ struct FoodDetailView: View {
             Section {
                 VStack(spacing: 10) {
                     Button { showPhoto = true } label: {
-                        FoodThumb(url: food.imageURL, size: 120)
+                        FoodThumb(url: food.imageURL, size: 120, photo: photo)
                     }
                     .buttonStyle(.plain)
-                    .disabled(food.imageURL.isEmpty) // zonder foto valt er niets te vergroten
+                    // zonder foto valt er niets te vergroten
+                    .disabled(photo == nil && food.imageURL.isEmpty)
                     .accessibilityLabel("Foto van \(food.name)")
                     .accessibilityHint("Vergroot de foto")
+                    photoActions
                     VStack(spacing: 2) {
                         Text(food.name)
                             .font(.title3.bold())
@@ -1261,6 +1335,61 @@ struct FoodDetailView: View {
         .navigationTitle(food.name)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showPhoto) { photoPreview }
+        .task { photo = food.localPhoto }
+        .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
+        .fullScreenCover(isPresented: $takingPhoto) {
+            CameraPicker { data in savePhoto(data) }
+        }
+        .onChange(of: pickerItem) {
+            guard let pickerItem else { return }
+            Task {
+                if let data = try? await pickerItem.loadTransferable(type: Data.self) {
+                    savePhoto(data)
+                } else {
+                    photoError = "Die foto kon niet gelezen worden."
+                }
+                self.pickerItem = nil
+            }
+        }
+    }
+
+    /// Zelf een foto bij een product. Voor een eigen item — of een barcode die
+    /// OpenFoodFacts niet kent — is dit de enige manier om van het grijze bestek af te komen.
+    @ViewBuilder private var photoActions: some View {
+        Menu {
+            Button("Kies uit Foto's", systemImage: "photo.on.rectangle") { choosingPhoto = true }
+            Button("Maak een foto", systemImage: "camera") { takingPhoto = true }
+            if photo != nil {
+                Button("Verwijder foto", systemImage: "trash", role: .destructive) {
+                    ProductPhoto.remove(barcode: food.barcode, name: food.name)
+                    photo = nil
+                }
+            }
+        } label: {
+            Label(photo == nil ? "Eigen foto" : "Foto wijzigen", systemImage: "camera")
+                .font(.caption.weight(.semibold))
+        }
+        if photo != nil {
+            Text("Eigen foto's blijven op dit toestel — ze gaan niet mee met de sync.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        if let photoError {
+            Label(photoError, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private func savePhoto(_ data: Data) {
+        do {
+            try ProductPhoto.save(data, barcode: food.barcode, name: food.name)
+            photo = food.localPhoto
+            photoError = nil
+        } catch {
+            photoError = "Foto opslaan mislukt. Probeer het opnieuw."
+        }
     }
 
     /// De thumbnail is 120 pt; de foto van OpenFoodFacts is groter. Tikken toont 'm op
@@ -1268,10 +1397,16 @@ struct FoodDetailView: View {
     private var photoPreview: some View {
         ZStack(alignment: .topLeading) {
             Color.black.ignoresSafeArea()
-            AsyncImage(url: URL(string: food.imageURL)) { image in
-                image.resizable().scaledToFit()
-            } placeholder: {
-                ProgressView().tint(.white)
+            Group {
+                if let photo, let ui = UIImage(contentsOfFile: photo.path) {
+                    Image(uiImage: ui).resizable().scaledToFit()
+                } else {
+                    AsyncImage(url: URL(string: food.imageURL)) { image in
+                        image.resizable().scaledToFit()
+                    } placeholder: {
+                        ProgressView().tint(.white)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityLabel("Foto van \(food.name)")
@@ -1420,6 +1555,42 @@ final class ScannerHostController: UIViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         scanner.stopScanning() // camera vrijgeven zodra je de tab verlaat
+    }
+}
+
+/// Camera voor een productfoto. `PhotosPicker` kan alleen kiezen uit wat er al staat,
+/// niet iets nieuws maken — en een pot uit je eigen keuken staat nergens in Foto's.
+struct CameraPicker: UIViewControllerRepresentable {
+    var onCapture: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: CameraPicker
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            // Verkleinen doet `ProductPhoto`; hier gaat de foto er ongemoeid in.
+            if let image = info[.originalImage] as? UIImage, let data = image.jpegData(compressionQuality: 1) {
+                parent.onCapture(data)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
     }
 }
 

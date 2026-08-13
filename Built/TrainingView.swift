@@ -512,10 +512,15 @@ struct TrainingView: View {
 
     // MARK: - Body
 
+    /// Een lopende training kun je inklappen: dan staat het overzicht er weer, met de
+    /// "Training bezig"-balk als weg terug. `active` blijft ondertussen aan — de sets, de
+    /// tijd en de rusttimer lopen door.
+    private var showingWorkout: Bool { active && !workoutStatus.minimized }
+
     /// Actieve training blijft een List: swipe-to-delete op sets bestaat daarbuiten
     /// niet, en tijdens het loggen wil je juist een dichte lijst.
     @ViewBuilder private func screen(_ history: HistoryIndex, _ pastNotes: [DayHabits]) -> some View {
-        if active {
+        if showingWorkout {
             List { activeSections(history, pastNotes) }
         } else {
             ScrollView {
@@ -542,8 +547,8 @@ struct TrainingView: View {
             .sorted { $0.date > $1.date }
         return screen(history, pastNotes)
         .navigationTitle("Training")
-        .navigationBarTitleDisplayMode(active ? .inline : .large)
-        .toolbar(active ? .automatic : .hidden, for: .navigationBar) // idle heeft z'n eigen titel
+        .navigationBarTitleDisplayMode(showingWorkout ? .inline : .large)
+        .toolbar(showingWorkout ? .automatic : .hidden, for: .navigationBar) // idle heeft z'n eigen titel
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -555,13 +560,21 @@ struct TrainingView: View {
                 }
                 .font(.body.bold())
             }
-            if active {
+            if showingWorkout {
                 ToolbarItem(placement: .principal) {
                     Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
                         .font(.subheadline.bold().monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
+                    // Inklappen, niet afsluiten: je routines en je historie staan achter
+                    // dit scherm, en daar wil je tijdens een training ook bij.
+                    Button {
+                        withAnimation(.snappy(duration: 0.3)) { workoutStatus.minimized = true }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                    .accessibilityLabel("Naar het overzicht")
                     Button { showStopwatch = true } label: {
                         Image(systemName: "stopwatch")
                     }
@@ -579,8 +592,9 @@ struct TrainingView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if workoutStatus.restEndsAt != nil {
-                Color.clear.frame(height: 68) // rust-balk overlapt anders de onderste rijen
+            // Rust-balk óf de ingeklapte "Training bezig"-balk overlapt anders de onderste rijen
+            if workoutStatus.restEndsAt != nil || (active && workoutStatus.minimized) {
+                Color.clear.frame(height: 68)
             }
         }
         .task { restoreDraft() }
@@ -641,11 +655,13 @@ struct TrainingView: View {
             WorkoutSummarySheet(summary: s, name: profile.name)
         }
         .navigationDestination(item: $editingRoutine) { routine in
-            RoutineEditorView(routine: routine) { r in
+            // Loopt er al een training, dan verdwijnt de startknop: bekijken en bewerken
+            // mag, maar een tweede training zou de eerste overschrijven.
+            RoutineEditorView(routine: routine, onStart: active ? nil : { r in
                 editingRoutine = nil
                 startWorkout(with: r.exercises, alternatives: r.alternatives, targets: r.targets,
                              supersets: r.supersets, restByExercise: r.restByExercise)
-            }
+            })
         }
         .sheet(isPresented: $showExercisePicker) {
             // ponytail: geen exclude — dezelfde oefening twee keer in één training mag
@@ -784,7 +800,7 @@ struct TrainingView: View {
                 }
                 Spacer()
                 Menu {
-                    if !routine.exercises.isEmpty {
+                    if !routine.exercises.isEmpty, !active {
                         Button("Start meteen", systemImage: "play.fill") {
                             startWorkout(with: routine.exercises, alternatives: routine.alternatives,
                                          targets: routine.targets, supersets: routine.supersets,
@@ -876,17 +892,23 @@ struct TrainingView: View {
 
         weekCard(history)
 
-        Button {
-            startWorkout(with: [])
-        } label: {
-            Label("Lege training starten", systemImage: "plus")
-                .font(.subheadline.bold())
-                .foregroundStyle(.green)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(.builtTint(.green), in: Capsule())
+        // Ingeklapte training: geen tweede startknop, maar wel zeggen waar de eerste
+        // gebleven is. De balk onderaan is de weg terug.
+        if active {
+            BuiltFootnote("Je training loopt nog — tik onderaan op \u{201C}Training bezig\u{201D} om verder te gaan.")
+        } else {
+            Button {
+                startWorkout(with: [])
+            } label: {
+                Label("Lege training starten", systemImage: "plus")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(.builtTint(.green), in: Capsule())
+            }
+            .buttonStyle(PressableStyle())
         }
-        .buttonStyle(PressableStyle())
 
         BuiltSectionHeader("Routines")
         if routines.isEmpty {

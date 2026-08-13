@@ -13,6 +13,10 @@ final class WorkoutStatus {
     var restStartedAt: Date?
     var restEndsAt: Date?
     var restFired = false
+    /// Training loopt, maar je kijkt naar het overzicht. Staat hier en niet in
+    /// `TrainingView` omdat de "Training bezig"-balk buiten die view leeft en 'm weer
+    /// open moet kunnen klappen.
+    var minimized = false
     @ObservationIgnored private var restTask: Task<Void, Never>?
     @ObservationIgnored private var activity: Activity<WorkoutActivity>?
     @ObservationIgnored private var context = WorkoutActivity.ContentState()
@@ -36,6 +40,7 @@ final class WorkoutStatus {
 
     func endWorkout() {
         startedAt = nil
+        minimized = false
         context = .init()
         stopRest()
         let activity = self.activity

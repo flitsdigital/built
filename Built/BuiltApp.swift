@@ -161,7 +161,10 @@ struct RootView: View {
     /// "Training bezig" als mini-player die terugbrengt naar de training (Ladder-patroon).
     private func workoutBar(started: Date) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.3)) { tab = 1 }
+            withAnimation(.snappy(duration: 0.3)) {
+                tab = 1
+                workoutStatus.minimized = false
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "dumbbell.fill")
@@ -226,7 +229,8 @@ struct RootView: View {
                     if let restEnd = workoutStatus.restEndsAt, restEnd > .now {
                         restBar(end: restEnd)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else if let started = workoutStatus.startedAt, tab != 1 {
+                    // Ook op de trainingstab, mits ingeklapt: dan ís deze balk de weg terug.
+                    } else if let started = workoutStatus.startedAt, tab != 1 || workoutStatus.minimized {
                         workoutBar(started: started)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
