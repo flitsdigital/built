@@ -252,12 +252,8 @@ struct InsightsView: View {
     /// Lifts zonder nieuw 1RM-record in de laatste 3 sessies (min. 5 sessies).
     private func plateauedLifts(_ stats: LiftStats) -> [(name: String, sessions: Int, kg: Double)] {
         var out: [(name: String, sessions: Int, kg: Double)] = []
-        for (name, e) in stats.e1rms where e.count >= 5 {
-            let priorBest = e.dropLast(3).max() ?? 0
-            let recentBest = e.suffix(3).max() ?? 0
-            if recentBest <= priorBest * 1.005 {
-                out.append((name, e.count, stats.topWeight[name] ?? 0))
-            }
+        for (name, e) in stats.e1rms where isPlateaued(e) {
+            out.append((name, e.count, stats.topWeight[name] ?? 0))
         }
         return out.sorted { $0.sessions > $1.sessions }
     }
@@ -947,13 +943,47 @@ struct ExerciseDetailView: View {
         return (slope * 7, in4, current)
     }
 
+    /// Twee getallen naast elkaar in plaats van vier gelijkwaardige regels. Geschat 1RM is
+    /// vergelijkbaar over rep-ranges heen, topgewicht is wat je in de sportschool voelt —
+    /// geen van beide is een voetnoot van de ander. Sessies en sets zakken naar de voet.
+    private var headline: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 0) {
+                bigStat("Geschat 1RM", sets.map { epley($0.weightKg, $0.reps) }.max())
+                Divider().frame(height: 44)
+                bigStat("Topgewicht", sets.map(\.weightKg).max())
+            }
+            Text("\(days.count) sessie\(days.count == 1 ? "" : "s") · \(sets.count) sets")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+    }
+
+    private func bigStat(_ label: String, _ value: Double?) -> some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value.map { "\($0.kgText) kg" } ?? "—")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                // Groen betekent één ding in deze app: een waarde. Een streepje is er geen.
+                .foregroundStyle(value == nil ? Color.secondary : .green)
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(value.map { "\($0.kgText) kilo" } ?? "geen")
+    }
+
     var body: some View {
         List {
             Section {
-                LabeledContent("Beste gewicht", value: "\(sets.map(\.weightKg).max()?.kgText ?? "—") kg 🏆")
-                LabeledContent("Geschat 1RM", value: "\(sets.map { epley($0.weightKg, $0.reps) }.max()?.kgText ?? "—") kg")
-                LabeledContent("Sessies", value: "\(days.count)")
-                LabeledContent("Totaal sets", value: "\(sets.count)")
+                headline
+                    .listRowBackground(Color.clear)
             } footer: {
                 Text("Geschat 1RM via de Epley-formule: gewicht × (1 + reps ÷ 30).")
             }
@@ -1103,5 +1133,14 @@ struct ExerciseDetailView: View {
         .tabBarClearance()
         .navigationTitle(exercise)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Bekijken is de hoofdzaak, bewerken de uitzondering — vandaar rechtsboven en
+            // niet de hele rij. Alleen als de oefening ook echt in de catalogus staat.
+            if let record = allExercises.first(where: { $0.name == exercise }) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink("Bewerk") { ExerciseEditor(exercise: record) }
+                }
+            }
+        }
     }
 }
