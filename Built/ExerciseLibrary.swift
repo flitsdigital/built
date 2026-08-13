@@ -238,6 +238,8 @@ struct ExercisePickerSheet: View {
     /// in je training. Kiezen is nog niet toevoegen: dat gebeurt pas bij de knop onderin,
     /// en daarom mag "Annuleer" hier ook echt annuleren.
     @State private var selected: [String] = []
+    /// Welke oefening je voortgang van bekijkt via de ⓘ.
+    @State private var detail: ExerciseName?
 
     private var filtered: [Exercise] {
         exercises.filter { ex in
@@ -270,7 +272,11 @@ struct ExercisePickerSheet: View {
                         .accessibilityAddTraits(isPicked ? [.isSelected] : [])
                         // De rechterkant is van de ⓘ: hier zoek je uit wélke oefening je
                         // kiest, en dan wil je erbij kunnen zonder eerst aan te vinken.
-                        NavigationLink(value: ex.name) {
+                        // Een knop en geen NavigationLink — die zet er in een List zelf een
+                        // chevron achter, en dan staat de ⓘ ineens midden in de rij.
+                        Button {
+                            detail = ExerciseName(ex.name)
+                        } label: {
                             Image(systemName: "info.circle")
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
@@ -304,8 +310,8 @@ struct ExercisePickerSheet: View {
                     MuscleFilterMenu(selection: $muscleFilter)
                 }
             }
-            .navigationDestination(for: String.self) { name in
-                ExerciseDetailView(exercise: name)
+            .navigationDestination(item: $detail) { item in
+                ExerciseDetailView(exercise: item.name)
             }
             .safeAreaInset(edge: .bottom) { confirmBar }
             .animation(.snappy(duration: 0.25), value: selected.isEmpty)

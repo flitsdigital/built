@@ -1,8 +1,9 @@
 import SwiftUI
 import SwiftData
 
-/// `sheet(item:)` wil iets identificeerbaars en een oefeningnaam is maar een String.
-struct ExerciseName: Identifiable {
+/// `sheet(item:)` en `navigationDestination(item:)` willen iets identificeerbaars, en een
+/// oefeningnaam is maar een String.
+struct ExerciseName: Identifiable, Hashable {
     let name: String
     var id: String { name }
     init(_ name: String) { self.name = name }
