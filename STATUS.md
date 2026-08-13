@@ -63,6 +63,12 @@ select column_name from information_schema.columns
 where table_schema = 'public' and table_name = 'profiles';
 ```
 
+**Een nieuwe kolom wist zichzelf tot de migration draait.** Een veld dat de server nog niet
+kent komt bij een pull als `nil` terug. Schrijf je dat weg met `m.veld = r.veld ?? default`,
+dan wist elke pull de lokale waarde — bij `workout_id` viel een tweede training van dezelfde
+dag daardoor telkens terug bij de eerste. Gebruik `if let` voor kolommen die nog niet overal
+bestaan: `nil` betekent "die kolom is daar niet", niet "leeg".
+
 **Een JWT overleeft een database-restore.** PostgREST controleert alleen handtekening en
 vervaltijd, niet of de gebruiker nog bestaat. Zet je de database terug, dan blijft de app
 tot een uur lang pushen namens een gebruiker die weg is, en krijg je

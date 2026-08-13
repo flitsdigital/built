@@ -169,25 +169,45 @@ extension View {
 
 // MARK: - Stat-tegel
 
-/// Getal boven, label onder — de statrij van een training, sessie en Inzicht.
-/// Stond eerder drie keer los in twee bestanden, met verschillende lettergroottes.
+/// Getal boven, label onder — de statrij van een training, sessie, Inzicht, gewicht en
+/// het weekrapport. Stond eerder zes keer los in vijf bestanden, met telkens een andere
+/// lettergrootte.
 struct StatTile: View {
     let value: String
     let label: String
-    /// Prominente variant voor de statrij bovenaan een scherm.
-    var large = false
+    var size: Size = .regular
+    /// Kleurt het getal; nil = gewoon de tekstkleur.
+    var tint: Color?
+
+    /// Alleen de schaal verschilt, niet de vorm: `compact` in een rij van drie in een
+    /// lijst, `large` als statrij bovenaan een scherm.
+    enum Size {
+        case compact, regular, large
+
+        var font: Font {
+            switch self {
+            case .compact: .headline
+            case .regular: .title2
+            case .large: .title
+            }
+        }
+        var labelFont: Font { self == .compact ? .caption2 : .caption }
+        var padding: CGFloat { self == .regular ? 0 : 4 }
+    }
 
     var body: some View {
         VStack(spacing: 2) {
             Text(value)
-                .font((large ? Font.title : Font.title2).bold().monospacedDigit())
+                .font(size.font.bold().monospacedDigit())
+                .foregroundStyle(tint ?? .primary)
                 .contentTransition(.numericText())
             Text(label)
-                .font(.caption)
+                .font(size.labelFont)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, large ? 4 : 0)
+        .padding(.vertical, size.padding)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(value)
@@ -333,8 +353,8 @@ struct MacroRings: View {
                 }
                 Divider()
                 HStack {
-                    StatTile(value: "12", label: "van 30 dagen", large: true)
-                    StatTile(value: "🔥 5", label: "huidige reeks", large: true)
+                    StatTile(value: "12", label: "van 30 dagen", size: .large)
+                    StatTile(value: "🔥 5", label: "huidige reeks", size: .large)
                 }
             }
             .builtCard()

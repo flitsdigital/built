@@ -9,7 +9,6 @@ struct WeightView: View {
     let profile: Profile
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
-    @Query(sort: \Scale.name) private var scales: [Scale]
     @Query(sort: \PhotoEntry.date, order: .reverse) private var photos: [PhotoEntry]
 
     @State private var showLogSheet = false
@@ -96,15 +95,15 @@ struct WeightView: View {
         List {
             Section {
                 HStack(spacing: 0) {
-                    headTile("Start", profile.startWeight.kgText)
+                    StatTile(value: profile.startWeight.kgText, label: "Start", size: .compact)
                     Divider()
                     // "Huidig" las als "wat de weegschaal vanochtend zei"; het is het
                     // 7-daags gemiddelde. Zelfde getal, eerlijk label.
-                    headTile("Gem. 7d", current?.kgText ?? "—")
+                    StatTile(value: current?.kgText ?? "—", label: "Gem. 7d", size: .compact)
                     Divider()
-                    headTile("Verschil",
-                             current.map { "\($0 - profile.startWeight >= 0 ? "+" : "")\(($0 - profile.startWeight).kgText)" } ?? "—",
-                             color: current.map { ($0 - profile.startWeight) * (profile.goalWeight - profile.startWeight) >= 0 ? .green : .orange })
+                    StatTile(value: current.map { "\($0 - profile.startWeight >= 0 ? "+" : "")\(($0 - profile.startWeight).kgText)" } ?? "—",
+                             label: "Verschil", size: .compact,
+                             tint: current.map { ($0 - profile.startWeight) * (profile.goalWeight - profile.startWeight) >= 0 ? .green : .orange })
                 }
                 Button {
                     showLogSheet = true
@@ -211,18 +210,6 @@ struct WeightView: View {
     }
 
     // MARK: - Onderdelen
-
-    private func headTile(_ label: String, _ value: String, color: Color? = nil) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.title3.bold().monospacedDigit())
-                .foregroundStyle(color ?? .primary)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
 
     private var chart: some View {
         Chart {

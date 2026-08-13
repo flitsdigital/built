@@ -22,7 +22,6 @@ struct OnboardingView: View {
     @State private var goalWeight = 78.0
     @State private var goalDate = Calendar.current.date(byAdding: .month, value: 12, to: .now) ?? .now
     @State private var trainings = 3
-    @State private var trainingDays: [Int] = []
     @State private var started = false
     @State private var showLogin = false
     @State private var planRevealed = false
@@ -73,10 +72,6 @@ struct OnboardingView: View {
     private var weightRangeText: String {
         "\(Int(weightRange.lowerBound)) en \(Int(weightRange.upperBound)) kg"
     }
-
-    private let weekdayOptions: [(day: Int, label: String)] = [
-        (2, "Ma"), (3, "Di"), (4, "Wo"), (5, "Do"), (6, "Vr"), (7, "Za"), (1, "Zo"),
-    ]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -409,32 +404,6 @@ struct OnboardingView: View {
             } else if goalWeightExtreme {
                 hint("Dat scheelt meer dan 30% met je huidige gewicht. Mag, maar reken op een lange adem.", warning: true)
             }
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Vaste trainingsdagen (optioneel)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    ForEach(weekdayOptions, id: \.day) { option in
-                        let on = trainingDays.contains(option.day)
-                        Button {
-                            if on {
-                                trainingDays.removeAll { $0 == option.day }
-                            } else {
-                                trainingDays.append(option.day)
-                            }
-                        } label: {
-                            Text(option.label)
-                                .font(.caption.bold())
-                                .frame(width: 38, height: 38)
-                                .background(on ? Color.green : Color(.secondarySystemGroupedBackground), in: Circle())
-                                .foregroundStyle(on ? .white : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
             Spacer()
             primaryButton("Maak mijn plan", disabled: !goalWeightValid) {
                 planRevealed = false
@@ -451,9 +420,7 @@ struct OnboardingView: View {
             VStack(spacing: 10) {
                 planRow(0, label: "GEWICHT", value: "\(rate >= 0 ? "+" : "")\(rate.formatted(.number.precision(.fractionLength(2)))) kg per week")
                 planRow(1, label: "EIWIT", value: "\(proteinTarget) g per dag")
-                planRow(2, label: "TRAINING", value: trainingDays.isEmpty
-                    ? "\(trainings)× per week"
-                    : "\(trainings)× per week · \(trainingDayLabels)")
+                planRow(2, label: "TRAINING", value: "\(trainings)× per week")
                 planRow(3, label: "DOEL", value: "\(goalWeight.kgText) kg op \(goalDate.formatted(date: .long, time: .omitted))")
             }
             .padding(.horizontal, 20)
@@ -464,7 +431,6 @@ struct OnboardingView: View {
                 let profile = Profile(name: trimmedName, age: age, heightCm: height,
                                       startWeight: weight, goalWeight: goalWeight, goalDate: goalDate,
                                       trainingsPerWeek: trainings)
-                profile.trainingDays = trainingDays
                 context.insert(profile)
                 context.insert(WeightEntry(kg: weight))
             }
@@ -479,10 +445,6 @@ struct OnboardingView: View {
         .onAppear {
             withAnimation(.snappy(duration: 0.4).delay(0.15)) { planRevealed = true }
         }
-    }
-
-    private var trainingDayLabels: String {
-        weekdayOptions.filter { trainingDays.contains($0.day) }.map(\.label).joined(separator: " · ")
     }
 
     private func planRow(_ index: Int, label: String, value: String) -> some View {

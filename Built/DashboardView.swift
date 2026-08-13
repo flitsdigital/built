@@ -48,8 +48,13 @@ struct DashboardView: View {
     }
 
     // MARK: - Dag-gebonden helpers (werken voor elke dag, niet alleen vandaag)
-    private func restDayOn(_ day: Date) -> Bool {
-        !profile.trainingDays.isEmpty && !profile.trainingDays.contains(cal.component(.weekday, from: day))
+    private func quotaOn(_ day: Date, _ idx: DayIndex) -> WeekQuota {
+        WeekQuota(day, index: idx, target: profile.trainingsPerWeek)
+    }
+
+    private func restTitle(_ q: WeekQuota) -> String {
+        // Kort: naast de streak-vlam en het vinkje past "…deze week" er niet meer bij.
+        q.remaining == 0 ? "Rustdag · week rond" : "Rustdag · nog \(q.remaining)"
     }
 
     private var customHabitNames: [String] { customHabits.map(\.name) }
@@ -76,17 +81,6 @@ struct DashboardView: View {
 
     private func streak(_ idx: DayIndex) -> Int {
         DayCheck.streak(index: idx, profile: profile, customHabits: customHabitNames)
-    }
-
-    // MARK: - Streak per habit (🔥5 naast de rij)
-
-    private func streakTrained(_ idx: DayIndex) -> Int { habitStreak { idx.trained($0) || restDayOn($0) } }
-    private func streakWeighed(_ idx: DayIndex) -> Int { habitStreak { idx.weighed($0) } }
-    private func streakCreatine(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.creatine == true } }
-    private func streakSlept(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.sleptEnough == true } }
-    private func streakCheckIn(_ idx: DayIndex) -> Int { habitStreak { idx.habits($0)?.checkedIn == true } }
-    private func streakCustom(_ name: String, _ idx: DayIndex) -> Int {
-        habitStreak { idx.logged(name, on: $0) }
     }
 
     /// Page-spring: kort, nauwelijks bounce — leest als een pagina die op z'n plek valt.
@@ -350,7 +344,7 @@ struct DashboardView: View {
                        streak: streak, showCreatine: profile.tracksCreatine, showSleep: profile.tracksSleep,
                        // De widget toont de checklist die de score bepaalt; telt eiwit
                        // niet mee, dan hoort die rij er ook niet in.
-                       restDay: restDayOn(today), showFood: profile.foodInScore).save()
+                       restDay: quotaOn(today, idx).isRest, showFood: profile.foodInScore).save()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -508,48 +502,49 @@ struct DashboardView: View {
     private func checklistCard(_ idx: DayIndex) -> some View {
         let h = idx.habits(selectedDay)
         let trained = idx.trained(selectedDay)
-        let restDay = restDayOn(selectedDay)
+        let quota = quotaOn(selectedDay, idx)
         return card {
             checkRow(icon: "dumbbell.fill", color: .habitTraining,
-                     title: restDay && !trained ? "Rustdag (volgens plan)" : "Training",
-                     done: trained || restDay,
-                     streak: streakTrained(idx)) { selectedTab = 1 }
+                     title: quota.isRest && !trained ? restTitle(quota) : "Training",
+                     done: trained || quota.isRest,
+                     streak: habitStreak { idx.trained($0) || quotaOn($0, idx).isRest }) { selectedTab = 1 }
             if profile.tracksCreatine {
                 Divider()
                 checkRow(icon: "pills.fill", color: .habitCreatine, title: "Creatine",
-                         done: h?.creatine == true, streak: streakCreatine(idx)) { toggleHabit(\.creatine, idx) }
+                         done: h?.creatine == true, streak: habitStreak { idx.habits($0)?.creatine == true }) { toggleHabit(\.creatine) }
             }
             Divider()
             checkRow(icon: "scalemass.fill", color: .habitWeight, title: weightRowTitle(idx),
-                     done: idx.weighed(selectedDay), streak: streakWeighed(idx)) { showWeightSheet = true }
+                     done: idx.weighed(selectedDay), streak: habitStreak { idx.weighed($0) }) { showWeightSheet = true }
             if profile.tracksSleep {
                 Divider()
                 checkRow(icon: "moon.fill", color: .habitSleep, title: sleepText(idx),
                          done: h?.sleptEnough == true,
                          missed: h?.sleepHours != nil && h?.sleptEnough != true,
-                         streak: streakSlept(idx)) {
+                         streak: habitStreak { idx.habits($0)?.sleptEnough == true }) {
                     showSleepSheet = true
                 }
             }
-            if let steps = healthSteps(on: selectedDay) {
+            if let steps = health.steps(on: selectedDay) {
                 Divider()
                 checkRowLabel(icon: "figure.walk", color: .habitSteps,
                               title: "\(steps.formatted()) stappen", done: steps >= 8000,
-                              streak: habitStreak { (healthSteps(on: $0) ?? 0) >= 8000 })
+                              streak: habitStreak { (health.steps(on: $0) ?? 0) >= 8000 })
             }
             Divider()
             NavigationLink {
                 DayDetailView(day: selectedDay, profile: profile)
             } label: {
                 checkRowLabel(icon: "list.bullet.rectangle", color: .habitJournal, title: "Dagdetails",
-                              done: false, navigates: true)
+                              done: idx.habits(selectedDay)?.checkedIn == true,
+                              streak: habitStreak { idx.habits($0)?.checkedIn == true }, navigates: true)
             }
             .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
                 Divider()
                 checkRow(icon: "star.fill", color: .habitCustom, title: habit.name,
                          done: idx.logged(habit.name, on: selectedDay),
-                         streak: streakCustom(habit.name, idx)) { toggleCustom(habit.name) }
+                         streak: habitStreak { idx.logged(habit.name, on: $0) }) { toggleCustom(habit.name) }
             }
             Text("Slaaptijden en losse metingen: tik op Dagdetails.")
                 .font(.caption2)
@@ -563,9 +558,6 @@ struct DashboardView: View {
     /// de drawer, met grote knoppen — één vraag tegelijk leest makkelijker dan vier rijtjes.
     private func checkInCard(_ idx: DayIndex) -> some View {
         let h = idx.habits(selectedDay)
-        let answers: [(String, Int)] = [("😵🥱🙂💪⚡️", h?.energy ?? 0), ("😞😕😐🙂😄", h?.mood ?? 0),
-                                        ("✅🙂😬😖🥵", h?.soreness ?? 0), ("😌🙂😐😰🤯", h?.stress ?? 0),
-                                        ("😴🙂😃", h?.sleepQuality ?? 0)]
         return Button {
             if !swipeActive { showCheckIn = true }
         } label: {
@@ -576,7 +568,7 @@ struct DashboardView: View {
                             Text("Hoe was je dag?")
                                 .font(.headline)
                                 .foregroundStyle(.primary)
-                            streakBadge(streakCheckIn(idx))
+                            StreakBadge(days: habitStreak { idx.habits($0)?.checkedIn == true })
                         }
                         Text(h?.checkedIn == true ? "Tik om aan te passen" : "5 korte vragen · ±20 seconden")
                             .font(.caption)
@@ -585,12 +577,12 @@ struct DashboardView: View {
                     Spacer()
                     if h?.checkedIn == true {
                         HStack(spacing: 3) {
-                            ForEach(Array(answers.enumerated()), id: \.offset) { _, a in
-                                let icons = Array(a.0.map(String.init))
-                                Text(a.1 > 0 ? icons[a.1 - 1] : "·")
+                            ForEach(DayHabits.checkIns) { q in
+                                let v = h?[keyPath: q.key] ?? 0
+                                Text(v > 0 ? q.icons[v - 1] : "·")
                                     .font(.system(size: 17))
-                                    .grayscale(a.1 > 0 ? 0 : 1)
-                                    .opacity(a.1 > 0 ? 1 : 0.3)
+                                    .grayscale(v > 0 ? 0 : 1)
+                                    .opacity(v > 0 ? 1 : 0.3)
                             }
                         }
                     } else {
@@ -605,8 +597,6 @@ struct DashboardView: View {
         }
         .buttonStyle(PressableStyle(scale: 0.985))
     }
-
-    private func healthSteps(on day: Date) -> Int? { health.steps(on: day) }
 
     private func toggleCustom(_ name: String) {
         let key = dayKey(selectedDay)
@@ -626,8 +616,6 @@ struct DashboardView: View {
         .buttonStyle(PressableStyle())
     }
 
-    private func streakBadge(_ days: Int) -> some View { StreakBadge(days: days) }
-
     /// `navigates` = geen habit maar een doorverwijzing; dan een chevron i.p.v. een
     /// bolletje, anders leest de rij als iets wat je nog moet afvinken.
     private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
@@ -638,7 +626,7 @@ struct DashboardView: View {
                 .foregroundStyle(done && !navigates ? .secondary : .primary)
                 .strikethrough(done && !navigates, color: .secondary)
                 .lineLimit(1)
-            streakBadge(streak)
+            StreakBadge(days: streak)
             Spacer()
             if navigates {
                 Image(systemName: "chevron.right")
@@ -692,16 +680,8 @@ struct DashboardView: View {
         return "8 uur slaap"
     }
 
-    private func todayHabitsOrCreate(_ idx: DayIndex) -> DayHabits {
-        if let h = idx.habits(selectedDay) { return h }
-        let h = DayHabits(date: stamp(selectedDay))
-        context.insert(h)
-        return h
-    }
-
-    private func toggleHabit(_ keyPath: ReferenceWritableKeyPath<DayHabits, Bool>, _ idx: DayIndex) {
-        let h = todayHabitsOrCreate(idx)
-        h[keyPath: keyPath].toggle()
+    private func toggleHabit(_ keyPath: ReferenceWritableKeyPath<DayHabits, Bool>) {
+        context.habits(on: selectedDay)[keyPath: keyPath].toggle()
     }
 }
 
@@ -721,6 +701,8 @@ struct SleepSheet: View {
     private var cal: Calendar { .current }
     private var today: DayHabits? { habits.first { dayKey($0.date) == dayKey(day) } }
 
+    /// Zelfde rekensom als `DayHabits.sleepHours`, maar over de velden in dit formulier
+    /// — die staan nog nergens opgeslagen zolang je aan de pickers draait.
     private var hours: Double {
         var h = wake.timeIntervalSince(bed) / 3600
         if h < 0 { h += 24 }
@@ -741,21 +723,21 @@ struct SleepSheet: View {
                 Section("Hoe geslapen?") {
                     Picker("Kwaliteit", selection: $quality) {
                         Text("—").tag(0)
-                        Text("😴").tag(1)
-                        Text("🙂").tag(2)
-                        Text("😃").tag(3)
+                        ForEach(Array(DayHabits.sleepQualityIcons.enumerated()), id: \.offset) { i, icon in
+                            Text(icon).tag(i + 1)
+                        }
                     }
                     .pickerStyle(.segmented)
                 }
                 Section {
                     if today?.sleptEnough == true {
                         Button("Vinkje weghalen", role: .destructive) {
-                            todayOrCreate().sleptEnough = false
+                            context.habits(on: day).sleptEnough = false
                             dismiss()
                         }
                     } else {
                         Button("Alleen afvinken (8+ uur, zonder tijden)") {
-                            todayOrCreate().sleptEnough = true
+                            context.habits(on: day).sleptEnough = true
                             dismiss()
                         }
                     }
@@ -776,13 +758,6 @@ struct SleepSheet: View {
         .onAppear { prefill() }
     }
 
-    private func todayOrCreate() -> DayHabits {
-        if let today { return today }
-        let h = DayHabits(date: cal.isDateInToday(day) ? .now : (cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day))
-        context.insert(h)
-        return h
-    }
-
     private func prefill() {
         guard !loaded else { return }
         loaded = true
@@ -798,7 +773,7 @@ struct SleepSheet: View {
     }
 
     private func save() {
-        let record = todayOrCreate()
+        let record = context.habits(on: day)
         record.bedTime = bed
         record.wakeTime = wake
         record.sleepQuality = quality

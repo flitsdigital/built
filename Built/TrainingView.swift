@@ -33,7 +33,7 @@ struct TrainingView: View {
     @State private var showNewRoutine = false
     @State private var newRoutineName = ""
     @State private var confirmDiscard = false
-    @State private var dayToDelete: Date?
+    @State private var sessionToDelete: WorkoutSession?
     @State private var exerciseToRemove: DraftExercise.ID?
     @State private var prToast: String?
     @FocusState private var focusedSet: UUID?
@@ -57,16 +57,15 @@ struct TrainingView: View {
     // én per historie-dag, bij élke render. Nu wordt er één keer per render gegroepeerd.
 
     /// Sets per oefening en per dag, plus de oefening-catalogus als opzoektabel.
-    struct HistoryIndex {
+    /// `isBodyweight` en vrienden komen van `ExerciseTypes`.
+    struct HistoryIndex: ExerciseTypes {
         var byExercise: [String: [SetEntry]] = [:]
         var byDay: [Int: [SetEntry]] = [:]
         /// Beste geschat 1RM per oefening vóór een gegeven dag — voor de PR-badges.
         var typeOf: [String: String] = [:]
         var muscleOf: [String: String] = [:]
 
-        func isBodyweight(_ name: String) -> Bool { typeOf[name] == "Bodyweight" }
-        func isBarbell(_ name: String) -> Bool { typeOf[name] == "Barbell" }
-        func isCardio(_ name: String) -> Bool { typeOf[name] == "Cardio" }
+        func type(of name: String) -> String? { typeOf[name] }
     }
 
     private func makeHistory() -> HistoryIndex {
@@ -82,63 +81,33 @@ struct TrainingView: View {
 
     // MARK: - Historie helpers
 
-    private func byExercise(_ daySets: [SetEntry]) -> [(name: String, sets: [SetEntry])] {
-        var names: [String] = []
-        for s in daySets.sorted(by: { $0.date < $1.date }) where !names.contains(s.exercise) {
-            names.append(s.exercise)
-        }
-        return names.map { n in (n, daySets.filter { $0.exercise == n }.sorted { $0.date < $1.date }) }
-    }
+    /// Elke sessie een eigen id, afgeleid van het starttijdstip. Zo houdt een training
+    /// die na een force-quit hervat wordt dezelfde sessie — `startedAt` komt mee terug —
+    /// zonder dat het opslagformaat eromheen een veld erbij hoeft.
+    private var workoutID: UUID { .stable(from: "workout-\(startedAt.timeIntervalSinceReferenceDate)") }
 
-    private var pastDays: [Date] {
-        var seen = Set<Int>()
-        var out: [Date] = []
-        // `sets` staat aflopend op datum, dus de eerste hit per dag is meteen de juiste.
-        for s in sets where seen.insert(dayKey(s.date)).inserted {
-            out.append(cal.startOfDay(for: s.date))
-            if out.count == 90 { break }
-        }
-        return out
+    /// De laatste 90 sessies, nieuwste eerst. Twee trainingen op één dag zijn twee
+    /// kaarten; sets van vóór `workoutID` vallen nog per dag samen.
+    private var pastSessions: [WorkoutSession] {
+        Array(sets.sessions().reversed().prefix(90))
     }
 
     private func lastSession(for name: String, _ history: HistoryIndex) -> [SetEntry] {
         let prev = (history.byExercise[name] ?? []).filter { $0.date < startedAt }
-        guard let latest = prev.map(\.date).max() else { return [] }
-        let key = dayKey(latest)
-        return prev.filter { dayKey($0.date) == key }.sorted { $0.date < $1.date }
+        guard let latest = prev.max(by: { $0.date < $1.date }) else { return [] }
+        return prev.filter { $0.sessionKey == latest.sessionKey }.sorted { $0.date < $1.date }
+    }
+
+    // Kalenderweek (ma–zo), dezelfde grens als waar het weekdoel op telt. Een rollend
+    // venster van 7 dagen gaf een andere stand dan het dashboard.
+    private var weekDays: [Date] {
+        guard let week = cal.dateInterval(of: .weekOfYear, for: .now) else { return [] }
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: week.start) }
     }
 
     private var trainedThisWeek: Int {
-        let weekStart = cal.startOfDay(for: .now).addingTimeInterval(-6 * 86_400)
-        return Set(sets.filter { $0.date > weekStart }.map { dayKey($0.date) }).count
-    }
-
-    private var weekDays: [Date] {
-        (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: cal.startOfDay(for: .now)) }
-    }
-
-    private let planDays: [(day: Int, label: String)] = [
-        (2, "Maandag"), (3, "Dinsdag"), (4, "Woensdag"), (5, "Donderdag"),
-        (6, "Vrijdag"), (7, "Zaterdag"), (1, "Zondag"),
-    ]
-
-    private var todayPlanned: Routine? {
-        guard let name = profile.plannedRoutine(weekday: cal.component(.weekday, from: .now)) else { return nil }
-        return routines.first { $0.name == name }
-    }
-
-    private func assignRoutine(_ name: String?, to weekday: Int) {
-        if let name {
-            profile.schedule[String(weekday)] = name
-            if !profile.trainingDays.contains(weekday) { profile.trainingDays.append(weekday) }
-        } else {
-            profile.schedule[String(weekday)] = nil
-            profile.trainingDays.removeAll { $0 == weekday }
-        }
-    }
-
-    private func trained(on day: Date) -> Bool {
-        sets.contains { dayKey($0.date) == dayKey(day) }
+        guard let week = cal.dateInterval(of: .weekOfYear, for: .now) else { return 0 }
+        return Set(sets.filter { week.contains($0.date) }.map { dayKey($0.date) }).count
     }
 
     private func routineSubtitle(_ routine: Routine) -> String {
@@ -154,12 +123,13 @@ struct TrainingView: View {
         history.byDay[dayKey(day)] ?? []
     }
 
-    /// Dag met minstens één nieuw e1RM-record.
-    private func isPRDay(_ day: Date, _ history: HistoryIndex) -> Bool {
-        let start = cal.startOfDay(for: day)
+    /// Training met minstens één nieuw e1RM-record. Vanaf de eerste set van déze sessie,
+    /// niet vanaf middernacht: anders krijgt de avondtraining het bekertje van de ochtend.
+    private func isPRSession(_ session: WorkoutSession, _ history: HistoryIndex) -> Bool {
+        let start = session.sets.first?.date ?? session.date
         // Per oefening één keer het oude record bepalen i.p.v. per set opnieuw scannen.
         var bestBefore: [String: Double] = [:]
-        for s in sets(on: day, history) {
+        for s in session.sets {
             let best: Double
             if let cached = bestBefore[s.exercise] {
                 best = cached
@@ -248,10 +218,6 @@ struct TrainingView: View {
         guard !last.isEmpty else { return nil }
         let bw = history.isBodyweight(name)
         return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
-    }
-
-    private func restLabel(_ seconds: Int) -> String {
-        seconds <= 0 ? "uit" : "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 
     private func setRest(_ id: UUID, _ seconds: Int?) {
@@ -435,20 +401,12 @@ struct TrainingView: View {
         }
     }
 
-    /// De dagrecord waar deze training op landt — vandaag, of de teruggezette datum.
-    private func habitsRecord(for date: Date) -> DayHabits {
-        if let existing = habits.first(where: { dayKey($0.date) == dayKey(date) }) { return existing }
-        let h = DayHabits(date: date)
-        context.insert(h)
-        return h
-    }
-
     private func saveExerciseNotes() {
         let notes = workout
             .map { ($0.name, $0.note.trimmingCharacters(in: .whitespacesAndNewlines)) }
             .filter { !$0.1.isEmpty }
         guard !notes.isEmpty else { return }
-        let record = habitsRecord(for: workoutDate)
+        let record = context.habits(on: workoutDate)
         for (name, text) in notes { record.exerciseNotes[name] = text }
     }
 
@@ -457,9 +415,11 @@ struct TrainingView: View {
         let clean = workoutNote.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = workoutName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty || !name.isEmpty else { return }
-        let record = habitsRecord(for: workoutDate)
-        if !clean.isEmpty { record.workoutNote = clean }
-        if !name.isEmpty { record.workoutName = name }
+        // Per sessie, niet per dag: anders overschrijft je avondtraining de naam van
+        // die ochtend.
+        let record = context.habits(on: workoutDate)
+        if !clean.isEmpty { record.workoutNotes[workoutID.uuidString] = clean }
+        if !name.isEmpty { record.workoutNames[workoutID.uuidString] = name }
     }
 
     /// Spiergroep-intensiteit van de zojuist afgeronde training (0…1, genormaliseerd op volume).
@@ -486,11 +446,13 @@ struct TrainingView: View {
         // Vergelijk met de vorige sessie die minstens één oefening deelt — niet met een
         // willekeurige vorige dag (anders vergelijk je Legs met Push).
         let names = Set(workout.map(\.name))
-        let previousDay = pastDays.first { day in
-            !cal.isDateInToday(day) && sets(on: day, history).contains { names.contains($0.exercise) }
+        // Alles behalve deze sessie zelf. Op "niet vandaag" filteren sloeg een training
+        // van diezelfde ochtend over, en dat is juist de meest recente vergelijking.
+        let previous = pastSessions.first { s in
+            s.id != workoutID.uuidString && s.sets.contains { names.contains($0.exercise) }
         }
-        let previousVolume = previousDay.map { day in
-            Int(sets(on: day, history).map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: history.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+        let previousVolume = previous.map { s in
+            Int(s.sets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: history.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         }
         summary = WorkoutSummary(
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
@@ -653,17 +615,15 @@ struct TrainingView: View {
         }
         .animation(.snappy(duration: 0.3), value: prToast)
         .sensoryFeedback(.success, trigger: prToast) { _, new in new != nil }
-        .confirmationDialog("Trainingsdag verwijderen?",
-                            isPresented: Binding(get: { dayToDelete != nil },
-                                                 set: { if !$0 { dayToDelete = nil } }),
+        .confirmationDialog("Training verwijderen?",
+                            isPresented: Binding(get: { sessionToDelete != nil },
+                                                 set: { if !$0 { sessionToDelete = nil } }),
                             titleVisibility: .visible) {
-            Button("Verwijder \(dayToDelete.map { sets(on: $0, history).count } ?? 0) sets", role: .destructive) {
-                if let day = dayToDelete {
-                    for s in sets(on: day, history) { context.deleteSynced(s) }
-                }
-                dayToDelete = nil
+            Button("Verwijder \(sessionToDelete?.sets.count ?? 0) sets", role: .destructive) {
+                for s in sessionToDelete?.sets ?? [] { context.deleteSynced(s) }
+                sessionToDelete = nil
             }
-            Button("Annuleer", role: .cancel) { dayToDelete = nil }
+            Button("Annuleer", role: .cancel) { sessionToDelete = nil }
         }
         .confirmationDialog("Oefening verwijderen?",
                             isPresented: Binding(get: { exerciseToRemove != nil },
@@ -716,8 +676,7 @@ struct TrainingView: View {
 
     // MARK: - Idle: kaarten i.p.v. een List, zodat de tab niet leest als Instellingen
 
-    /// Eén weekstrip die zowel toont wát je deed als wát er gepland staat. Stond eerder
-    /// twee keer op het scherm: "Deze week" (bolletjes) plus zeven Form-rijen met de planning.
+    /// Eén weekstrip: wat je deze week deed, en hoe ver dat van je weekdoel af staat.
     private func weekCard(_ history: HistoryIndex) -> some View {
         VStack(spacing: 12) {
             HStack {
@@ -736,60 +695,42 @@ struct TrainingView: View {
         .builtCard()
     }
 
-    /// Eén dag: gedaan (vol), gepland (routine-kleur), of leeg. Tik = routine koppelen.
+    /// Eén dag: getraind (vol, in de kleur van wat je deed) of niet. Er valt niets te
+    /// koppelen — welke dag je traint bepaal je door te trainen.
     private func weekDay(_ day: Date, _ history: HistoryIndex) -> some View {
-        let did = !sets(on: day, history).isEmpty
-        let weekday = cal.component(.weekday, from: day)
-        let planned = profile.plannedRoutine(weekday: weekday)
-        let routine = routines.first { $0.name == planned }
+        let done = sets(on: day, history)
+        let did = !done.isEmpty
+        let routine = done.first.flatMap { s in routines.first { $0.exercises.contains(s.exercise) } }
         let tint = routine.map { routineColor($0, history) } ?? .green
         let isToday = cal.isDateInToday(day)
 
-        return Menu {
-            Button("Rustdag") { assignRoutine(nil, to: weekday) }
-            Divider()
-            ForEach(routines) { r in
-                Button {
-                    assignRoutine(r.name, to: weekday)
-                } label: {
-                    if planned == r.name { Label(r.name, systemImage: "checkmark") } else { Text(r.name) }
+        return VStack(spacing: 5) {
+            Text(day.formatted(.dateTime.weekday(.narrow)))
+                .font(.caption2.weight(isToday ? .bold : .regular))
+                .foregroundStyle(isToday ? Color.primary : Color.secondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
+                    .fill(did ? AnyShapeStyle(tint) : AnyShapeStyle(.builtTint(.gray)))
+                    .frame(height: 46)
+                if did {
+                    Image(systemName: "dumbbell.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
                 }
-            }
-        } label: {
-            VStack(spacing: 5) {
-                // Color.primary i.p.v. .primary: binnen een Menu-label worden de
-                // hiërarchische stijlen getint met het accent, en dan wordt alles groen.
-                Text(day.formatted(.dateTime.weekday(.narrow)))
-                    .font(.caption2.weight(isToday ? .bold : .regular))
-                    .foregroundStyle(isToday ? Color.primary : Color.secondary)
-                ZStack {
+                if isToday {
                     RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
-                        .fill(did ? AnyShapeStyle(tint) : AnyShapeStyle(.builtTint(planned == nil ? .gray : tint)))
+                        .strokeBorder(.green, lineWidth: 2)
                         .frame(height: 46)
-                    if did {
-                        Image(systemName: "dumbbell.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white)
-                    } else if let planned {
-                        Text(planned.prefix(2).uppercased())
-                            .font(.caption2.bold())
-                            .foregroundStyle(tint)
-                    }
-                    if isToday {
-                        RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
-                            .strokeBorder(.green, lineWidth: 2)
-                            .frame(height: 46)
-                    }
                 }
-                Text(day.formatted(.dateTime.day()))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(isToday ? Color.green : Color.secondary.opacity(0.6))
             }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+            Text(day.formatted(.dateTime.day()))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(isToday ? Color.green : Color.secondary.opacity(0.6))
         }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(day.formatted(.dateTime.weekday(.wide).day().month()))
-        .accessibilityValue(did ? "Getraind" : (planned.map { "Gepland: \($0)" } ?? "Rustdag"))
+        .accessibilityValue(did ? "Getraind" : "Niet getraind")
     }
 
     // MARK: - Routine-identiteit
@@ -808,44 +749,6 @@ struct TrainingView: View {
         for name in routine.exercises { tally[history.typeOf[name] ?? "Overig", default: 0] += 1 }
         let top = tally.max { $0.value < $1.value }?.key ?? "Overig"
         return Exercise.typeIcon[top] ?? "dumbbell"
-    }
-
-    private func plannedCard(_ planned: Routine, _ history: HistoryIndex) -> some View {
-        let tint = routineColor(planned, history)
-        return Button {
-            startWorkout(with: planned.exercises, alternatives: planned.alternatives, targets: planned.targets,
-                         supersets: planned.supersets, restByExercise: planned.restByExercise)
-        } label: {
-            HStack(spacing: 14) {
-                RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous)
-                    .fill(.builtTint(tint))
-                    .frame(width: 52, height: 52)
-                    .overlay {
-                        Image(systemName: routineIcon(planned, history))
-                            .font(.title3)
-                            .foregroundStyle(tint)
-                    }
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("VANDAAG GEPLAND")
-                        .font(.caption2.weight(.semibold)).tracking(0.8)
-                        .foregroundStyle(.secondary)
-                    Text(planned.name)
-                        .font(.title3.bold())
-                        .foregroundStyle(.primary)
-                }
-                Spacer()
-                Image(systemName: "play.fill")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(.green, in: Circle())
-                    // Zonder dit leest de kaart als tekst zonder actie: tikken start de training.
-                    .accessibilityLabel("Start training")
-            }
-            .builtCard()
-        }
-        .buttonStyle(PressableStyle(scale: 0.985))
     }
 
     private func routineCard(_ routine: Routine, _ history: HistoryIndex) -> some View {
@@ -890,11 +793,6 @@ struct TrainingView: View {
                     }
                     Button("Wijzig routine", systemImage: "pencil") { editingRoutine = routine }
                     Button("Verwijder routine", systemImage: "trash", role: .destructive) {
-                        // Ruim de weekplanning op zodat een dode naam niet in agenda/meldingen blijft spoken
-                        for (weekday, name) in profile.schedule where name == routine.name {
-                            profile.schedule[weekday] = nil
-                            if let day = Int(weekday) { profile.trainingDays.removeAll { $0 == day } }
-                        }
                         context.deleteSynced(routine)
                     }
                 } label: {
@@ -915,18 +813,23 @@ struct TrainingView: View {
         .buttonStyle(PressableStyle(scale: 0.985))
     }
 
-    private func historyCard(_ day: Date, _ history: HistoryIndex) -> some View {
-        let daySets = sets(on: day, history)
-        let vol = Int(daySets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+    private func historyCard(_ session: WorkoutSession, _ history: HistoryIndex) -> some View {
+        let day = cal.startOfDay(for: session.date)
+        let vol = Int(session.sets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+        let name = habits.first { dayKey($0.date) == dayKey(session.date) }?.name(for: session.id) ?? ""
         return NavigationLink {
-            SessionDetailView(day: day)
+            SessionDetailView(session: session)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    if isPRDay(day, history) {
+                    // Tweede training van dezelfde dag: alleen de datum zegt te weinig.
+                    Text(name.isEmpty ? session.date.formatted(date: .omitted, time: .shortened) : name)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if isPRSession(session, history) {
                         Text("🏆").font(.caption).accessibilityLabel("Persoonlijk record")
                     }
                     Spacer()
@@ -934,7 +837,7 @@ struct TrainingView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                ForEach(byExercise(daySets), id: \.name) { group in
+                ForEach(session.sets.byExercise(), id: \.name) { group in
                     let bw = history.isBodyweight(group.name)
                     Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
                         .font(.footnote)
@@ -948,7 +851,7 @@ struct TrainingView: View {
         // Swipe-to-delete bestaat niet buiten een List; een hele trainingsdag wegvegen
         // was sowieso te makkelijk voor iets onomkeerbaars.
         .contextMenu {
-            Button("Verwijder deze dag", systemImage: "trash", role: .destructive) { dayToDelete = day }
+            Button("Verwijder deze training", systemImage: "trash", role: .destructive) { sessionToDelete = session }
         }
     }
 
@@ -971,14 +874,7 @@ struct TrainingView: View {
             .accessibilityLabel("Routine toevoegen")
         }
 
-        if let planned = todayPlanned, !trained(on: cal.startOfDay(for: .now)) {
-            plannedCard(planned, history)
-        }
-
         weekCard(history)
-        if !routines.isEmpty {
-            BuiltFootnote("Tik op een dag om er een routine aan te koppelen.")
-        }
 
         Button {
             startWorkout(with: [])
@@ -1016,13 +912,13 @@ struct TrainingView: View {
         }
 
         BuiltSectionHeader("Geschiedenis")
-        if pastDays.isEmpty {
+        if pastSessions.isEmpty {
             ContentUnavailableView("Nog geen trainingen", systemImage: "clock.arrow.circlepath",
                                    description: Text("Je eerste training verschijnt hier — met volume, oefeningen en records."))
                 .builtCard()
         }
-        ForEach(pastDays, id: \.self) { day in
-            historyCard(day, history)
+        ForEach(pastSessions) { session in
+            historyCard(session, history)
         }
     }
 
@@ -1363,28 +1259,19 @@ struct TrainingView: View {
                              decimal: false, placeholder: "min",
                              focus: $focusedSet, id: set.wrappedValue.id,
                              disabled: set.wrappedValue.done)
-                    .frame(width: 56)
-                    .padding(.vertical, 6)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
-                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+                    .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
                 NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "±kg" : "kg",
                              focus: $focusedSet, id: set.wrappedValue.id,
                              disabled: set.wrappedValue.done, signed: bodyweight)
-                    .frame(width: 56)
-                    .padding(.vertical, 6)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
-                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+                    .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
                 NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
                                             set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
                              decimal: false, placeholder: "reps",
                              focus: $focusedSet, id: nil,
                              disabled: set.wrappedValue.done)
-                    .frame(width: 48)
-                    .padding(.vertical, 6)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
-                    .opacity(set.wrappedValue.done ? 0.55 : 1)
+                    .numericFieldChrome(width: 48, dimmed: set.wrappedValue.done)
             }
             Spacer()
             Button {
@@ -1394,7 +1281,7 @@ struct TrainingView: View {
                         if !set.wrappedValue.warmup {
                             let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
                                              dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
-                                             seconds: set.wrappedValue.seconds)
+                                             seconds: set.wrappedValue.seconds, workoutID: workoutID)
                             context.insert(e)
                             set.wrappedValue.savedEntry = e
                         }

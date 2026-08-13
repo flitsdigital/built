@@ -158,7 +158,9 @@ struct WorkoutSummarySheet: View {
 /// Overzicht van één gedane training: duur, volume, verbeteringen — en bewerkbaar
 /// (kg/reps aanpassen, set of oefening verwijderen).
 struct SessionDetailView: View {
-    let day: Date
+    /// De training zoals de historie hem toonde. De sets komen hieronder vers uit de
+    /// store — dit scherm is bewerkbaar, dus de momentopname zou meteen verlopen zijn.
+    let session: WorkoutSession
     @Environment(\.modelContext) private var context
     @Query(sort: \SetEntry.date) private var allSets: [SetEntry]
     @Query private var allHabits: [DayHabits]
@@ -172,30 +174,25 @@ struct SessionDetailView: View {
     }
 
     private var cal: Calendar { .current }
+    private var day: Date { cal.startOfDay(for: session.date) }
+    /// De sets van déze training, niet van de hele dag — er kunnen er twee zijn.
     private var daySets: [SetEntry] {
-        allSets.filter { dayKey($0.date) == dayKey(day) }.sorted { $0.date < $1.date }
+        allSets.filter { $0.sessionKey == session.id }.sorted { $0.date < $1.date }
     }
 
     private var habitsRecord: DayHabits? { allHabits.first { dayKey($0.date) == dayKey(day) } }
-
-    private func record() -> DayHabits {
-        if let h = habitsRecord { return h }
-        let noon = cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
-        let h = DayHabits(date: noon)
-        context.insert(h)
-        return h
-    }
+    private var workoutName: String { habitsRecord?.name(for: session.id) ?? "" }
 
     private var workoutNoteBinding: Binding<String> {
-        Binding(get: { habitsRecord?.workoutNote ?? "" },
-                set: { record().workoutNote = $0 })
+        Binding(get: { habitsRecord?.note(for: session.id) ?? "" },
+                set: { context.habits(on: day).workoutNotes[session.id] = $0 })
     }
 
-    private var byExercise: [(name: String, sets: [SetEntry])] {
-        var names: [String] = []
-        for s in daySets where !names.contains(s.exercise) { names.append(s.exercise) }
-        return names.map { n in (n, daySets.filter { $0.exercise == n }) }
+    private var workoutNameBinding: Binding<String> {
+        Binding(get: { workoutName }, set: { context.habits(on: day).workoutNames[session.id] = $0 })
     }
+
+    private var byExercise: [(name: String, sets: [SetEntry])] { daySets.byExercise() }
 
     private var volume: Int {
         Int(daySets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
@@ -207,24 +204,30 @@ struct SessionDetailView: View {
         return m >= 60 ? "\(m / 60)u \(m % 60)m" : "\(m) min"
     }
 
-    /// Vorige trainingsdag die minstens één oefening deelt — basis voor de vergelijking.
-    private var previousDay: Date? {
+    /// Vorige training die minstens één oefening deelt — basis voor de vergelijking.
+    /// Terugscannen vanaf de eerste set van nu; de hele historie in sessies hakken om er
+    /// één uit te pakken was duur en zei niet meer.
+    private var previousSession: (date: Date, sets: [SetEntry])? {
         let names = Set(daySets.map(\.exercise))
-        let start = cal.startOfDay(for: day)
-        return allSets.filter { $0.date < start && names.contains($0.exercise) }
-            .map { cal.startOfDay(for: $0.date) }.max()
+        guard let start = daySets.first?.date else { return nil }
+        let earlier = allSets.filter { $0.date < start } // @Query levert oplopend op datum
+        guard let match = earlier.last(where: { names.contains($0.exercise) }) else { return nil }
+        let rows = earlier.filter { $0.sessionKey == match.sessionKey }
+        return (rows.first?.date ?? match.date, rows)
     }
 
     private var volumeDelta: Int? {
-        guard let prev = previousDay else { return nil }
-        let pv = Int(allSets.filter { dayKey($0.date) == dayKey(prev) }
-            .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+        guard let prev = previousSession else { return nil }
+        let pv = Int(prev.sets
+            .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev.date), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         return pv > 0 ? volume - pv : nil
     }
 
-    /// Oefeningen met een nieuw e1RM-record deze dag t.o.v. alles ervoor.
+    /// Oefeningen met een nieuw e1RM-record in deze training t.o.v. alles ervoor. Vanaf
+    /// de eerste set, niet vanaf middernacht: anders telt een training van diezelfde
+    /// ochtend niet mee als "ervoor".
     private var prs: [(exercise: String, new: Double, old: Double)] {
-        let start = cal.startOfDay(for: day)
+        let start = daySets.first?.date ?? cal.startOfDay(for: day)
         return byExercise.compactMap { group in
             let best = group.sets.map { epley($0.weightKg, $0.reps) }.max() ?? 0
             let before = allSets.filter { $0.exercise == group.name && $0.date < start }
@@ -270,6 +273,7 @@ struct SessionDetailView: View {
             }
 
             Section("Notitie") {
+                TextField("Naam (bijv. Push A)", text: workoutNameBinding)
                 TextField("Notitie over deze training", text: workoutNoteBinding, axis: .vertical)
                     .lineLimit(1...6)
             }
@@ -294,23 +298,17 @@ struct SessionDetailView: View {
                             if exercises.isCardio(group.name) {
                                 NumericField(value: minutes(set), decimal: false, placeholder: "min",
                                              focus: $focused, id: nil, disabled: false)
-                                    .frame(width: 64)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
+                                    .numericFieldChrome(width: 64)
                                 Text("min").font(.footnote).foregroundStyle(.secondary)
                             } else {
                                 NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "±kg" : "kg",
                                              focus: $focused, id: nil, disabled: false,
                                              signed: exercises.isBodyweight(group.name))
-                                    .frame(width: 64)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
+                                    .numericFieldChrome(width: 64)
                                 Text(exercises.isBodyweight(group.name) ? "±kg" : "kg").font(.footnote).foregroundStyle(.secondary)
                                 NumericField(value: reps(set), decimal: false, placeholder: "reps",
                                              focus: $focused, id: nil, disabled: false)
-                                    .frame(width: 52)
-                                    .padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
+                                    .numericFieldChrome(width: 52)
                                 Text("reps").font(.footnote).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -321,9 +319,11 @@ struct SessionDetailView: View {
                     }
                     Button {
                         if let last = group.sets.last {
+                            // Zelfde sessie als de rij erboven, anders valt de nieuwe set
+                            // buiten deze training.
                             context.insert(SetEntry(date: last.date.addingTimeInterval(1),
                                                     exercise: group.name, weightKg: last.weightKg, reps: last.reps,
-                                                    seconds: last.seconds))
+                                                    seconds: last.seconds, workoutID: last.workoutID))
                         }
                     } label: {
                         Label("Set toevoegen", systemImage: "plus")
@@ -332,7 +332,9 @@ struct SessionDetailView: View {
             }
         }
         .tabBarClearance()
-        .navigationTitle(cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
+        .navigationTitle(workoutName.isEmpty
+                         ? (cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
+                         : workoutName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ShareLink(item: shareText)
@@ -348,7 +350,6 @@ struct RoutineEditorView: View {
     /// nil = alleen bewerken (bijv. vanuit onboarding); anders verschijnt de startknop.
     var onStart: ((Routine) -> Void)?
     @Environment(\.modelContext) private var context
-    @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @Query private var exercises: [Exercise]
     @State private var showPicker = false
 
@@ -444,7 +445,6 @@ struct RoutineEditorView: View {
 struct RoutineExerciseEditor: View {
     @Bindable var routine: Routine
     let exercise: String
-    @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @Query private var exercises: [Exercise]
     @State private var showAltPicker = false
 
@@ -531,6 +531,17 @@ struct RoutineExerciseEditor: View {
                 routine.alternatives[exercise, default: []].append(name)
             }
         }
+    }
+}
+
+extension View {
+    /// Het kader om een `NumericField`: overal dezelfde hoogte, hoek en vulling.
+    /// `dimmed` voor een afgevinkte set, die naar de achtergrond mag.
+    func numericFieldChrome(width: CGFloat, dimmed: Bool = false) -> some View {
+        frame(width: width)
+            .padding(.vertical, 6)
+            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: BuiltRadius.small))
+            .opacity(dimmed ? 0.55 : 1)
     }
 }
 

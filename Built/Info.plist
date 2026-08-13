@@ -31,8 +31,6 @@
 	<string>1</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Om je weekplanning in je agenda te zetten en te synchroniseren.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Voor het scannen van barcodes op producten.</string>
 	<key>NSHealthShareUsageDescription</key>

@@ -1,16 +1,14 @@
-import Compression
 import Foundation
 import SwiftData
 import Testing
 @testable import Built
 
 /// De sync heeft geen server nodig om te testen: de interessante beslissingen zitten in
-/// pure functies eromheen — is de vingerafdruk stabiel, en klopt de gzip-stream die we
-/// zelf in elkaar zetten.
+/// de pure functies eromheen — hoe de payload eruitziet, en wie welk id krijgt.
 @Suite("Sync")
 struct SyncTests {
 
-    // MARK: - Vingerafdruk
+    // MARK: - Encoder
 
     /// Zonder `sortedKeys` heeft dezelfde data geen vaste JSON-vorm: `schedule`, `targets`
     /// en `exercise_notes` zijn dictionaries. Dan verschilt de vingerafdruk zonder dat er
@@ -37,12 +35,6 @@ struct SyncTests {
         let tweede = try #require(json.range(of: "\"2\""))
         #expect(eerste.lowerBound < tweede.lowerBound)
         #expect(json.contains("2025-06-02T"))
-    }
-
-    @Test("Hex-digest is SHA-256, niet Swift's per-proces geseede Hasher")
-    func digestIsSHA256() {
-        #expect(Sync.hexDigest(Data("abc".utf8))
-                == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
 
     // MARK: - Payload
@@ -102,6 +94,46 @@ struct SyncTests {
         #expect(Set(rows.map(\.syncID)).count == 3)
     }
 
+    /// Twee toestellen die verschillend kiezen wie blijft, wissen elkaars keuze weg. Het
+    /// afgeleide id is daarom de enige keuze die overal hetzelfde uitvalt.
+    @Test("Dubbele oefening valt terug op één rij met het afgeleide id")
+    @MainActor func dedupeHoudtDeAfgeleideRijOver() throws {
+        let context = try memoryContext()
+        Sync.clearDeletionsForTesting()
+        let oud = Exercise(name: "Bench Press", muscle: "Borst", type: "Barbell") // willekeurig id
+        let nieuw = Exercise(name: "Bench Press", muscle: "Borst", type: "Barbell")
+        nieuw.syncID = .stable(from: "Bench Press")
+        context.insert(oud)
+        context.insert(nieuw)
+        let oudID = oud.syncID
+        context.insert(SetEntry(exercise: "Bench Press", weightKg: 60, reps: 5))
+
+        Exercise.dedupe(context)
+
+        let over = try context.fetch(FetchDescriptor<Exercise>())
+        #expect(over.count == 1)
+        #expect(over.first?.syncID == .stable(from: "Bench Press"))
+        // De sets koppelen op naam, dus die hangen aan de overgebleven rij.
+        #expect(try context.fetch(FetchDescriptor<SetEntry>()).count == 1)
+        // En de server hoort te weten dat het duplicaat weg mag.
+        #expect(Sync.pendingDeletionsForTesting.contains { $0.id == oudID })
+    }
+
+    @Test("Oefening zonder afgeleid id krijgt het alsnog, met spoor voor de oude")
+    @MainActor func dedupeHerstempeltLosseRij() throws {
+        let context = try memoryContext()
+        Sync.clearDeletionsForTesting()
+        let solo = Exercise(name: "Zelfbedachte Curl")
+        context.insert(solo)
+        let oudID = solo.syncID
+
+        Exercise.dedupe(context)
+
+        #expect(try context.fetch(FetchDescriptor<Exercise>()).count == 1)
+        #expect(solo.syncID == .stable(from: "Zelfbedachte Curl"))
+        #expect(Sync.pendingDeletionsForTesting.contains { $0.id == oudID })
+    }
+
     @Test("Verwijderen laat een spoor achter voor de server")
     @MainActor func verwijderenLaatSpoorAchter() throws {
         let context = try memoryContext()
@@ -119,54 +151,4 @@ struct SyncTests {
         Sync.clearDeletionsForTesting()
     }
 
-    // MARK: - Gzip
-
-    @Test("CRC32 volgt de standaard-testvector")
-    func crc32Klopt() {
-        #expect(Gzip.crc32(Data("123456789".utf8)) == 0xCBF4_3926)
-    }
-
-    /// De gzip-omhulling zetten we met de hand om een raw-DEFLATE-blok van `Compression`.
-    /// Eén byte verkeerd en de server weigert de push — vandaar dat de rondrit hier
-    /// helemaal uitgepakt wordt.
-    @Test("Gzip levert een geldige stream die weer uitpakt naar het origineel")
-    func gzipRondrit() throws {
-        let sample = #"{"date":"2025-06-02T12:00:00.000Z","exercise":"Bankdrukken","reps":8},"#
-        let original = Data(String(repeating: sample, count: 500).utf8)
-        let zipped = try #require(Gzip.compress(original))
-
-        #expect(Array(zipped.prefix(3)) == [0x1f, 0x8b, 0x08]) // magic + deflate-methode
-        #expect(zipped.count * 4 < original.count)             // dit is waar het om begonnen is
-
-        let trailer = Array(zipped.suffix(8))
-        #expect(littleEndian(trailer[0..<4]) == Gzip.crc32(original))
-        #expect(littleEndian(trailer[4..<8]) == UInt32(original.count))
-
-        let deflated = Data(zipped.dropFirst(10).dropLast(8))
-        #expect(inflate(deflated, capacity: original.count) == original)
-    }
-
-    @Test("Lege data levert geen stream op")
-    func gzipVanLeegIsNil() {
-        #expect(Gzip.compress(Data()) == nil)
-    }
-}
-
-// MARK: - Hulpjes
-
-private func littleEndian(_ bytes: ArraySlice<UInt8>) -> UInt32 {
-    let b = Array(bytes)
-    return UInt32(b[0]) | UInt32(b[1]) << 8 | UInt32(b[2]) << 16 | UInt32(b[3]) << 24
-}
-
-/// Raw DEFLATE weer uitpakken — de tegenhanger van wat `Gzip` inpakt.
-private func inflate(_ data: Data, capacity: Int) -> Data? {
-    let room = capacity + 1024
-    let destination = UnsafeMutablePointer<UInt8>.allocate(capacity: room)
-    defer { destination.deallocate() }
-    let written = data.withUnsafeBytes { raw -> Int in
-        guard let source = raw.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-        return compression_decode_buffer(destination, room, source, data.count, nil, COMPRESSION_ZLIB)
-    }
-    return written > 0 ? Data(bytes: destination, count: written) : nil
 }

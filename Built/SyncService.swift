@@ -3,7 +3,6 @@ import SwiftData
 import Supabase
 import Observation
 import AuthenticationServices
-import CryptoKit
 import UIKit
 
 /// ISO8601 mét fracties — precies wat PostgREST zelf ook stuurt.
@@ -149,6 +148,7 @@ enum Sync {
         var id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
         var dropset: Bool? = false; var failure: Bool? = false
         var seconds: Int? = 0
+        var workout_id: UUID? = nil
         var updated_at: String?; var deleted_at: String?
     }
     private struct HabitsRow: Codable, Sendable, SyncRow {
@@ -162,6 +162,8 @@ enum Sync {
         var stress: Int? = 0
         var exercise_notes: [String: String]? = [:]
         var workout_name: String? = ""
+        var workout_names: [String: String]? = [:]
+        var workout_notes: [String: String]? = [:]
         var updated_at: String?; var deleted_at: String?
     }
     private struct RoutineRow: Codable, Sendable, SyncRow {
@@ -316,14 +318,16 @@ enum Sync {
     }
     private static func row(_ e: SetEntry, _ at: String?) -> SetRow {
         SetRow(id: e.syncID, date: e.date, exercise: e.exercise, weight_kg: e.weightKg, reps: e.reps,
-               dropset: e.dropset, failure: e.failure, seconds: e.seconds, updated_at: at)
+               dropset: e.dropset, failure: e.failure, seconds: e.seconds,
+               workout_id: e.workoutID == .zero ? nil : e.workoutID, updated_at: at)
     }
     private static func row(_ e: DayHabits, _ at: String?) -> HabitsRow {
         HabitsRow(id: e.syncID, date: e.date, creatine: e.creatine, slept_enough: e.sleptEnough,
                   note: e.note, bed_time: e.bedTime, wake_time: e.wakeTime, sleep_quality: e.sleepQuality,
                   journal: e.journal, workout_note: e.workoutNote, energy: e.energy, mood: e.mood,
                   soreness: e.soreness, stress: e.stress, exercise_notes: e.exerciseNotes,
-                  workout_name: e.workoutName, updated_at: at)
+                  workout_name: e.workoutName, workout_names: e.workoutNames,
+                  workout_notes: e.workoutNotes, updated_at: at)
     }
     private static func row(_ e: Routine, _ at: String?) -> RoutineRow {
         RoutineRow(id: e.syncID, name: e.name, exercises: e.exercises, alternatives: e.alternatives,
@@ -418,21 +422,18 @@ enum Sync {
 
     // MARK: - Push
 
-    private static func pushFull(_ context: ModelContext, skipIfUnchanged: Bool) async throws {
+    /// Alles mee. De aanroeper komt hier alleen als er iets te pushen valt: `pushIfChanged`
+    /// slaat een schone staat over zonder ook maar te verzamelen. Hier stond een SHA-256
+    /// over de volledige database om een gelijke staat te herkennen — maar die moest
+    /// daarvoor toch al alles verzamelen en encoden, dus het spaarde alleen de upload uit
+    /// van iets wat hooguit wekelijks gebeurt.
+    private static func pushFull(_ context: ModelContext) async throws {
         _ = try await userID() // geldige sessie; zonder account komt niemand hier
         // Vóór het verzamelen, want alles wat ná dit moment binnenkomt zit niet in de
         // payload en moet blijven staan. `collect` zelf heeft geen await, dus daar kan
         // geen save tussendoor glippen.
         let cutoff = Date.now
         let p = try collect(context)
-        let h = try await fingerprint(p)
-        // Automatisch pad: staat alles er al, dan is er niets te doen. Handmatig ("Sync
-        // nu") pusht altijd — dat is een bewuste overschrijving.
-        if skipIfUnchanged, h == lastPushedHash {
-            lastFullPush = .now
-            clearSynced(upTo: cutoff, deletions: p.deletions) // server heeft deze staat al
-            return
-        }
         guard client != nil else { return }
         do {
             try await send(p)
@@ -440,7 +441,6 @@ enum Sync {
             SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
             throw error
         }
-        lastPushedHash = h
         lastFullPush = .now
         finishPush(upTo: cutoff, deletions: p.deletions)
     }
@@ -460,9 +460,6 @@ enum Sync {
             SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
             throw error
         }
-        // De vingerafdruk hoort bij de volledige staat en klopt na een delta niet meer.
-        // Hij wordt alleen op het volledige pad gebruikt, dat 'm dan opnieuw uitrekent.
-        lastPushedHash = nil
         finishPush(upTo: cutoff, deletions: p.deletions)
         return true
     }
@@ -494,73 +491,10 @@ enum Sync {
     }
 
     // MARK: - Transport
-    //
-    // De payload is bij uitstek comprimeerbaar: rijen met identieke sleutelnamen,
-    // ISO-datums met een gedeelde prefix, herhaalde oefeningsnamen. supabase-swift zet zelf
-    // geen `Content-Encoding` en biedt geen haakje om een voorgecodeerde body mee te geven,
-    // dus de gzip-variant gaat via een eigen URLRequest.
-    //
-    // Of de Supabase-gateway (Kong) `Content-Encoding: gzip` doorlaat naar PostgREST is per
-    // project niet gegarandeerd. Daarom: proberen, en bij een afwijzing terugvallen op de
-    // gewone RPC — en dat onthouden, zodat niet elke push twee keer gaat.
-
-    /// De gateway wil de gzip-body niet. Zegt niets over de payload zelf.
-    private struct CompressionRejected: Error {}
-
-    private static let gzipDisabledKey = "syncGzipUnsupported"
-    private static var gzipEnabled: Bool {
-        get { !UserDefaults.standard.bool(forKey: gzipDisabledKey) }
-        set { UserDefaults.standard.set(!newValue, forKey: gzipDisabledKey) }
-    }
 
     private static func send(_ payload: Payload) async throws {
         guard let db = client else { return }
-        let params = PushParams(payload: payload)
-
-        var compressionRejected = false
-        if gzipEnabled, let body = try await gzipped(params) {
-            do {
-                try await postGzip("sync_push_v2", body: body)
-                return
-            } catch is CompressionRejected {
-                compressionRejected = true
-            }
-        }
-        _ = try await db.rpc("sync_push_v2", params: params).execute()
-        // Ongecomprimeerd lukt het wél, dus het lag aan de compressie en niet aan de
-        // payload. Pas hier uitzetten: een 400 op een kapotte payload mag gzip niet
-        // permanent uitschakelen.
-        if compressionRejected { gzipEnabled = false }
-    }
-
-    /// JSON-encode + gzip op een achtergrond-thread. Dit is de zwaarste stap van een push
-    /// en hoort niet op de MainActor.
-    private static func gzipped(_ params: PushParams) async throws -> Data? {
-        try await Task.detached(priority: .utility) {
-            Gzip.compress(try makeEncoder().encode(params))
-        }.value
-    }
-
-    private static func postGzip(_ function: String, body: Data) async throws {
-        guard let config, let client else { throw notConfigured() }
-        let token = try await client.auth.session.accessToken
-        var request = URLRequest(url: config.url.appending(path: "rest/v1/rpc/\(function)"))
-        request.httpMethod = "POST"
-        request.setValue(config.key, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
-        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
-        request.httpBody = body
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if (200..<300).contains(code) { return }
-        // Een gateway die Content-Encoding niet doorlaat, struikelt op de body zelf.
-        // 401/5xx zeggen niets over compressie en gaan als gewone fout door.
-        if [400, 411, 415, 501].contains(code) { throw CompressionRejected() }
-        let message = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-        throw NSError(domain: "Sync", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+        _ = try await db.rpc("sync_push_v2", params: PushParams(payload: payload)).execute()
     }
 
     // MARK: - Pull
@@ -596,7 +530,6 @@ enum Sync {
         // De losse identifiers zijn daarvoor niets waard: de rijen die `applyMerge` zelf
         // wegschrijft komen via dezelfde observer binnen, en een tijdstempel kan die niet
         // onderscheiden van een set die je tijdens het ophalen afvinkte (#31).
-        lastPushedHash = nil
         changes.removeAll()
         deltaValid = false
         markDirty()
@@ -629,6 +562,9 @@ enum Sync {
             try merge(r.scales, Scale.self, context) { apply($0, to: $1) }
             try merge(r.customHabits, CustomHabit.self, context) { apply($0, to: $1) }
             try merge(r.habitLogs, HabitLog.self, context) { apply($0, to: $1) }
+            // De server kan nog rijen van vóór het afgeleide id bevatten; die zouden hier
+            // als tweede "Bench Press" naast de eigen rij landen.
+            Exercise.dedupe(context)
         }
     }
 
@@ -691,6 +627,11 @@ enum Sync {
     private static func apply(_ r: SetRow, to m: SetEntry) {
         m.date = r.date; m.exercise = r.exercise; m.weightKg = r.weight_kg; m.reps = r.reps
         m.dropset = r.dropset ?? false; m.failure = r.failure ?? false; m.seconds = r.seconds ?? 0
+        // Alleen overschrijven als de server iets zégt. Draait de migration nog niet, dan
+        // bestaat de kolom daar niet, komt het veld als nil terug, en zou een `?? .zero`
+        // het sessie-id bij elke pull lokaal wissen — en vallen twee trainingen van
+        // dezelfde dag weer samen.
+        if let w = r.workout_id { m.workoutID = w }
     }
     private static func apply(_ r: HabitsRow, to m: DayHabits) {
         m.date = r.date; m.creatine = r.creatine; m.sleptEnough = r.slept_enough
@@ -701,6 +642,9 @@ enum Sync {
         m.soreness = r.soreness ?? 0; m.stress = r.stress ?? 0
         m.exerciseNotes = r.exercise_notes ?? [:]
         m.workoutName = r.workout_name ?? ""
+        // Zie `apply(_ r: SetRow…)`: nil is "kolom bestaat daar niet", niet "leeg".
+        if let names = r.workout_names { m.workoutNames = names }
+        if let notes = r.workout_notes { m.workoutNotes = notes }
     }
     private static func apply(_ r: RoutineRow, to m: Routine) {
         m.name = r.name; m.exercises = r.exercises; m.alternatives = r.alternatives
@@ -773,10 +717,9 @@ enum Sync {
         try? wipeLocal(context)
     }
 
-    /// Ander account = schone lei. De bewaarde vingerafdruk en het pull-anker slaan op de
-    /// vorige gebruiker; laten staan zou betekenen dat de app denkt dat er niets te doen is.
+    /// Ander account = schone lei. Het pull-anker slaat op de vorige gebruiker; laten
+    /// staan zou betekenen dat de app denkt dat er niets meer op te halen valt.
     private static func resetSyncState() {
-        lastPushedHash = nil
         pullAnchor = nil
         deletions = []
         changes.removeAll()
@@ -979,16 +922,6 @@ enum Sync {
 
     // MARK: - Automatische sync-lus
 
-    /// Vingerafdruk van de laatst geslaagde volledige push. Alleen op dat pad in gebruik.
-    private static let hashKey = "lastPushedHash"
-    private static var lastPushedHash: String? {
-        get { UserDefaults.standard.string(forKey: hashKey) }
-        set {
-            if let newValue { UserDefaults.standard.set(newValue, forKey: hashKey) }
-            else { UserDefaults.standard.removeObject(forKey: hashKey) }
-        }
-    }
-
     private static var running = false
     static var appActive = true
 
@@ -1013,7 +946,7 @@ enum Sync {
         if SyncStatus.shared.pendingSince == nil { SyncStatus.shared.pendingSince = .now }
     }
 
-    /// Encoder voor de vingerafdruk, de gzip-body en de export.
+    /// Encoder voor de export.
     ///
     /// `sortedKeys` is geen cosmetica: `schedule`, `targets` en `exercise_notes` zijn
     /// dictionaries, en zonder vaste sleutelvolgorde levert dezelfde data twee keer een
@@ -1027,25 +960,6 @@ enum Sync {
             try container.encode(ISODate.shared.string(from: date))
         }
         return encoder
-    }
-
-    nonisolated static func hexDigest(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// SHA-256 over de payload.
-    ///
-    /// Swift's `Hasher` kan dit niet: die is per proces willekeurig geseed, dus dezelfde
-    /// data levert na een herstart een andere waarde — precies wat je niet wil van iets
-    /// dat je in UserDefaults bewaart.
-    nonisolated private static func digest(_ p: Payload) throws -> String {
-        hexDigest(try makeEncoder().encode(p))
-    }
-
-    /// Encoden en hashen van de complete database op de MainActor gaf een merkbare stall.
-    /// Payload is een boom van waardetypes, dus hij mag mee naar een achtergrond-task.
-    private static func fingerprint(_ p: Payload) async throws -> String {
-        try await Task.detached(priority: .utility) { try digest(p) }.value
     }
 
     /// Interval van de achtergrond-lus.
@@ -1128,13 +1042,13 @@ enum Sync {
         if isClean, changes.isEmpty, deletions.isEmpty { dirty = false; return }
         do {
             if needsFullPush {
-                try await pushFull(context, skipIfUnchanged: true)
+                try await pushFull(context)
             } else if try await pushDelta(context) == false {
                 // Er is wél iets gewijzigd, maar we kunnen niet aanwijzen wát — de
                 // save-melding kan nog onderweg zijn. Dan liever één volledige push (die
                 // zichzelf overslaat als er toch niets veranderd is) dan een wijziging die
                 // blijft liggen.
-                try await pushFull(context, skipIfUnchanged: true)
+                try await pushFull(context)
             }
             // `dirty` wordt door clearSynced gezet: false als alles weg is, true als er
             // tijdens de push nog iets binnenkwam. Bij een fout blijft 'ie staan zodat de

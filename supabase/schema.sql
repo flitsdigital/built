@@ -89,6 +89,10 @@ create table if not exists public.set_entries (
 alter table public.set_entries add column if not exists dropset boolean not null default false;
 alter table public.set_entries add column if not exists failure boolean not null default false;
 alter table public.set_entries add column if not exists seconds int not null default 0;
+-- Bij welke training deze set hoort. Null = van vóór deze kolom; de app valt daar terug
+-- op de dag. Zonder dit is een training "alles wat je die dag deed", en schuift een
+-- tweede training van dezelfde dag bij de eerste in.
+alter table public.set_entries add column if not exists workout_id uuid;
 
 create table if not exists public.day_habits (
   id uuid primary key default gen_random_uuid(),
@@ -111,6 +115,10 @@ create table if not exists public.day_habits (
   -- Label voor de training ("Push A"), naast de notitie die proza is.
   workout_name text not null default ''
 );
+-- Naam en notitie per training, want op één dag passen er twee. `workout_name` en
+-- `workout_note` hierboven blijven staan voor de dagen van vóór deze kolommen.
+alter table public.day_habits add column if not exists workout_names jsonb not null default '{}'::jsonb;
+alter table public.day_habits add column if not exists workout_notes jsonb not null default '{}'::jsonb;
 
 create table if not exists public.routines (
   id uuid primary key default gen_random_uuid(),
@@ -458,22 +466,25 @@ begin
     unit = excluded.unit, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, seconds, updated_at, deleted_at)
+  insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, seconds, workout_id, updated_at, deleted_at)
   select r.id, uid, r.date, r.exercise, r.weight_kg, r.reps, coalesce(r.dropset, false),
-         coalesce(r.failure, false), coalesce(r.seconds, 0), least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
+         coalesce(r.failure, false), coalesce(r.seconds, 0), r.workout_id,
+         least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.set_entries, coalesce(payload->'sets', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     date = excluded.date, exercise = excluded.exercise, weight_kg = excluded.weight_kg,
     reps = excluded.reps, dropset = excluded.dropset, failure = excluded.failure,
-    seconds = excluded.seconds, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+    seconds = excluded.seconds, workout_id = excluded.workout_id,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, workout_name, updated_at, deleted_at)
+  insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, workout_name, workout_names, workout_notes, updated_at, deleted_at)
   select r.id, uid, r.date, coalesce(r.creatine, false), coalesce(r.slept_enough, false),
          coalesce(r.note, ''), r.bed_time, r.wake_time, coalesce(r.sleep_quality, 0),
          coalesce(r.journal, '[]'::jsonb), coalesce(r.workout_note, ''),
          coalesce(r.energy, 0), coalesce(r.mood, 0), coalesce(r.soreness, 0), coalesce(r.stress, 0),
          coalesce(r.exercise_notes, '{}'::jsonb), coalesce(r.workout_name, ''),
+         coalesce(r.workout_names, '{}'::jsonb), coalesce(r.workout_notes, '{}'::jsonb),
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.day_habits, coalesce(payload->'habits', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
@@ -482,7 +493,9 @@ begin
     sleep_quality = excluded.sleep_quality, journal = excluded.journal,
     workout_note = excluded.workout_note, energy = excluded.energy, mood = excluded.mood,
     soreness = excluded.soreness, stress = excluded.stress, exercise_notes = excluded.exercise_notes,
-    workout_name = excluded.workout_name, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+    workout_name = excluded.workout_name, workout_names = excluded.workout_names,
+    workout_notes = excluded.workout_notes,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
   insert into public.routines as t (id, user_id, name, exercises, alternatives, targets, supersets, rest_by_exercise, created_at, updated_at, deleted_at)
