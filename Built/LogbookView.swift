@@ -72,12 +72,9 @@ struct LogbookView: View {
     /// notities zijn eruit, de vijf vragen vertellen het beter en kosten minder.
     private func checkInIcons(_ day: Date, _ idx: DayIndex) -> String? {
         guard let h = idx.habits(day), h.checkedIn else { return nil }
-        let scales = ["😵🥱🙂💪⚡️", "😞😕😐🙂😄", "✅🙂😬😖🥵", "😌🙂😐😰🤯", "😴🙂😃"]
-        let values = [h.energy, h.mood, h.soreness, h.stress, h.sleepQuality]
-        let icons = zip(scales, values).compactMap { scale, v -> String? in
-            guard v > 0 else { return nil }
-            let chars = Array(scale.map(String.init))
-            return v <= chars.count ? chars[v - 1] : nil
+        let icons = DayHabits.checkIns.compactMap { q -> String? in
+            let v = h[keyPath: q.key]
+            return v > 0 && v <= q.icons.count ? q.icons[v - 1] : nil
         }
         return icons.isEmpty ? nil : icons.joined(separator: " ")
     }
@@ -221,20 +218,11 @@ struct DayDetailView: View {
     private var daySets: [SetEntry] { allSets.filter { dayKey($0.date) == key } }
     private var habitsRecord: DayHabits? { allHabits.first { dayKey($0.date) == key } }
 
-    private var setsByExercise: [(name: String, sets: [SetEntry])] {
-        var names: [String] = []
-        for s in daySets where !names.contains(s.exercise) { names.append(s.exercise) }
-        return names.map { n in (n, daySets.filter { $0.exercise == n }) }
-    }
+    private var daySessions: [WorkoutSession] { daySets.sessions() }
 
     private var noon: Date { cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day }
 
-    private func record() -> DayHabits {
-        if let h = habitsRecord { return h }
-        let h = DayHabits(date: noon)
-        context.insert(h)
-        return h
-    }
+    private func record() -> DayHabits { context.habits(on: day) }
 
     private func bind<T>(_ keyPath: ReferenceWritableKeyPath<DayHabits, T>, default d: T) -> Binding<T> {
         Binding(get: { habitsRecord?[keyPath: keyPath] ?? d },
@@ -266,19 +254,19 @@ struct DayDetailView: View {
             })
     }
 
-    /// Vijf emoji als schaal; nogmaals tikken op dezelfde waarde wist 'm.
-    private func checkInPicker(_ label: String, _ icons: [String],
-                               _ keyPath: ReferenceWritableKeyPath<DayHabits, Int>) -> some View {
-        let value = habitsRecord?[keyPath: keyPath] ?? 0
+    /// De emoji-schaal als rij; nogmaals tikken op dezelfde waarde wist 'm.
+    private func checkInPicker(_ q: CheckIn) -> some View {
+        let value = habitsRecord?[keyPath: q.key] ?? 0
         return HStack {
-            Text(label).frame(width: 76, alignment: .leading)
+            Text(q.label).frame(width: 76, alignment: .leading)
             Spacer()
-            ForEach(1...5, id: \.self) { level in
+            ForEach(Array(q.icons.enumerated()), id: \.offset) { i, icon in
+                let level = i + 1
                 Button {
                     let r = record()
-                    r[keyPath: keyPath] = r[keyPath: keyPath] == level ? 0 : level
+                    r[keyPath: q.key] = r[keyPath: q.key] == level ? 0 : level
                 } label: {
-                    Text(icons[level - 1])
+                    Text(icon)
                         .font(.system(size: 21))
                         .grayscale(value == level ? 0 : 1)
                         .opacity(value == level ? 1 : 0.35)
@@ -286,7 +274,7 @@ struct DayDetailView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(label) \(level) van 5")
+                .accessibilityLabel("\(q.label) \(level) van \(q.icons.count)")
             }
         }
         .animation(.snappy(duration: 0.2), value: value)
@@ -317,10 +305,8 @@ struct DayDetailView: View {
             }
 
             Section {
-                checkInPicker("Energie", ["😵", "🥱", "🙂", "💪", "⚡️"], \.energy)
-                checkInPicker("Stemming", ["😞", "😕", "😐", "🙂", "😄"], \.mood)
-                checkInPicker("Spierpijn", ["✅", "🙂", "😬", "😖", "🥵"], \.soreness)
-                checkInPicker("Stress", ["😌", "🙂", "😐", "😰", "🤯"], \.stress)
+                // Slaapkwaliteit valt af: die heeft hieronder z'n eigen rij in Slaap.
+                ForEach(DayHabits.checkIns.dropLast()) { checkInPicker($0) }
             } header: {
                 Text("Check-in")
             } footer: {
@@ -351,9 +337,9 @@ struct DayDetailView: View {
                         }
                         Picker("Kwaliteit", selection: bind(\.sleepQuality, default: 0)) {
                             Text("—").tag(0)
-                            Text("😴").tag(1)
-                            Text("🙂").tag(2)
-                            Text("😃").tag(3)
+                            ForEach(Array(DayHabits.sleepQualityIcons.enumerated()), id: \.offset) { i, icon in
+                                Text(icon).tag(i + 1)
+                            }
                         }
                         .pickerStyle(.segmented)
                     }
@@ -389,18 +375,21 @@ struct DayDetailView: View {
                 }
             }
 
-            if !setsByExercise.isEmpty {
-                // Kop wordt de naam van de training als je 'm er een gaf ("Push A"),
-                // anders gewoon "Training" zoals altijd.
-                let title = habitsRecord?.workoutName.isEmpty == false
-                    ? habitsRecord!.workoutName : "Training"
-                Section(title) {
-                    if let wn = habitsRecord?.workoutNote, !wn.isEmpty {
-                        Text(wn)
+            // Eén sectie per training: twee sessies op één dag zijn twee blokken, met
+            // ieder hun eigen naam en notitie.
+            ForEach(daySessions) { session in
+                let groups = session.sets.byExercise()
+                let name = habitsRecord?.name(for: session.id) ?? ""
+                let note = habitsRecord?.note(for: session.id) ?? ""
+                Section(name.isEmpty
+                        ? (daySessions.count > 1 ? "Training \(session.date.formatted(date: .omitted, time: .shortened))" : "Training")
+                        : name) {
+                    if !note.isEmpty {
+                        Text(note)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(setsByExercise, id: \.name) { group in
+                    ForEach(groups, id: \.name) { group in
                         let bw = exercises.isBodyweight(group.name)
                         NavigationLink {
                             ExerciseDetailView(exercise: group.name)
@@ -415,7 +404,7 @@ struct DayDetailView: View {
                     }
                     .onDelete { offsets in
                         for i in offsets {
-                            for s in setsByExercise[i].sets { context.deleteSynced(s) }
+                            for s in groups[i].sets { context.deleteSynced(s) }
                         }
                     }
                 }

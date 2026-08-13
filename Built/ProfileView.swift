@@ -1,6 +1,15 @@
 import SwiftUI
 import SwiftData
 
+extension Bundle {
+    /// "1.4 (23)" — de hub en het Over-scherm tonen allebei hetzelfde.
+    var appVersion: String {
+        let v = infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let b = infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(v) (\(b))"
+    }
+}
+
 /// Instellingen-hub: alleen rijen die ergens heen gaan, met rechts de waarde die er nu
 /// staat. De bediening zelf staat één niveau dieper. Alles op één scherm was 13 secties
 /// en ~35 rijen — je scrolde langs alinea's uitleg om één toggle te vinden.
@@ -28,12 +37,6 @@ struct ProfileView: View {
 
     private var activeHabits: Int {
         [profile.tracksCreatine, profile.tracksSleep, profile.tracksFood].filter { $0 }.count + customHabits.count
-    }
-
-    private var appVersion: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
     }
 
     /// Alleen de kcal: het doelgewicht staat al in de kop erboven, en met beide erin
@@ -104,7 +107,7 @@ struct ProfileView: View {
                 row("Account", "person.crop.circle", value: accountSummary, warn: syncNeedsAttention) {
                     AccountSettingsView()
                 }
-                row("Over", "info.circle", value: appVersion) {
+                row("Over", "info.circle", value: Bundle.main.appVersion) {
                     AboutSettingsView()
                 }
             }
@@ -232,56 +235,19 @@ struct GoalSettingsView: View {
 
 // MARK: - Trainen
 
-/// Trainingsdagen, rust-timer en de agenda-export: alles wat over de week zelf gaat.
+/// Weekdoel en rust-timer: alles wat over de week zelf gaat.
 struct TrainingSettingsView: View {
     @Bindable var profile: Profile
     @AppStorage("restSeconds") private var restSeconds = 120
-    @State private var calMessage: String?
-    @State private var calBusy = false
-
-    private let weekdayOptions: [(day: Int, label: String)] = [
-        (2, "Ma"), (3, "Di"), (4, "Wo"), (5, "Do"), (6, "Vr"), (7, "Za"), (1, "Zo"),
-    ]
-
-    private var trainingDaysSummary: String? {
-        let picked = weekdayOptions.filter { profile.trainingDays.contains($0.day) }.map(\.label)
-        guard !picked.isEmpty else { return nil }
-        return "Gekozen: \(picked.joined(separator: ", "))"
-    }
 
     var body: some View {
         List {
             Section {
                 Stepper("Training: \(profile.trainingsPerWeek)×/week", value: $profile.trainingsPerWeek, in: 1...7)
-                HStack(spacing: 8) {
-                    ForEach(weekdayOptions, id: \.day) { option in
-                        let on = profile.trainingDays.contains(option.day)
-                        Button {
-                            if on {
-                                profile.trainingDays.removeAll { $0 == option.day }
-                            } else {
-                                profile.trainingDays.append(option.day)
-                            }
-                        } label: {
-                            Text(option.label)
-                                .font(.caption.bold())
-                                .frame(width: 38, height: 38)
-                                .background(on ? Color.green : Color(.tertiarySystemFill), in: Circle())
-                                .foregroundStyle(on ? .white : .secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .frame(maxWidth: .infinity)
             } header: {
-                Text("Trainingsdagen")
+                Text("Weekdoel")
             } footer: {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let trainingDaysSummary {
-                        Text(trainingDaysSummary)
-                    }
-                    Text("Optioneel. Met vaste dagen telt \"rustdag volgens plan\" mee als perfect, en herinneren meldingen je alleen op trainingsdagen.")
-                }
+                Text("Geen vaste dagen: zolang je je doel deze week nog kunt halen is elke dag een rustdag die als gehaald telt. Pas als er net zoveel dagen over zijn als trainingen, moet je.")
             }
 
             Section {
@@ -297,54 +263,10 @@ struct TrainingSettingsView: View {
             } footer: {
                 Text("De rust-timer start automatisch na elke afgevinkte set.")
             }
-
-            Section {
-                Button {
-                    syncCalendar()
-                } label: {
-                    if calBusy { ProgressView() }
-                    else { Label("Zet weekplanning in agenda", systemImage: "calendar.badge.plus") }
-                }
-                .disabled(calBusy)
-                if CalendarSync.hasCreatedEvents {
-                    Button(role: .destructive) {
-                        CalendarSync.removeCreated()
-                        calMessage = "Built-events verwijderd."
-                    } label: {
-                        Label("Verwijder Built-events", systemImage: "calendar.badge.minus")
-                    }
-                }
-                if let calMessage {
-                    Text(calMessage).font(.footnote).foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Agenda")
-            } footer: {
-                Text("Zet je weekplanning (komende 4 weken) in je iOS-agenda. Staat je Google-account onder Instellingen → Agenda, dan verschijnt het in Google Calendar en synct het twee kanten op.")
-            }
         }
         .tabBarClearance()
         .navigationTitle("Trainen")
         .navigationBarTitleDisplayMode(.inline)
-    }
-
-    private func syncCalendar() {
-        calBusy = true
-        calMessage = nil
-        Task {
-            guard await CalendarSync.requestAccess() else {
-                calMessage = "Geen agenda-toegang. Zet 'm aan via Instellingen → Built."
-                calBusy = false
-                return
-            }
-            do {
-                let n = try CalendarSync.sync(profile: profile)
-                calMessage = n > 0 ? "\(n) trainingen in je agenda gezet ✓" : "Nog geen weekplanning ingesteld (Training-tab)."
-            } catch {
-                calMessage = "Mislukt: \(Sync.message(for: error))"
-            }
-            calBusy = false
-        }
     }
 }
 
@@ -374,7 +296,7 @@ struct HabitsSettingsView: View {
             } header: {
                 Text("Kern-habits")
             } footer: {
-                Text("Je Groei Score telt nu: wegen, training\(profile.foodInScore ? ", eiwit" : "")\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""). Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen. Eten uit? Dan blijft de Eten-tab gewoon werken, maar staat hij niet meer op je dashboard. Wil je wél blijven loggen zonder dat een vergeten dag je score en streak kost, zet dan alleen \"Eten telt mee voor je score\" uit.")
+                Text("Je Groei Score telt nu: wegen, training\(profile.foodInScore ? ", eiwit" : "")\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""), dagdetails. Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen. Eten uit? Dan blijft de Eten-tab gewoon werken, maar staat hij niet meer op je dashboard. Wil je wél blijven loggen zonder dat een vergeten dag je score en streak kost, zet dan alleen \"Eten telt mee voor je score\" uit.")
             }
 
             Section {
@@ -467,7 +389,7 @@ struct ScalesSettingsView: View {
         List {
             Section {
                 ForEach(scales) { scale in
-                    ScaleRow(scale: scale)
+                    Label(scale.name, systemImage: "scalemass")
                 }
                 .onDelete { offsets in
                     scaleToDelete = offsets.first.map { scales[$0] }
@@ -637,12 +559,6 @@ struct AboutSettingsView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
 
-    private var appVersion: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-        return "\(v) (\(b))"
-    }
-
     private var weightCSV: String {
         var lines = ["datum,kg,weegschaal"]
         let df = Date.FormatStyle(date: .numeric, time: .shortened)
@@ -655,7 +571,7 @@ struct AboutSettingsView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent("Versie", value: appVersion)
+                LabeledContent("Versie", value: Bundle.main.appVersion)
                 Link(destination: URL(string: "mailto:flitsdigital1@gmail.com?subject=Built%20feedback")!) {
                     Label("Feedback sturen", systemImage: "envelope")
                 }
@@ -743,7 +659,7 @@ struct AccountLoginSheet: View {
 
                 Section {
                     Button {
-                        google()
+                        run { try await Sync.signInWithGoogle(context: context) }
                     } label: {
                         Label("Doorgaan met Google", systemImage: "globe")
                             .font(.headline)
@@ -765,12 +681,6 @@ struct AccountLoginSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-    }
-
-    private func google() {
-        run {
-            try await Sync.signInWithGoogle(context: context)
-        }
     }
 
     private func resetPassword() {
@@ -865,13 +775,5 @@ struct NotificationsSettingsView: View {
         .navigationTitle("Meldingen")
         .navigationBarTitleDisplayMode(.inline)
         .onDisappear { Notifier.shared.refresh() }
-    }
-}
-
-struct ScaleRow: View {
-    let scale: Scale
-
-    var body: some View {
-        Label(scale.name, systemImage: "scalemass")
     }
 }

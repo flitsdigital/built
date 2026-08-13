@@ -17,8 +17,9 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
     private let managedIDs = ["morning-0", "morning-1", "morning-2",
                               "evening-0", "evening-1", "evening-2",
                               "checkin-0", "checkin-1", "checkin-2",
-                              "streak", "review",
-                              // elke weekdag kan een trainingsherinnering hebben (eigen trainingsdagen)
+                              "streak", "review", "week-deadline",
+                              // Oude per-weekdag herinneringen: nog even opruimen bij wie ze
+                              // van de vorige versie in de wachtrij heeft staan.
                               "week-1", "week-2", "week-3", "week-4", "week-5", "week-6", "week-7"]
 
     // MARK: - Setup
@@ -58,10 +59,9 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         var perfectToday = false
         var trainingsThisWeek = 0
         var trainingsTarget = 3
-        var trainingDays: [Int] = []
-        var plannedToday = false
-        var schedule: [String: String] = [:]
-        var plannedRoutineToday: String?
+        /// Dagen die je nog mag overslaan voordat je je weekdoel niet meer haalt.
+        /// 0 = vandaag is de laatste kans, dus vandaag is een verplichte dag.
+        var slackDays = 0
     }
 
     private func computeState() -> DayState? {
@@ -87,11 +87,9 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
             s.trainingsThisWeek = Set(sets.filter { $0.date >= weekStart }.map { cal.startOfDay(for: $0.date) }).count
         }
         s.trainingsTarget = profile.trainingsPerWeek
-        s.trainingDays = profile.trainingDays
-        s.plannedToday = profile.trainingDays.contains(cal.component(.weekday, from: .now))
-        s.schedule = profile.schedule
-        s.plannedRoutineToday = profile.plannedRoutine(weekday: cal.component(.weekday, from: .now))
         let idx = DayIndex(proteins: proteins, weights: weights, sets: sets, habits: habits)
+        let quota = WeekQuota(.now, index: idx, target: profile.trainingsPerWeek)
+        s.slackDays = max(quota.daysLeft - quota.remaining, 0)
         s.streak = DayCheck.streak(index: idx, profile: profile)
         s.perfectToday = DayCheck.perfect(.now, index: idx, profile: profile)
         return s
@@ -103,9 +101,7 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
         if s.creatineOpen { items.append("creatine") }
         if !s.weighedToday { items.append("wegen") }
         if s.sleepOpen { items.append("slaap afvinken") }
-        if s.plannedToday, !s.trainedToday {
-            items.append(s.plannedRoutineToday.map { "\($0) trainen" } ?? "trainen")
-        }
+        if s.slackDays == 0, !s.trainedToday { items.append("trainen") }
         return items
     }
 
@@ -164,21 +160,18 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
             }
         }
 
+        // Eén melding per week, op de dag dat je speling op is: vanaf dan moet je élke
+        // resterende dag trainen om je doel te halen. Eerder porren heeft geen grond —
+        // die dagen mag je overslaan zonder iets te missen.
         if flag("notifWeekOn", default: true), s.trainingsThisWeek < s.trainingsTarget {
             let remaining = s.trainingsTarget - s.trainingsThisWeek
-            let reminderDays = s.trainingDays.isEmpty ? [5, 6] : s.trainingDays // vaste dagen als die er zijn
-            for weekday in reminderDays {
-                var comps = DateComponents()
-                comps.weekday = weekday
-                comps.hour = 17
-                guard let fire = cal.nextDate(after: .now, matching: comps, matchingPolicy: .nextTime),
-                      cal.isDate(fire, equalTo: .now, toGranularity: .weekOfYear) else { continue }
-                if s.trainedToday, cal.isDateInToday(fire) { continue }
-                let planned = s.schedule[String(weekday)]
-                let body = planned.map { "Vandaag staat \($0) gepland — nog \(remaining) van \(s.trainingsTarget) deze week." }
-                    ?? "Nog \(remaining) van je \(s.trainingsTarget) trainingen deze week — vanavond eentje?"
-                oneShot(id: "week-\(weekday)", title: "Trainingsweek 🏋️",
-                        body: body,
+            if let day = cal.date(byAdding: .day, value: s.slackDays, to: today),
+               let fire = cal.date(bySettingHour: 17, minute: 0, second: 0, of: day),
+               fire > .now, !(s.trainedToday && s.slackDays == 0) {
+                oneShot(id: "week-deadline", title: "Trainingsweek 🏋️",
+                        body: remaining == 1
+                            ? "Laatste van je \(s.trainingsTarget) deze week — vandaag of niet meer."
+                            : "Nog \(remaining) van je \(s.trainingsTarget) deze week, en nog precies \(remaining) dagen. Vanaf nu elke dag.",
                         at: fire, action: "training")
             }
         }
@@ -224,23 +217,14 @@ final class Notifier: NSObject, ObservableObject, UNUserNotificationCenterDelega
 
     // MARK: - Rust-timer
 
+    /// De melding zelf staat bij `RestNotification`: de lockscreen-knoppen verzetten 'm
+    /// ook, en die draaien in de widget-extensie waar `Notifier` niet bestaat.
     func scheduleRest(at end: Date) {
         guard flag("notifRestOn", default: true) else { return }
-        cancelRest()
-        let interval = end.timeIntervalSinceNow
-        guard interval > 1 else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "Rust voorbij 💪"
-        content.body = "Volgende set!"
-        content.sound = .default
-        center.add(UNNotificationRequest(identifier: "rest", content: content,
-                                         trigger: UNTimeIntervalNotificationTrigger(timeInterval: interval, repeats: false)))
+        RestNotification.schedule(at: end)
     }
 
-    func cancelRest() {
-        center.removePendingNotificationRequests(withIdentifiers: ["rest"])
-        center.removeDeliveredNotifications(withIdentifiers: ["rest"])
-    }
+    func cancelRest() { RestNotification.cancel() }
 
     // MARK: - Acties & delegate
 

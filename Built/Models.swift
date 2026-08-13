@@ -175,9 +175,11 @@ final class Profile {
     var foodCountsForScore: Bool = true
     /// Handmatig calorie-doel; 0 = automatisch berekenen uit lengte/gewicht/doel.
     var kcalTarget: Int = 0
-    /// Geplande trainingsdagen (Calendar weekday 1=zo…7=za). Leeg = geen vaste dagen.
+    /// Dood veld. Waren de vaste trainingsdagen; sinds `WeekQuota` bepaalt het weekdoel
+    /// wat een rustdag is en leest niemand dit meer. Blijft staan omdat weghalen een
+    /// SwiftData- én Supabase-migratie is voor een kolom die niemand pijn doet.
     var trainingDays: [Int] = []
-    /// Weekplanning: weekday-string ("2"=ma) → routine-naam. Bepaalt welke routine welke dag.
+    /// Dood veld, om dezelfde reden. Was weekdag → routine-naam.
     var schedule: [String: String] = [:]
 
     init(name: String, age: Int, heightCm: Int, startWeight: Double, goalWeight: Double, goalDate: Date, trainingsPerWeek: Int) {
@@ -213,12 +215,6 @@ final class Profile {
 
     func kcalTargetEffective(currentWeight: Double) -> Int {
         kcalTarget > 0 ? kcalTarget : autoKcalTarget(currentWeight: currentWeight)
-    }
-
-    /// Geplande routine voor een weekdag (1=zo…7=za), nil = geen.
-    func plannedRoutine(weekday: Int) -> String? {
-        let name = schedule[String(weekday)]
-        return (name?.isEmpty ?? true) ? nil : name
     }
 }
 
@@ -305,6 +301,11 @@ final class PhotoEntry {
     }
 
     var fileURL: URL { Self.directory.appendingPathComponent(fileName) }
+}
+
+/// Rusttijd als "1:30". 0 of minder = uit.
+func restLabel(_ seconds: Int) -> String {
+    seconds <= 0 ? "uit" : "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
 }
 
 /// Geschat 1RM via de Epley-formule.
@@ -587,8 +588,13 @@ final class SetEntry {
     var failure: Bool = false
     /// Duur voor cardio-oefeningen in seconden; 0 = gewone krachtset.
     var seconds: Int = 0
+    /// Bij welke sessie deze set hoort. Zonder dit ís een training gewoon "alles wat je
+    /// die dag deed", en schuift een tweede training van dezelfde dag bij de eerste in.
+    /// `.zero` = van vóór deze kolom; die vallen terug op de dag.
+    var workoutID: UUID = UUID.zero
     init(date: Date = .now, exercise: String, weightKg: Double, reps: Int,
-         dropset: Bool = false, failure: Bool = false, seconds: Int = 0) {
+         dropset: Bool = false, failure: Bool = false, seconds: Int = 0,
+         workoutID: UUID = .zero) {
         self.syncID = UUID()
         self.date = date
         self.exercise = exercise
@@ -597,6 +603,49 @@ final class SetEntry {
         self.dropset = dropset
         self.failure = failure
         self.seconds = seconds
+        self.workoutID = workoutID
+    }
+}
+
+/// Eén training: de sets die bij elkaar horen, met de sleutel waaronder naam en notitie
+/// bij `DayHabits` staan.
+struct WorkoutSession: Identifiable {
+    let id: String
+    let date: Date
+    let sets: [SetEntry]
+}
+
+extension Array where Element == SetEntry {
+    /// Splitst sets in sessies. Sets van vóór `workoutID` hebben er geen, en vallen samen
+    /// per dag — precies zoals de app ze toen ook toonde.
+    func sessions() -> [WorkoutSession] {
+        var order: [String] = []
+        var groups: [String: [SetEntry]] = [:]
+        for s in sorted(by: { $0.date < $1.date }) {
+            let key = s.sessionKey
+            if groups[key] == nil { order.append(key) }
+            groups[key, default: []].append(s)
+        }
+        return order.map { key in
+            let rows = groups[key] ?? []
+            return WorkoutSession(id: key, date: rows.first?.date ?? .now, sets: rows)
+        }
+    }
+
+    /// Oefeningen in de volgorde waarin ze gedaan zijn, met hun sets.
+    func byExercise() -> [(name: String, sets: [SetEntry])] {
+        var names: [String] = []
+        for s in sorted(by: { $0.date < $1.date }) where !names.contains(s.exercise) {
+            names.append(s.exercise)
+        }
+        return names.map { n in (n, filter { $0.exercise == n }.sorted { $0.date < $1.date }) }
+    }
+}
+
+extension SetEntry {
+    /// De sleutel waaronder deze set bij een sessie hoort.
+    var sessionKey: String {
+        workoutID == .zero ? "\(DayHabits.dayPrefix)\(dayKey(date))" : workoutID.uuidString
     }
 }
 
@@ -649,6 +698,23 @@ final class DayHabits {
     /// Naam van de training ("Push A", "Leg day"). Leeg = naamloos; het logboek valt dan
     /// terug op de datum, zoals het altijd deed.
     var workoutName: String = ""
+    /// Naam en notitie per sessie (sessiesleutel → tekst), want op één dag passen twee
+    /// trainingen. `workoutName`/`workoutNote` hierboven blijven staan voor de dagen van
+    /// vóór deze versie, en zijn wat `name(for:)` teruggeeft als de sleutel er niet in zit.
+    var workoutNames: [String: String] = [:]
+    var workoutNotes: [String: String] = [:]
+
+    /// De dagwaarde is alleen de terugval voor de sessie die géén eigen id heeft — die
+    /// ís die oude dag. Een nieuwe training van dezelfde dag zou anders de naam van de
+    /// vorige erven zonder dat je 'm hebt gegeven.
+    func name(for session: String) -> String {
+        workoutNames[session] ?? (session.hasPrefix(Self.dayPrefix) ? workoutName : "")
+    }
+    func note(for session: String) -> String {
+        workoutNotes[session] ?? (session.hasPrefix(Self.dayPrefix) ? workoutNote : "")
+    }
+
+    static let dayPrefix = "dag-"
     init(date: Date = .now, creatine: Bool = false, sleptEnough: Bool = false) {
         self.syncID = UUID()
         self.date = date
@@ -665,6 +731,62 @@ final class DayHabits {
 
     /// Dag-check-in ingevuld? Eén van de vier is genoeg — anders voelt het als huiswerk.
     var checkedIn: Bool { energy > 0 || mood > 0 || soreness > 0 || stress > 0 }
+}
+
+// MARK: - Dag-check-in
+
+/// Eén vraag van de dag-check-in. De schaal stond eerder als losse emoji-literal in de
+/// drawer, het dashboard, het logboek én de dagdetails — vier kopieën die uit elkaar
+/// konden lopen zonder dat iets het merkte.
+struct CheckIn: Identifiable {
+    /// Kort, voor rijen en rasters.
+    let label: String
+    /// De vraag zelf, voor de drawer.
+    let title: String
+    let subtitle: String
+    let icons: [String]
+    let low: String
+    let high: String
+    let key: ReferenceWritableKeyPath<DayHabits, Int>
+    var id: String { label }
+}
+
+extension DayHabits {
+    /// Slaapkwaliteit staat bewust als laatste en heeft drie opties in plaats van vijf:
+    /// hij bestond al vóór de check-in en heeft in de dagdetails z'n eigen rij.
+    static let checkIns: [CheckIn] = [
+        .init(label: "Energie", title: "Hoeveel energie had je?", subtitle: "Over de hele dag genomen.",
+              icons: ["😵", "🥱", "🙂", "💪", "⚡️"], low: "Leeg", high: "Vol gas", key: \.energy),
+        .init(label: "Stemming", title: "Hoe voelde je je?", subtitle: "Je stemming, niet je prestatie.",
+              icons: ["😞", "😕", "😐", "🙂", "😄"], low: "Slecht", high: "Top", key: \.mood),
+        .init(label: "Spierpijn", title: "Hoeveel spierpijn?", subtitle: "Van je vorige trainingen.",
+              icons: ["✅", "🙂", "😬", "😖", "🥵"], low: "Geen", high: "Veel", key: \.soreness),
+        .init(label: "Stress", title: "Hoe druk was je hoofd?", subtitle: "Stress van werk, school of privé.",
+              icons: ["😌", "🙂", "😐", "😰", "🤯"], low: "Rustig", high: "Vol", key: \.stress),
+        .init(label: "Slaap", title: "Hoe heb je geslapen?", subtitle: "De nacht hiervoor.",
+              icons: ["😴", "🙂", "😃"], low: "Slecht", high: "Goed", key: \.sleepQuality),
+    ]
+
+    /// Apart, omdat de slaapformulieren er een Picker van maken met een "—" ervoor.
+    static var sleepQualityIcons: [String] { checkIns.last?.icons ?? [] }
+}
+
+extension ModelContext {
+    /// De dagrecord voor deze dag, of een verse. Zes schermen hadden hier hun eigen
+    /// variant van, en die verschilden onderling in het tijdstempel dat een nieuwe rij
+    /// kreeg — vandaar één plek.
+    @MainActor
+    func habits(on day: Date) -> DayHabits {
+        let key = dayKey(day)
+        let existing = (try? fetch(FetchDescriptor<DayHabits>())) ?? []
+        if let h = existing.first(where: { dayKey($0.date) == key }) { return h }
+        let cal = Calendar.current
+        let h = DayHabits(date: cal.isDateInToday(day)
+                          ? .now
+                          : cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day)
+        insert(h)
+        return h
+    }
 }
 
 extension ProteinEntry: SyncedRecord {
@@ -780,6 +902,45 @@ extension Array where Element == WeightEntry {
     }
 }
 
+/// Hoe een dag zich verhoudt tot je weekdoel. Er zijn geen vaste trainingsdagen meer:
+/// een dag is een rustdag zolang er in die week nog genoeg dagen over zijn om je
+/// `trainingsPerWeek` te halen. Pas als dat niet meer opgaat is de dag verplicht.
+///
+/// Kijkt alleen naar trainingen vóór deze dag, dus de status van een dag verandert niet
+/// meer achteraf — behalve als je een training met terugwerkende kracht logt.
+struct WeekQuota {
+    /// Trainingen deze week vóór deze dag.
+    let done: Int
+    /// Dagen vanaf deze dag tot en met het einde van de week.
+    let daysLeft: Int
+    let target: Int
+
+    /// Nog te doen om het weekdoel te halen.
+    var remaining: Int { max(target - done, 0) }
+    var isRest: Bool { daysLeft > remaining }
+
+    init(_ day: Date, index: DayIndex, target: Int) {
+        self.target = target
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: day)
+        guard target > 0, let week = cal.dateInterval(of: .weekOfYear, for: start) else {
+            (done, daysLeft) = (0, 0) // doel 0 → nooit rust, alles blijft zoals het was
+            return
+        }
+        var done = 0, left = 0, d = week.start
+        while d < week.end {
+            if d < start {
+                if index.trained(d) { done += 1 }
+            } else {
+                left += 1
+            }
+            guard let next = cal.date(byAdding: .day, value: 1, to: d) else { break }
+            d = next
+        }
+        (self.done, self.daysLeft) = (done, left)
+    }
+}
+
 enum DayCheck {
     /// Eén meetpunt van een dag: hoeveel hij weegt en hoe ver hij binnen is.
     struct Factor: Identifiable {
@@ -807,11 +968,10 @@ enum DayCheck {
             let ratio = Double(index.protein(day)) / Double(max(profile.proteinTarget, 1))
             out.append(Factor(name: "Eiwit", weight: 30, progress: min(ratio, 1)))
         }
-        // Rustdag volgens plan telt als gedaan — niet trainen ís dan het plan.
-        let weekday = Calendar.current.component(.weekday, from: day)
-        let restDay = !profile.trainingDays.isEmpty && !profile.trainingDays.contains(weekday)
+        // Rustdag telt als gedaan — met speling in de week ís niet trainen het plan.
+        let quota = WeekQuota(day, index: index, target: profile.trainingsPerWeek)
         out.append(Factor(name: "Training", weight: 25,
-                          progress: index.trained(day) || restDay ? 1 : 0))
+                          progress: index.trained(day) || quota.isRest ? 1 : 0))
         out.append(Factor(name: "Gewicht", weight: 15, progress: index.weighed(day) ? 1 : 0))
         let h = index.habits(day)
         if profile.tracksCreatine {
@@ -820,6 +980,9 @@ enum DayCheck {
         if profile.tracksSleep {
             out.append(Factor(name: "Slaap", weight: 15, progress: h?.sleptEnough == true ? 1 : 0))
         }
+        // Licht gewicht, want het is twintig seconden werk. Maar het telt mee: een rij in
+        // de checklist die nooit iets waard is, is een vinkje zonder gevolg.
+        out.append(Factor(name: "Dagdetails", weight: 10, progress: h?.checkedIn == true ? 1 : 0))
         for name in customHabits {
             out.append(Factor(name: name, weight: 10, progress: index.logged(name, on: day) ? 1 : 0))
         }
@@ -858,6 +1021,40 @@ enum DayCheck {
             else { break }
         }
         return count
+    }
+}
+
+/// De vier getallen van "hoe ging deze week". Het Inzicht-scherm en de zondagreview
+/// toonden dezelfde vier naast elkaar, elk met een eigen berekening — en die liepen
+/// uiteen: de review liet eigen habits buiten "perfecte dagen", het dashboard niet.
+struct WeekStats {
+    let trainingDays: Int
+    let proteinDays: Int
+    let perfectDays: Int
+    /// Dagen tot en met zondag, vandaag meegeteld. Zegt of je je doel nog haalt.
+    let daysLeftInWeek: Int
+    /// kg/week; nil bij te weinig metingen.
+    let trend: Double?
+
+    init(index: DayIndex, profile: Profile, sets: [SetEntry], weights: [WeightEntry],
+         customHabits: [String] = []) {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        let days = (0..<7).compactMap { cal.date(byAdding: .day, value: -$0, to: today) }
+        // Kalenderweek, niet de laatste 7 dagen: het weekdoel telt op dezelfde grens.
+        let week = cal.dateInterval(of: .weekOfYear, for: today)
+        trainingDays = Set(sets.filter { week?.contains($0.date) ?? false }.map { dayKey($0.date) }).count
+        daysLeftInWeek = week.map { max((cal.dateComponents([.day], from: today, to: $0.end).day ?? 1), 1) } ?? 1
+        proteinDays = days.filter { index.protein($0) >= profile.proteinTarget }.count
+        perfectDays = days.filter {
+            DayCheck.perfect($0, index: index, profile: profile, customHabits: customHabits)
+        }.count
+        trend = weights.trendPerWeek
+    }
+
+    /// "+0,4" of "—" — zoals beide schermen 'm tonen.
+    var trendText: String {
+        trend.map { "\($0 >= 0 ? "+" : "")\($0.formatted(.number.precision(.fractionLength(1))))" } ?? "—"
     }
 }
 

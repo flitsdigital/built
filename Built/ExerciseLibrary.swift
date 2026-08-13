@@ -58,12 +58,16 @@ final class Exercise {
 
         if existing.isEmpty {
             for (name, muscle, type) in seed { seedRow(name, muscle, type) }
-            // Cardio hoort bij de standaardcatalogus. Het stond alleen achter de vlag
-            // hieronder, en die blijft na één keer draaien permanent aan — een toestel dat
-            // leeggemaakt werd kreeg z'n cardio-oefeningen daardoor nooit terug.
+            // Cardio hoort bij de standaardcatalogus.
             for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
         }
         // Cardio kwam later — eenmalig bijplaatsen bij installs van vóór die versie.
+        //
+        // De vlag lijkt overbodig naast de `where`, maar is het niet: zonder vlag draait
+        // dit elke start, en dan komt een cardio-oefening die je zélf weggooide er telkens
+        // weer bij — mét dezelfde afgeleide id als de tombstone die je verwijdering
+        // achterliet. De rest van de catalogus zaait alleen bij een lege lijst en heeft
+        // dat probleem niet.
         if !UserDefaults.standard.bool(forKey: "seededCardio") {
             UserDefaults.standard.set(true, forKey: "seededCardio")
             for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
@@ -75,6 +79,34 @@ final class Exercise {
         for name in Set(usedInSets + usedInRoutines) where !known.contains(name) {
             context.insert(Exercise(name: name))
             known.insert(name)
+        }
+    }
+
+    /// Eén rij per naam, met het van die naam afgeleide id.
+    ///
+    /// Oefeningen van vóór het afgeleide id kregen `UUID()`, en sinds de pull samenvoegt in
+    /// plaats van vervangt staat dezelfde naam daarna twee keer in de lijst: de rij van het
+    /// oude toestel én de rij die een nieuwer toestel zelf zaaide. Er hangt niets aan het
+    /// overtollige exemplaar — sets en routines koppelen op naam, niet op id — dus dat mag
+    /// gewoon weg, mét tombstone zodat de server het ook opruimt.
+    ///
+    /// Wie blijft is bewust niet "de oudste": twee toestellen die verschillend kiezen wissen
+    /// elkaars keuze weg en houden niets over. `UUID.stable(from:)` valt overal hetzelfde
+    /// uit, dus komt elk toestel op dezelfde rij uit. Draait na elke pull — een duplicaat dat
+    /// alsnog binnenkomt lost zichzelf zo op.
+    @MainActor
+    static func dedupe(_ context: ModelContext) {
+        let all = (try? context.fetch(FetchDescriptor<Exercise>())) ?? []
+        for (name, rows) in Dictionary(grouping: all, by: \.name) where !name.isEmpty {
+            let id = UUID.stable(from: name)
+            guard let keeper = rows.first(where: { $0.syncID == id })
+                    ?? rows.min(by: { $0.createdAt < $1.createdAt }) else { continue }
+            for row in rows where row !== keeper { context.deleteSynced(row) }
+            guard keeper.syncID != id else { continue }
+            if keeper.syncID != .zero {
+                Sync.recordDeletion(table: Exercise.syncTable, syncID: keeper.syncID)
+            }
+            keeper.syncID = id
         }
     }
 
@@ -116,19 +148,24 @@ final class Exercise {
     ]
 }
 
-extension Array where Element == Exercise {
+/// Iets dat het type van een oefening kent. De trainingsschermen bouwen er een dict van
+/// (O(1), en ze vragen het per set); andere schermen hebben gewoon de `@Query`-array. De
+/// vragen zijn dezelfde, dus staan de antwoorden hier één keer.
+protocol ExerciseTypes {
+    func type(of name: String) -> String?
+}
+
+extension ExerciseTypes {
     /// Bodyweight-oefening? Dan is het gewicht optioneel extra gewicht ("+kg").
-    func isBodyweight(_ name: String) -> Bool {
-        first { $0.name == name }?.type == "Bodyweight"
-    }
+    func isBodyweight(_ name: String) -> Bool { type(of: name) == "Bodyweight" }
     /// Barbell-oefening? Dan tonen we de schijven-per-kant.
-    func isBarbell(_ name: String) -> Bool {
-        first { $0.name == name }?.type == "Barbell"
-    }
+    func isBarbell(_ name: String) -> Bool { type(of: name) == "Barbell" }
     /// Cardio? Dan log je duur i.p.v. kg × reps.
-    func isCardio(_ name: String) -> Bool {
-        first { $0.name == name }?.type == "Cardio"
-    }
+    func isCardio(_ name: String) -> Bool { type(of: name) == "Cardio" }
+}
+
+extension Array: ExerciseTypes where Element == Exercise {
+    func type(of name: String) -> String? { first { $0.name == name }?.type }
 }
 
 // MARK: - Rij
@@ -154,7 +191,34 @@ struct ExerciseRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Spacer(minLength: 0)
         }
+        // De rij vult de breedte en vángt hem ook: zonder dit is alleen de tekst tikbaar
+        // en gebeurt er rechts van de naam niets.
+        .contentShape(Rectangle())
+    }
+}
+
+/// Filter op spiergroep. Staat in de toolbar van zowel de kiezer als de bibliotheek.
+struct MuscleFilterMenu: View {
+    @Binding var selection: String?
+
+    var body: some View {
+        Menu {
+            Button("Alle spiergroepen") { selection = nil }
+            Divider()
+            ForEach(Exercise.muscles, id: \.self) { m in
+                Button {
+                    selection = m
+                } label: {
+                    if selection == m { Label(m, systemImage: "checkmark") } else { Text(m) }
+                }
+            }
+        } label: {
+            Image(systemName: selection == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+        }
+        .accessibilityLabel("Filter")
+        .accessibilityValue(selection ?? "Alle spiergroepen")
     }
 }
 
@@ -214,21 +278,7 @@ struct ExercisePickerSheet: View {
                     Button("Sluit") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button("Alle spiergroepen") { muscleFilter = nil }
-                        Divider()
-                        ForEach(Exercise.muscles, id: \.self) { m in
-                            Button {
-                                muscleFilter = m
-                            } label: {
-                                if muscleFilter == m { Label(m, systemImage: "checkmark") } else { Text(m) }
-                            }
-                        }
-                    } label: {
-                        Image(systemName: muscleFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-                    }
-                    .accessibilityLabel("Filter")
-                    .accessibilityValue(muscleFilter ?? "Alle spiergroepen")
+                    MuscleFilterMenu(selection: $muscleFilter)
                 }
             }
             .sheet(isPresented: $creating) {
@@ -356,21 +406,7 @@ struct ExerciseLibraryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Alle spiergroepen") { muscleFilter = nil }
-                    Divider()
-                    ForEach(Exercise.muscles, id: \.self) { m in
-                        Button {
-                            muscleFilter = m
-                        } label: {
-                            if muscleFilter == m { Label(m, systemImage: "checkmark") } else { Text(m) }
-                        }
-                    }
-                } label: {
-                    Image(systemName: muscleFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
-                }
-                .accessibilityLabel("Filter")
-                .accessibilityValue(muscleFilter ?? "Alle spiergroepen")
+                MuscleFilterMenu(selection: $muscleFilter)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { creating = true } label: { Image(systemName: "plus") }

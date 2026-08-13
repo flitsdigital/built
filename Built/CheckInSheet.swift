@@ -19,43 +19,16 @@ struct CheckInSheet: View {
     @ScaledMetric(relativeTo: .largeTitle) private var glyphWide: CGFloat = 40
     @ScaledMetric(relativeTo: .largeTitle) private var glyphNarrow: CGFloat = 32
 
-    private struct Question {
-        let title: String
-        let subtitle: String
-        let icons: [String]
-        let low: String
-        let high: String
-        let key: ReferenceWritableKeyPath<DayHabits, Int>
-    }
+    /// De vragen staan bij `DayHabits`: het dashboard, het logboek en de dagdetails tonen
+    /// dezelfde schalen, en die hoorden niet vijf keer los te bestaan. Slaapkwaliteit
+    /// bestond al (1–3) en hoort hier thuis i.p.v. weggestopt in een aparte sheet —
+    /// vandaar drie opties op die stap.
+    private var questions: [CheckIn] { DayHabits.checkIns }
 
-    // Vijf vragen. Slaapkwaliteit bestond al (1–3) en hoort hier thuis i.p.v. weggestopt
-    // in een aparte sheet — vandaar drie opties op die stap.
-    private let questions: [Question] = [
-        .init(title: "Hoeveel energie had je?", subtitle: "Over de hele dag genomen.",
-              icons: ["😵", "🥱", "🙂", "💪", "⚡️"], low: "Leeg", high: "Vol gas", key: \.energy),
-        .init(title: "Hoe voelde je je?", subtitle: "Je stemming, niet je prestatie.",
-              icons: ["😞", "😕", "😐", "🙂", "😄"], low: "Slecht", high: "Top", key: \.mood),
-        .init(title: "Hoeveel spierpijn?", subtitle: "Van je vorige trainingen.",
-              icons: ["✅", "🙂", "😬", "😖", "🥵"], low: "Geen", high: "Veel", key: \.soreness),
-        .init(title: "Hoe druk was je hoofd?", subtitle: "Stress van werk, school of privé.",
-              icons: ["😌", "🙂", "😐", "😰", "🤯"], low: "Rustig", high: "Vol", key: \.stress),
-        .init(title: "Hoe heb je geslapen?", subtitle: "De nacht hiervoor.",
-              icons: ["😴", "🙂", "😃"], low: "Slecht", high: "Goed", key: \.sleepQuality),
-    ]
-
-    private var cal: Calendar { .current }
     private var record: DayHabits? { allHabits.first { dayKey($0.date) == dayKey(day) } }
     private var onSummary: Bool { step >= questions.count }
 
-    private func recordOrCreate() -> DayHabits {
-        if let record { return record }
-        let noon = cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
-        let h = DayHabits(date: cal.isDateInToday(day) ? .now : noon)
-        context.insert(h)
-        return h
-    }
-
-    private func value(_ q: Question) -> Int { record?[keyPath: q.key] ?? 0 }
+    private func value(_ q: CheckIn) -> Int { record?[keyPath: q.key] ?? 0 }
 
     private var streak: Int {
         // Eén keer indexeren: habitStreak liep hier per dag opnieuw door alle dagen.
@@ -63,8 +36,8 @@ struct CheckInSheet: View {
         return habitStreak { checkedIn.contains(dayKey($0)) }
     }
 
-    private func select(_ q: Question, _ level: Int) {
-        let r = recordOrCreate()
+    private func select(_ q: CheckIn, _ level: Int) {
+        let r = context.habits(on: day)
         r[keyPath: q.key] = r[keyPath: q.key] == level ? 0 : level
         guard r[keyPath: q.key] != 0 else { return } // wissen schuift niet door
         Task { // even laten landen zodat je je keuze ziet registreren
@@ -147,7 +120,7 @@ struct CheckInSheet: View {
 
     // MARK: - Eén vraag
 
-    private func questionStep(_ q: Question) -> some View {
+    private func questionStep(_ q: CheckIn) -> some View {
         VStack(spacing: 0) {
             Spacer(minLength: 8)
             VStack(spacing: 6) {
