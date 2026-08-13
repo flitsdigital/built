@@ -234,9 +234,10 @@ struct ExercisePickerSheet: View {
     @State private var query = ""
     @State private var muscleFilter: String?
     @State private var creating = false
-    /// Wat je in deze ronde hebt toegevoegd. De sheet blijft open na een keuze — anders
-    /// moet je 'm per oefening opnieuw opendoen, en een training bestaat uit meer dan één.
-    @State private var added: [String] = []
+    /// Wat je hebt aangevinkt, in de volgorde waarin je het aanvinkte — zo landen ze ook
+    /// in je training. Kiezen is nog niet toevoegen: dat gebeurt pas bij de knop onderin,
+    /// en daarom mag "Annuleer" hier ook echt annuleren.
+    @State private var selected: [String] = []
 
     private var filtered: [Exercise] {
         exercises.filter { ex in
@@ -258,22 +259,22 @@ struct ExercisePickerSheet: View {
                     }
                 }
                 ForEach(filtered) { ex in
+                    let isPicked = selected.contains(ex.name)
                     Button {
-                        pick(ex.name)
+                        toggle(ex.name)
                     } label: {
                         HStack {
                             ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
-                            if added.contains(ex.name) {
-                                Spacer()
-                                // Alleen een bevestiging dat het gelukt is: nog een keer
-                                // tikken mag, want dezelfde oefening twee keer is legaal.
-                                Image(systemName: "checkmark")
-                                    .font(.footnote.bold())
-                                    .foregroundStyle(.green)
-                            }
+                            Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
+                                .font(.title3)
+                                .foregroundStyle(isPicked ? Color.green : Color.secondary.opacity(0.4))
                         }
                     }
                     .buttonStyle(.plain)
+                    // Twee signalen voor één staat: het bolletje leest van dichtbij, de
+                    // gekleurde rij van een afstand — je scant een lijst, je leest 'm niet.
+                    .listRowBackground(isPicked ? Color.green.opacity(0.08) : nil)
+                    .accessibilityAddTraits(isPicked ? [.isSelected] : [])
                 }
                 if filtered.isEmpty && !query.isEmpty {
                     Button {
@@ -283,32 +284,65 @@ struct ExercisePickerSheet: View {
                     }
                 }
             }
+            // Het toetsenbord blijft anders over de lijst hangen zodra je gezocht hebt,
+            // en er is geen andere weg om het weg te krijgen.
+            .scrollDismissesKeyboard(.immediately)
             .searchable(text: $query, prompt: "Zoek oefening")
-            .navigationTitle(added.isEmpty ? "Oefening kiezen" : "\(added.count) toegevoegd")
+            .navigationTitle("Oefeningen kiezen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    // Na de eerste keuze is dit geen "sluiten" meer maar "ik ben klaar":
-                    // het toevoegen is al gebeurd, er valt niets te bevestigen.
-                    Button(added.isEmpty ? "Sluit" : "Klaar") { dismiss() }
-                        .font(added.isEmpty ? .body : .body.bold())
+                    Button("Annuleer") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     MuscleFilterMenu(selection: $muscleFilter)
                 }
             }
+            .safeAreaInset(edge: .bottom) { confirmBar }
+            .animation(.snappy(duration: 0.25), value: selected.isEmpty)
             .sheet(isPresented: $creating) {
+                // Net aangemaakt is nog niet toegevoegd: hij komt in je mandje, zodat je
+                // in één bevestiging afsluit in plaats van in twee.
                 NewExerciseSheet(presetName: query) { name in
-                    pick(name)
+                    toggle(name)
                 }
             }
         }
     }
 
-    /// Toevoegen zonder te sluiten: de volgende oefening zit één tik verderop.
-    private func pick(_ name: String) {
-        onPick(name)
-        withAnimation(.snappy(duration: 0.2)) { added.append(name) }
+    /// Verschijnt pas als er iets te bevestigen valt — een lege balk is chroom dat de
+    /// lijst korter maakt zonder iets te zeggen.
+    @ViewBuilder private var confirmBar: some View {
+        if !selected.isEmpty {
+            VStack(spacing: 8) {
+                Text(selected.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head) // de laatst gekozen blijft in beeld
+                Button {
+                    for name in selected { onPick(name) }
+                    dismiss()
+                } label: {
+                    Text("\(selected.count) toevoegen")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+            }
+            .padding(.horizontal)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+            .background(.bar)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func toggle(_ name: String) {
+        withAnimation(.snappy(duration: 0.2)) {
+            if let i = selected.firstIndex(of: name) { selected.remove(at: i) } else { selected.append(name) }
+        }
     }
 }
 
