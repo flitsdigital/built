@@ -234,6 +234,9 @@ struct ExercisePickerSheet: View {
     @State private var query = ""
     @State private var muscleFilter: String?
     @State private var creating = false
+    /// Wat je in deze ronde hebt toegevoegd. De sheet blijft open na een keuze — anders
+    /// moet je 'm per oefening opnieuw opendoen, en een training bestaat uit meer dan één.
+    @State private var added: [String] = []
 
     private var filtered: [Exercise] {
         exercises.filter { ex in
@@ -258,7 +261,17 @@ struct ExercisePickerSheet: View {
                     Button {
                         pick(ex.name)
                     } label: {
-                        ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
+                        HStack {
+                            ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
+                            if added.contains(ex.name) {
+                                Spacer()
+                                // Alleen een bevestiging dat het gelukt is: nog een keer
+                                // tikken mag, want dezelfde oefening twee keer is legaal.
+                                Image(systemName: "checkmark")
+                                    .font(.footnote.bold())
+                                    .foregroundStyle(.green)
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                 }
@@ -271,11 +284,14 @@ struct ExercisePickerSheet: View {
                 }
             }
             .searchable(text: $query, prompt: "Zoek oefening")
-            .navigationTitle("Oefening kiezen")
+            .navigationTitle(added.isEmpty ? "Oefening kiezen" : "\(added.count) toegevoegd")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Sluit") { dismiss() }
+                    // Na de eerste keuze is dit geen "sluiten" meer maar "ik ben klaar":
+                    // het toevoegen is al gebeurd, er valt niets te bevestigen.
+                    Button(added.isEmpty ? "Sluit" : "Klaar") { dismiss() }
+                        .font(added.isEmpty ? .body : .body.bold())
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     MuscleFilterMenu(selection: $muscleFilter)
@@ -289,9 +305,10 @@ struct ExercisePickerSheet: View {
         }
     }
 
+    /// Toevoegen zonder te sluiten: de volgende oefening zit één tik verderop.
     private func pick(_ name: String) {
         onPick(name)
-        dismiss()
+        withAnimation(.snappy(duration: 0.2)) { added.append(name) }
     }
 }
 

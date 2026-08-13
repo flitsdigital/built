@@ -702,6 +702,10 @@ enum Sync {
         try context.delete(model: Scale.self)
         try context.delete(model: CustomHabit.self)
         try context.delete(model: HabitLog.self)
+        // Eigen productfoto's hangen aan barcode-of-naam, niet aan een account. Blijven ze
+        // staan, dan zet de volgende gebruiker z'n Kwark neer en kijkt naar de foto van de
+        // vorige — precies de botsing waarvoor deze functie bestaat.
+        try? FileManager.default.removeItem(at: ProductPhoto.directory)
     }
 
     /// Uitloggen maakt het toestel leeg: zonder account kan de app toch niet syncen, en
