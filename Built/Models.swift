@@ -318,6 +318,17 @@ func epley(_ weight: Double, _ reps: Int) -> Double {
     reps <= 1 ? weight : weight * (1 + Double(reps) / 30)
 }
 
+/// Staat een lift stil? Geen nieuw 1RM-record in de laatste drie sessies, en pas te
+/// beoordelen vanaf vijf. Eén definitie, gedeeld door Inzicht (dat het over al je lifts
+/// tegelijk vraagt) en de trainingskop (die het per oefening vraagt) — twee versies van
+/// "plateau" is hoe de app zichzelf gaat tegenspreken.
+func isPlateaued(_ e1rmPerSession: [Double]) -> Bool {
+    guard e1rmPerSession.count >= 5 else { return false }
+    let prior = e1rmPerSession.dropLast(3).max() ?? 0
+    let recent = e1rmPerSession.suffix(3).max() ?? 0
+    return recent <= prior * 1.005
+}
+
 /// Set-notatie voor overzichten. Cardio toont de duur ("25 min"); bodyweight zonder
 /// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; met ondersteuning
 /// (assisted dip/pull-up) "-40×8"; anders "40×8".

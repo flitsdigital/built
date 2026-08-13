@@ -95,11 +95,10 @@ struct ProfileView: View {
             }
 
             Section {
+                // Oefeningen staat nu op het trainingsscherm: dat is waar je ze opzoekt,
+                // en twee deuren naar dezelfde kamer vind je bij geen van beide terug.
                 row("Meldingen", "bell.badge", value: activeNotifs == 0 ? "Uit" : "\(activeNotifs) actief") {
                     NotificationsSettingsView()
-                }
-                row("Oefeningen", "dumbbell") {
-                    ExerciseLibraryView()
                 }
             }
 

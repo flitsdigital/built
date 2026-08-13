@@ -260,21 +260,27 @@ struct ExercisePickerSheet: View {
                 }
                 ForEach(filtered) { ex in
                     let isPicked = selected.contains(ex.name)
-                    Button {
-                        toggle(ex.name)
-                    } label: {
-                        HStack {
+                    HStack(spacing: 8) {
+                        Button {
+                            toggle(ex.name)
+                        } label: {
                             ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
-                            Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
-                                .font(.title3)
-                                .foregroundStyle(isPicked ? Color.green : Color.secondary.opacity(0.4))
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(isPicked ? [.isSelected] : [])
+                        // De rechterkant is van de ⓘ: hier zoek je uit wélke oefening je
+                        // kiest, en dan wil je erbij kunnen zonder eerst aan te vinken.
+                        NavigationLink(value: ex.name) {
+                            Image(systemName: "info.circle")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Voortgang van \(ex.name)")
                     }
-                    .buttonStyle(.plain)
-                    // Twee signalen voor één staat: het bolletje leest van dichtbij, de
-                    // gekleurde rij van een afstand — je scant een lijst, je leest 'm niet.
-                    .listRowBackground(isPicked ? Color.green.opacity(0.08) : nil)
-                    .accessibilityAddTraits(isPicked ? [.isSelected] : [])
+                    // De rijkleur draagt de selectie nu alleen; de bevestigbalk onderin
+                    // noemt ze bij naam, dus kleur is niet het enige signaal.
+                    .listRowBackground(isPicked ? Color.green.opacity(0.18) : nil)
                 }
                 if filtered.isEmpty && !query.isEmpty {
                     Button {
@@ -297,6 +303,9 @@ struct ExercisePickerSheet: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     MuscleFilterMenu(selection: $muscleFilter)
                 }
+            }
+            .navigationDestination(for: String.self) { name in
+                ExerciseDetailView(exercise: name)
             }
             .safeAreaInset(edge: .bottom) { confirmBar }
             .animation(.snappy(duration: 0.25), value: selected.isEmpty)
@@ -440,8 +449,10 @@ struct ExerciseLibraryView: View {
             ForEach(byMuscle, id: \.muscle) { group in
                 Section(group.muscle) {
                     ForEach(group.items) { ex in
+                        // Naar de voortgang, niet naar het formulier: kijken doe je vaker
+                        // dan hernoemen. Bewerken zit rechtsboven op het detailscherm.
                         NavigationLink {
-                            ExerciseEditor(exercise: ex)
+                            ExerciseDetailView(exercise: ex.name)
                         } label: {
                             ExerciseRow(name: ex.name, muscle: nil, type: ex.type)
                         }

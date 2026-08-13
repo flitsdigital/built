@@ -1,6 +1,13 @@
 import SwiftUI
 import SwiftData
 
+/// `sheet(item:)` wil iets identificeerbaars en een oefeningnaam is maar een String.
+struct ExerciseName: Identifiable {
+    let name: String
+    var id: String { name }
+    init(_ name: String) { self.name = name }
+}
+
 struct TrainingView: View {
     let profile: Profile
     /// Alleen de zichtbare tab rekent z'n body door. De view blijft in de
@@ -36,6 +43,9 @@ struct TrainingView: View {
     @State private var sessionToDelete: WorkoutSession?
     @State private var exerciseToRemove: DraftExercise.ID?
     @State private var prToast: String?
+    /// Welke oefening je voortgang van bekijkt. Een sheet, geen push: je kijkt er tussen
+    /// twee sets door naar en veegt 'm weg — een terugknop is dan omslachtig.
+    @State private var detailExercise: ExerciseName?
     @FocusState private var focusedSet: UUID?
     private let workoutStatus = WorkoutStatus.shared
 
@@ -213,6 +223,25 @@ struct TrainingView: View {
     }
 
     /// Volledige vorige sessie van deze oefening, bijv. "40×8  40×8  37,5×7".
+    /// Eén regel over hoe het met deze lift gaat — maar alleen als er iets te melden valt.
+    /// Een regel die er altijd staat is decoratie; deze verschijnt bij een plateau of bij
+    /// winst in de laatste 30 dagen, en zwijgt verder. De plateaudrempel komt uit
+    /// `isPlateaued`, dezelfde die Inzicht gebruikt.
+    private func progressNote(_ name: String, _ history: HistoryIndex) -> (text: String, warning: Bool)? {
+        let past = (history.byExercise[name] ?? []).filter { $0.date < startedAt }
+        guard !past.isEmpty else { return nil }
+        let perSession = Dictionary(grouping: past) { $0.sessionKey }
+            .map { (date: $0.value.first?.date ?? .distantPast, kg: $0.value.map { epley($0.weightKg, $0.reps) }.max() ?? 0) }
+            .sorted { $0.date < $1.date }
+        let values = perSession.map(\.kg)
+        if isPlateaued(values) { return ("\(values.count >= 3 ? 3 : values.count) sessies geen record", true) }
+        guard let monthAgo = cal.date(byAdding: .day, value: -30, to: .now) else { return nil }
+        let before = perSession.filter { $0.date < monthAgo }.map(\.kg).max() ?? 0
+        let recent = values.suffix(3).max() ?? 0
+        guard before > 0, recent > before + 0.1 else { return nil }
+        return ("+\((recent - before).kgText) kg 1RM deze maand", false)
+    }
+
     private func lastSessionSummary(_ name: String, _ history: HistoryIndex) -> String? {
         let last = lastSession(for: name, history)
         guard !last.isEmpty else { return nil }
@@ -602,6 +631,16 @@ struct TrainingView: View {
             StopwatchSheet()
                 .presentationDetents([.height(400)])
         }
+        .sheet(item: $detailExercise) { item in
+            NavigationStack {
+                ExerciseDetailView(exercise: item.name)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Sluit") { detailExercise = nil }
+                        }
+                    }
+            }
+        }
         .onChange(of: draftSnapshot) { _, snap in
             if let snap, let data = try? JSONEncoder().encode(snap) {
                 UserDefaults.standard.set(data, forKey: "activeWorkout")
@@ -910,6 +949,25 @@ struct TrainingView: View {
             .buttonStyle(PressableStyle())
         }
 
+        // Naslag, geen actie — vandaar boven Routines en niet onder de historie van 90
+        // sessies. Stond hiervoor in Instellingen, waar je afstelt in plaats van opzoekt.
+        NavigationLink {
+            ExerciseLibraryView()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "dumbbell")
+                    .font(.body)
+                    .foregroundStyle(.green)
+                    .frame(width: 32, height: 32)
+                    .background(.builtTint(.green), in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+                Text("Oefeningen").font(.subheadline.bold()).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+            }
+            .builtCard()
+        }
+        .buttonStyle(PressableStyle())
+
         BuiltSectionHeader("Routines")
         if routines.isEmpty {
             VStack(spacing: 12) {
@@ -1153,9 +1211,27 @@ struct TrainingView: View {
                     // foreground al op secondary, en het hiërarchische `.primary` lost
                     // dan óók naar grijs op. De kop van het blok was het lichtste
                     // element op het scherm.
-                    Text(ex.name)
-                        .font(.headline)
-                        .foregroundStyle(Color.primary)
+                    // Tikbaar: hier wil je je verloop zien, en tot nu toe kon dat alleen
+                    // vanuit Inzicht, Records of het Logboek — nooit tijdens het tillen.
+                    Button {
+                        detailExercise = ExerciseName(ex.name)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(ex.name)
+                                .font(.headline)
+                                .foregroundStyle(Color.primary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Toont je voortgang voor deze oefening")
+                }
+                if let note = progressNote(ex.name, history) {
+                    Label(note.text, systemImage: note.warning ? "exclamationmark.triangle.fill" : "arrow.up.right")
+                        .font(.caption2)
+                        .foregroundStyle(note.warning ? .orange : .green)
                 }
                 if let pr = prInfo(ex, history) {
                     Text("🏆 Nieuw record — geschat 1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
