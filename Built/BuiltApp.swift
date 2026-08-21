@@ -46,6 +46,7 @@ struct RootView: View {
                 if ProcessInfo.processInfo.arguments.contains("-demoRest") {
                     workoutStatus.startWorkout()
                     workoutStatus.updateContext(exercise: "Bankdrukken", setsDone: 2, setsTotal: 4,
+                                                restSeconds: 180,
                                                 tip: "Vorige keer: 40 kg × 8 — met 45 kg is 6+ reps een PR")
                     workoutStatus.startRest(seconds: 180)
                 }

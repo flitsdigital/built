@@ -15,6 +15,7 @@ struct TrainingView: View {
     /// hiërarchie staan, dus @State (zoals een lopende training) blijft leven.
     var isVisible = true
     @Environment(\.modelContext) private var context
+    @Environment(\.scenePhase) private var scenePhase
     @Query(sort: \SetEntry.date, order: .reverse) private var sets: [SetEntry]
     @Query(sort: \Routine.createdAt) private var routines: [Routine]
     @Query private var habits: [DayHabits]
@@ -343,6 +344,17 @@ struct TrainingView: View {
                 workoutStatus.stopRest()
             }
         }
+        primeActivity(makeHistory())
+    }
+
+    /// Zet de eerstvolgende oefening op het lockscreen zodra de training loopt. Zonder dit
+    /// staat er tot je eerste vinkje geen oefening en geen set-aantal in de Live Activity,
+    /// en heeft "Set klaar" niets om af te vinken — terwijl juist die eerste set er een is
+    /// die je met de telefoon op slot doet.
+    private func primeActivity(_ history: HistoryIndex) {
+        let next = workout.first { $0.sets.contains { !$0.done } } ?? workout.first
+        guard let next else { return }
+        updateActivity(next.id, currentKg: next.sets.first { !$0.done }?.kg ?? 0, history)
     }
 
     /// Vervangers voor deze oefening: de alternatieven uit de routine + de originele om terug te wisselen.
@@ -369,6 +381,56 @@ struct TrainingView: View {
     private func removeWarmup(_ id: UUID) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
         withAnimation(.snappy(duration: 0.25)) { workout[i].sets.removeAll(where: \.warmup) }
+    }
+
+    /// Vinkt één set af: bewaart 'm als SetEntry, start de rust en meldt een record.
+    /// Staat los van de knop in de lijst omdat de "Set klaar"-knop op het lockscreen precies
+    /// hetzelfde moet doen — met `startRest: false`, want daar loopt de rust al sinds je 'm
+    /// indrukte en neemt `reconcileRestOverride` het einde over.
+    private func completeSet(exercise id: DraftExercise.ID, set setID: DraftSet.ID,
+                             startRest: Bool, _ history: HistoryIndex) {
+        guard let e = workout.firstIndex(where: { $0.id == id }),
+              let s = workout[e].sets.firstIndex(where: { $0.id == setID }) else { return }
+        let name = workout[e].name
+        let cardio = history.isCardio(name)
+        workout[e].sets[s].done = true
+        let set = workout[e].sets[s]
+        if !set.warmup {
+            let entry = SetEntry(exercise: name, weightKg: set.kg, reps: set.reps,
+                                 dropset: set.dropset, failure: set.failure,
+                                 seconds: set.seconds, workoutID: workoutID)
+            context.insert(entry)
+            workout[e].sets[s].savedEntry = entry
+        }
+        // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
+        if startRest, !set.warmup, !cardio, shouldRest(after: name) {
+            workoutStatus.startRest(seconds: restFor(name))
+        }
+        if !set.warmup, !cardio, isNewPR(exercise: name, kg: set.kg, reps: set.reps, history) {
+            prToast = "🏆 Record — \(name)!"
+        }
+    }
+
+    /// Neemt de sets over die je vanaf het lockscreen klaarmeldde. De widget-extensie deelt
+    /// geen ModelContext met de app, dus die knop telt alleen: hier ontstaan de echte sets,
+    /// met de waarden die al in de training stonden. Zelfde patroon als `reconcileRestOverride`.
+    private func reconcileLockscreenSets() {
+        guard active, let defaults = UserDefaults(suiteName: WidgetSnapshot.appGroup) else { return }
+        let pending = defaults.integer(forKey: RestControlIntent.setsDoneKey)
+        guard pending > 0 else { return }
+        let name = defaults.string(forKey: RestControlIntent.setsDoneExerciseKey)
+        defaults.removeObject(forKey: RestControlIntent.setsDoneKey)
+        defaults.removeObject(forKey: RestControlIntent.setsDoneExerciseKey)
+        guard let id = workout.first(where: { $0.name == name })?.id else { return }
+        let history = makeHistory()
+        var lastKg: Double?
+        for _ in 0..<pending {
+            guard let next = workout.first(where: { $0.id == id })?.sets.first(where: { !$0.done }) else { break }
+            lastKg = next.kg
+            completeSet(exercise: id, set: next.id, startRest: false, history)
+        }
+        guard let lastKg else { return }
+        updateActivity(id, currentKg: lastKg, history)
     }
 
     /// Na een superset-set (niet de laatste van de groep in de volgorde) sla je de rust over.
@@ -404,6 +466,7 @@ struct TrainingView: View {
         alternatives = alts
         WorkoutStatus.shared.startWorkout(at: startedAt)
         withAnimation(.snappy(duration: 0.3)) { active = true }
+        primeActivity(history)
     }
 
     private func addExercise(_ name: String) {
@@ -627,7 +690,14 @@ struct TrainingView: View {
                 Color.clear.frame(height: 68)
             }
         }
-        .task { restoreDraft() }
+        // Op `scenePhase` en niet als losse `onChange`: deze keten zit al aan de grens van
+        // wat de type-checker aankan. Beide aanroepen zijn hun eigen bewaker, dus vaker
+        // draaien kost niets — en zo komt een "Set klaar" van het lockscreen binnen zodra
+        // je de app weer opent, ook na een koude start.
+        .task(id: scenePhase) {
+            restoreDraft()
+            reconcileLockscreenSets()
+        }
         .sheet(isPresented: $showStopwatch) {
             StopwatchSheet()
                 .presentationDetents([.height(400)])
@@ -1087,9 +1157,13 @@ struct TrainingView: View {
     private func updateActivity(_ id: DraftExercise.ID, currentKg: Double, _ history: HistoryIndex) {
         guard let ex = workout.first(where: { $0.id == id }) else { return }
         let name = ex.name
+        // Dezelfde afweging als bij de knop in de lijst, maar dan vooraf: het lockscreen
+        // moet zonder de app weten of er na de volgende set gerust wordt, en hoe lang.
+        let rest = !history.isCardio(name) && shouldRest(after: name) ? restFor(name) : 0
         WorkoutStatus.shared.updateContext(exercise: name,
                                            setsDone: ex.sets.filter(\.done).count,
                                            setsTotal: ex.sets.count,
+                                           restSeconds: rest,
                                            tip: activityTip(for: name, currentKg: currentKg, history))
     }
 
@@ -1375,24 +1449,10 @@ struct TrainingView: View {
             Spacer()
             Button {
                 withAnimation(.snappy(duration: 0.25)) {
-                    set.wrappedValue.done.toggle()
-                    if set.wrappedValue.done {
-                        if !set.wrappedValue.warmup {
-                            let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
-                                             dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
-                                             seconds: set.wrappedValue.seconds, workoutID: workoutID)
-                            context.insert(e)
-                            set.wrappedValue.savedEntry = e
-                        }
-                        // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
-                        if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
-                            WorkoutStatus.shared.startRest(seconds: restFor(exercise))
-                        }
-                        if !set.wrappedValue.warmup, !cardio,
-                           isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps, history) {
-                            prToast = "🏆 Record — \(exercise)!"
-                        }
+                    if !set.wrappedValue.done {
+                        completeSet(exercise: exerciseID, set: set.wrappedValue.id, startRest: true, history)
                     } else {
+                        set.wrappedValue.done = false
                         // Na een herstelde training is savedEntry weg — zoek 'm terug
                         let e = set.wrappedValue.savedEntry ?? sets.first {
                             $0.exercise == exercise && $0.date >= startedAt

@@ -12,6 +12,10 @@ struct WorkoutActivity: ActivityAttributes {
         var setsTotal = 0
         /// Coach-regel, bijv. "Vorige keer: 40 kg × 8 — met 45 kg is 6+ reps een PR"
         var tip: String?
+        /// Rust ná de volgende set, in seconden; 0 = geen rust (superset of cardio).
+        /// Reist mee met de activity omdat de "Set klaar"-knop in de extensie de rust zelf
+        /// moet starten: die kent de rusttijd per oefening van de app niet.
+        var restSeconds = 0
 
         var resting: Bool { restEndsAt.map { $0 > .now } ?? false }
         var setsLeft: Int { max(setsTotal - setsDone, 0) }

@@ -60,10 +60,13 @@ final class WorkoutStatus {
     }
 
     /// Waar je mee bezig bent, voor het eiland en lockscreen — gezet bij elke afgevinkte set.
-    func updateContext(exercise: String?, setsDone: Int, setsTotal: Int, tip: String?) {
+    /// `restSeconds` reist mee omdat de "Set klaar"-knop daar de rust zelf start; 0 betekent
+    /// dat er na deze oefening geen rust hoort (superset of cardio).
+    func updateContext(exercise: String?, setsDone: Int, setsTotal: Int, restSeconds: Int, tip: String?) {
         context.exercise = exercise
         context.setsDone = setsDone
         context.setsTotal = setsTotal
+        context.restSeconds = restSeconds
         context.tip = tip
         pushActivity()
     }
