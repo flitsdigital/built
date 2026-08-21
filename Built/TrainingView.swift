@@ -38,6 +38,7 @@ struct TrainingView: View {
     @State private var summary: WorkoutSummary?
     @State private var editingRoutine: Routine?
     @State private var showExercisePicker = false
+    @State private var showOrder = false
     @State private var showNewRoutine = false
     @State private var newRoutineName = ""
     @State private var confirmDiscard = false
@@ -264,13 +265,6 @@ struct TrainingView: View {
                             warmup: old.warmup, dropset: old.dropset, failure: old.failure,
                             seconds: old.seconds)
         withAnimation(.snappy(duration: 0.25)) { workout[e].sets.insert(copy, at: s + 1) }
-    }
-
-    private func moveExercise(_ id: UUID, by offset: Int) {
-        guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
-        let j = i + offset
-        guard workout.indices.contains(j) else { return }
-        withAnimation(.snappy(duration: 0.25)) { workout.swapAt(i, j) }
     }
 
     /// Beste geschat 1RM voor deze oefening vóór de huidige sessie.
@@ -631,6 +625,9 @@ struct TrainingView: View {
         .sheet(isPresented: $showStopwatch) {
             StopwatchSheet()
                 .presentationDetents([.height(400)])
+        }
+        .sheet(isPresented: $showOrder) {
+            WorkoutOrderSheet(workout: $workout)
         }
         .sheet(item: $detailExercise) { item in
             NavigationStack {
@@ -1279,8 +1276,9 @@ struct TrainingView: View {
                     }
                 }
                 Divider()
-                Button("Verplaats omhoog", systemImage: "arrow.up") { moveExercise(ex.id, by: -1) }
-                Button("Verplaats omlaag", systemImage: "arrow.down") { moveExercise(ex.id, by: 1) }
+                // Eén ingang voor de volgorde in plaats van omhoog/omlaag per stap: twee
+                // oefeningen ruilen kostte zo drie keer het menu opendoen.
+                Button("Volgorde wijzigen", systemImage: "arrow.up.arrow.down") { showOrder = true }
                 Button("Oefening verwijderen", systemImage: "trash", role: .destructive) {
                     if ex.sets.contains(where: { $0.done && !$0.warmup }) { exerciseToRemove = ex.id }
                     else { removeExercise(ex.id) }

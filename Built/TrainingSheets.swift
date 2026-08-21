@@ -155,6 +155,61 @@ struct WorkoutSummarySheet: View {
 
 }
 
+/// Volgorde wisselen tijdens een lopende training: een toestel is bezet, of je besluit
+/// halverwege eerst iets anders te doen.
+///
+/// Waarom een sheet en geen sleepgreep in het logscherm zelf: daar is elke oefening een
+/// `Section` met z'n eigen sets, kolomkoppen en swipe-acties eronder, en secties laten
+/// zich niet slepen. Dit is dezelfde greep als in de routine-editor, op een lijst die
+/// verder niets doet — en tijdens het slepen zie je in één blik de hele training, wat in
+/// het logscherm nooit lukt.
+struct WorkoutOrderSheet: View {
+    @Binding var workout: [DraftExercise]
+    @Environment(\.dismiss) private var dismiss
+
+    /// Zelfde opzet als de regel onder een oefening in de routine-editor: waar je staat,
+    /// en of er een superset aan hangt.
+    private func subtitle(_ ex: DraftExercise) -> String {
+        let work = ex.sets.filter { !$0.warmup }
+        var parts = ["\(work.filter(\.done).count)/\(work.count) sets"]
+        if let group = ex.superset { parts.append("Superset \(group)") }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(workout) { ex in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(ex.name)
+                            Text(subtitle(ex))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .onMove { workout = workout.reordered(moving: $0, to: $1) }
+                } footer: {
+                    Text("Alleen de volgorde verandert — je afgevinkte sets houden hun eigen tijd. Sleep je een oefening uit een superset weg, dan valt hij eruit: de korte rust hoort bij oefeningen die naast elkaar staan.")
+                }
+            }
+            // Altijd in edit-modus: slepen is het enige wat dit scherm doet, dus een
+            // EditButton zou een knop zijn voor de enige stand die er is.
+            .environment(\.editMode, .constant(.active))
+            .navigationTitle("Volgorde")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Klaar") { dismiss() }.font(.body.bold())
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
 /// Overzicht van één gedane training: duur, volume, verbeteringen — en bewerkbaar
 /// (kg/reps aanpassen, set of oefening verwijderen).
 struct SessionDetailView: View {
