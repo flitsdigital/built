@@ -30,4 +30,4 @@ Issues leven als GitHub issues in `flitsdigital/built`, via de `gh` CLI. Zie `do
 
 ### Domain docs
 
-Single-context: één `CONTEXT.md` en `docs/adr/` in de root — beide bestaan nog niet en worden pas aangemaakt als er echt iets vast te leggen valt. Zie `docs/agents/domain.md`.
+Single-context: één `CONTEXT.md` en `docs/adr/` in de root. `CONTEXT.md` bestaat nog niet en wordt pas aangemaakt als er echt iets vast te leggen valt; in `docs/adr/` staat wat er al besloten is. Zie `docs/agents/domain.md`.
