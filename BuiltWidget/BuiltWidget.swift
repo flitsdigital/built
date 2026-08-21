@@ -33,12 +33,15 @@ struct BuiltWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        if family == .systemMedium {
+        switch family {
+        case .accessoryCircular: circular
+        case .accessoryInline: inline
+        case .systemMedium:
             HStack(spacing: 16) {
                 ring
                 checks
             }
-        } else {
+        default:
             VStack(alignment: .leading, spacing: 8) {
                 if entry.snap.streak > 0 {
                     HStack {
@@ -50,6 +53,31 @@ struct BuiltWidgetView: View {
                 ring
             }
         }
+    }
+
+    /// Lockscreen, rond: de score is de ring, de streak staat in het midden. Zonder streak
+    /// blijft de score in het midden staan — een vlammetje met een 0 erin demotiveert,
+    /// dezelfde regel als op het dashboard. Een SF Symbol en geen 🔥, want het lockscreen
+    /// rendert accessory-widgets monochroom en een emoji wordt daar grijs.
+    private var circular: some View {
+        Gauge(value: Double(entry.snap.score), in: 0...100) {
+            Image(systemName: "flame.fill")
+        } currentValueLabel: {
+            if entry.snap.streak > 0 {
+                Text("\(entry.snap.streak)").minimumScaleFactor(0.6)
+            } else {
+                Text("\(entry.snap.score)").minimumScaleFactor(0.6)
+            }
+        }
+        .gaugeStyle(.accessoryCircular)
+    }
+
+    /// Lockscreen, één regel. Zonder streak valt hij terug op de score: iets tonen mag,
+    /// zolang het geen nul-reeks is.
+    private var inline: some View {
+        entry.snap.streak > 0
+            ? Label("\(entry.snap.streak) dagen op rij", systemImage: "flame.fill")
+            : Label("\(entry.snap.score)/100", systemImage: "chart.bar.fill")
     }
 
     private var ring: some View {
@@ -115,8 +143,8 @@ struct BuiltWidget: Widget {
                 .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("Groei Score")
-        .description("Je score en checklist van vandaag.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .description("Je score en checklist van vandaag. Op het lockscreen je streak.")
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryCircular, .accessoryInline])
     }
 }
 
