@@ -151,6 +151,11 @@ enum Sync {
         var workout_id: UUID? = nil
         var updated_at: String?; var deleted_at: String?
     }
+    private struct SetEditRow: Codable, Sendable, SyncRow {
+        var id: UUID; var session_key: String; var exercise: String; var set_number: Int
+        var field: String; var old_value: String; var new_value: String; var changed_at: Date
+        var updated_at: String?; var deleted_at: String?
+    }
     private struct HabitsRow: Codable, Sendable, SyncRow {
         var id: UUID; var date: Date; var creatine: Bool; var slept_enough: Bool
         var note: String; var bed_time: Date?; var wake_time: Date?; var sleep_quality: Int
@@ -210,6 +215,7 @@ enum Sync {
         var weights: [WeightRow] = []
         var proteins: [ProteinRow] = []
         var sets: [SetRow] = []
+        var setEdits: [SetEditRow] = []
         var habits: [HabitsRow] = []
         var routines: [RoutineRow] = []
         var meals: [MealRow] = []
@@ -221,7 +227,8 @@ enum Sync {
         var deletions: [DeletionRow] = []
 
         var isEmpty: Bool {
-            profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
+            profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty
+                && setEdits.isEmpty && habits.isEmpty
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
                 && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty && deletions.isEmpty
         }
@@ -239,6 +246,8 @@ enum Sync {
         var weights: [WeightRow] = []
         var proteins: [ProteinRow] = []
         var sets: [SetRow] = []
+        /// Optioneel: een server die 0021 nog niet draaide kent de sleutel niet.
+        var setEdits: [SetEditRow]? = []
         var habits: [HabitsRow] = []
         var routines: [RoutineRow] = []
         var meals: [MealRow] = []
@@ -250,7 +259,8 @@ enum Sync {
 
         /// Niets gewijzigd sinds het anker — het normale antwoord op een dagelijkse start.
         var isEmpty: Bool {
-            profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
+            profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty
+                && (setEdits ?? []).isEmpty && habits.isEmpty
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
                 && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty
         }
@@ -321,6 +331,11 @@ enum Sync {
                dropset: e.dropset, failure: e.failure, seconds: e.seconds,
                workout_id: e.workoutID == .zero ? nil : e.workoutID, updated_at: at)
     }
+    private static func row(_ e: SetEdit, _ at: String?) -> SetEditRow {
+        SetEditRow(id: e.syncID, session_key: e.session, exercise: e.exercise,
+                   set_number: e.setNumber, field: e.field, old_value: e.oldValue,
+                   new_value: e.newValue, changed_at: e.changedAt, updated_at: at)
+    }
     private static func row(_ e: DayHabits, _ at: String?) -> HabitsRow {
         HabitsRow(id: e.syncID, date: e.date, creatine: e.creatine, slept_enough: e.sleptEnough,
                   note: e.note, bed_time: e.bedTime, wake_time: e.wakeTime, sleep_quality: e.sleepQuality,
@@ -377,6 +392,7 @@ enum Sync {
         p.weights = try context.fetch(FetchDescriptor<WeightEntry>(sortBy: [.init(\.date)])).map { row($0, nil) }
         p.proteins = try context.fetch(FetchDescriptor<ProteinEntry>(sortBy: [.init(\.date)])).map { row($0, nil) }
         p.sets = try context.fetch(FetchDescriptor<SetEntry>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.setEdits = try context.fetch(FetchDescriptor<SetEdit>(sortBy: [.init(\.changedAt)])).map { row($0, nil) }
         p.habits = try context.fetch(FetchDescriptor<DayHabits>(sortBy: [.init(\.date)])).map { row($0, nil) }
         p.routines = try context.fetch(FetchDescriptor<Routine>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
         p.meals = try context.fetch(FetchDescriptor<Meal>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
@@ -405,6 +421,7 @@ enum Sync {
             case let m as WeightEntry: p.weights.append(row(m, at))
             case let m as ProteinEntry: p.proteins.append(row(m, at))
             case let m as SetEntry: p.sets.append(row(m, at))
+            case let m as SetEdit: p.setEdits.append(row(m, at))
             case let m as DayHabits: p.habits.append(row(m, at))
             case let m as Routine: p.routines.append(row(m, at))
             case let m as Meal: p.meals.append(row(m, at))
@@ -554,6 +571,7 @@ enum Sync {
             try merge(r.weights, WeightEntry.self, context) { apply($0, to: $1) }
             try merge(r.proteins, ProteinEntry.self, context) { apply($0, to: $1) }
             try merge(r.sets, SetEntry.self, context) { apply($0, to: $1) }
+            try merge(r.setEdits ?? [], SetEdit.self, context) { apply($0, to: $1) }
             try merge(r.habits, DayHabits.self, context) { apply($0, to: $1) }
             try merge(r.routines, Routine.self, context) { apply($0, to: $1) }
             try merge(r.meals, Meal.self, context) { apply($0, to: $1) }
@@ -633,6 +651,11 @@ enum Sync {
         // dezelfde dag weer samen.
         if let w = r.workout_id { m.workoutID = w }
     }
+    private static func apply(_ r: SetEditRow, to m: SetEdit) {
+        m.session = r.session_key; m.exercise = r.exercise; m.setNumber = r.set_number
+        m.field = r.field; m.oldValue = r.old_value; m.newValue = r.new_value
+        m.changedAt = r.changed_at
+    }
     private static func apply(_ r: HabitsRow, to m: DayHabits) {
         m.date = r.date; m.creatine = r.creatine; m.sleptEnough = r.slept_enough
         m.note = r.note; m.bedTime = r.bed_time; m.wakeTime = r.wake_time
@@ -694,6 +717,7 @@ enum Sync {
         try context.delete(model: WeightEntry.self)
         try context.delete(model: ProteinEntry.self)
         try context.delete(model: SetEntry.self)
+        try context.delete(model: SetEdit.self)
         try context.delete(model: DayHabits.self)
         try context.delete(model: Routine.self)
         try context.delete(model: Meal.self)

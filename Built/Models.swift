@@ -623,6 +623,104 @@ final class SetEntry {
     }
 }
 
+/// Wat er ná afloop aan een training is veranderd: één regel per aanpassing van kg, reps
+/// of datum.
+///
+/// Een training is bewerkbaar, dus je eigen historie is dat ook — en zonder spoor is die
+/// 100 kg squat van vorige week niet te onderscheiden van de 90 die er stond. Bij een
+/// sync-conflict wint nog steeds gewoon de nieuwste `updated_at`; dit maakt alleen
+/// zichtbaar dát er iets is overschreven, het verandert niet wie wint.
+///
+/// De waarden staan als tekst en niet als getal: kg, reps en een datum passen dan in
+/// dezelfde twee kolommen, en een regel is leesbaar zonder dat het scherm hoeft te weten
+/// welk soort veld het was.
+@Model
+final class SetEdit {
+    var syncID: UUID = UUID.zero
+    /// De sessiesleutel van de training (`SetEntry.sessionKey`). Verplaats je de training
+    /// naar een andere dag, dan verhuist deze sleutel mee — anders raakt de training haar
+    /// eigen geschiedenis kwijt.
+    var session: String = ""
+    /// Leeg bij een datumwijziging: die geldt voor de hele training.
+    var exercise: String = ""
+    /// Setnummer zoals het op het scherm stond, 0 bij een datumwijziging. Een nummer en
+    /// geen verwijzing: verdwijnt de set later, dan blijft de regel leesbaar.
+    var setNumber: Int = 0
+    var field: String = ""
+    var oldValue: String = ""
+    var newValue: String = ""
+    var changedAt: Date = Date.distantPast
+
+    init(session: String, exercise: String = "", setNumber: Int = 0, field: Field,
+         from old: String, to new: String, at date: Date = .now) {
+        self.syncID = UUID()
+        self.session = session
+        self.exercise = exercise
+        self.setNumber = setNumber
+        self.field = field.rawValue
+        self.oldValue = old
+        self.newValue = new
+        self.changedAt = date
+    }
+
+    enum Field: String {
+        case kg, reps, datum
+        /// De eenheid achter de waarden. Een datum draagt die al in zichzelf.
+        var suffix: String { self == .datum ? "" : " \(rawValue)" }
+    }
+
+    /// "Bench Press set 2" — of "Datum", want die hoort bij de hele training.
+    var subject: String { exercise.isEmpty ? "Datum" : "\(exercise) set \(setNumber)" }
+
+    var summary: String {
+        "\(oldValue) → \(newValue)\(Field(rawValue: field)?.suffix ?? "")"
+    }
+
+    /// Binnen dit venster telt typen als één wijziging. `NumericField` schrijft bij elke
+    /// toetsaanslag terug, dus zonder dit staat "90 → 100" er als 90 → 1 → 10 → 100.
+    static let window: TimeInterval = 5 * 60
+
+    /// Hoe lang een spoor blijft staan. Zie `prune`.
+    static let retentionDays = 90
+
+    /// Legt een wijziging vast, of werkt de wijziging bij die er al staat.
+    ///
+    /// Zet je een waarde binnen het venster terug op wat er stond, dan verdwijnt de regel
+    /// weer: er is dan per saldo niets veranderd, en een spoor van niets is ruis.
+    @MainActor
+    static func record(_ field: Field, session: String, exercise: String = "", setNumber: Int = 0,
+                       from old: String, to new: String, in context: ModelContext) {
+        guard old != new else { return }
+        let rows = (try? context.fetch(FetchDescriptor<SetEdit>())) ?? []
+        if let open = rows.first(where: {
+            $0.session == session && $0.exercise == exercise && $0.setNumber == setNumber
+                && $0.field == field.rawValue
+                && Date.now.timeIntervalSince($0.changedAt) < window
+        }) {
+            if open.oldValue == new {
+                context.deleteSynced(open)
+            } else {
+                open.newValue = new
+                open.changedAt = .now
+            }
+            return
+        }
+        context.insert(SetEdit(session: session, exercise: exercise, setNumber: setNumber,
+                               field: field, from: old, to: new))
+    }
+
+    /// Bewaartermijn. Een spoor is er om een recente wijziging terug te kunnen zien, niet
+    /// om een archief te worden dat op elk toestel meegroeit. Met `deleteSynced`, zodat de
+    /// server het ook opruimt in plaats van het bij de volgende pull terug te sturen.
+    @MainActor
+    static func prune(_ context: ModelContext, keeping days: Int = retentionDays) {
+        let cutoff = Date.now.addingTimeInterval(-Double(days) * 86_400)
+        let old = (try? context.fetch(FetchDescriptor<SetEdit>(
+            predicate: #Predicate { $0.changedAt < cutoff }))) ?? []
+        for row in old { context.deleteSynced(row) }
+    }
+}
+
 /// Eén training: de sets die bij elkaar horen, met de sleutel waaronder naam en notitie
 /// bij `DayHabits` staan.
 struct WorkoutSession: Identifiable {
@@ -812,6 +910,10 @@ extension ProteinEntry: SyncedRecord {
 extension SetEntry: SyncedRecord {
     static var syncTable: String { "set_entries" }
     static func blank() -> SetEntry { SetEntry(exercise: "", weightKg: 0, reps: 0) }
+}
+extension SetEdit: SyncedRecord {
+    static var syncTable: String { "set_edits" }
+    static func blank() -> SetEdit { SetEdit(session: "", field: .kg, from: "", to: "") }
 }
 extension DayHabits: SyncedRecord {
     static var syncTable: String { "day_habits" }
