@@ -73,3 +73,59 @@ struct WorkoutSessionTests {
         #expect(habits.name(for: UUID().uuidString) == "")
     }
 }
+
+/// Slepen tijdens een lopende training. De volgorde is weergave, op één ding na: een
+/// superset bestaat alleen zolang de oefeningen naast elkaar staan, want dáár kijkt de
+/// rusttimer naar.
+@Suite("Volgorde tijdens een training")
+struct WorkoutOrderTests {
+
+    private func draft(_ name: String, superset: String? = nil) -> DraftExercise {
+        DraftExercise(name: name, sets: [DraftSet(kg: 60, reps: 8)], superset: superset)
+    }
+
+    @Test("Slepen wisselt alleen de volgorde")
+    @MainActor func volgordeWisselt() {
+        let workout = [draft("Bench Press"), draft("Squat"), draft("Deadlift")]
+
+        let out = workout.reordered(moving: IndexSet(integer: 2), to: 0)
+
+        #expect(out.map(\.name) == ["Deadlift", "Bench Press", "Squat"])
+        // De sets verhuizen mee met hun oefening, niet met de plek.
+        #expect(out.first?.sets.first?.id == workout.last?.sets.first?.id)
+    }
+
+    @Test("Een oefening uit een superset slepen laat de groep achter")
+    @MainActor func supersetValtUitElkaar() {
+        let workout = [draft("Bench Press", superset: "A"), draft("Chest Fly", superset: "A"), draft("Squat")]
+
+        // Squat ertussen: Bench en Fly staan niet meer naast elkaar.
+        let out = workout.reordered(moving: IndexSet(integer: 2), to: 1)
+
+        #expect(out.map(\.name) == ["Bench Press", "Squat", "Chest Fly"])
+        #expect(out.allSatisfy { $0.superset == nil })
+    }
+
+    @Test("Een superset die heel blijft houdt z'n letter")
+    @MainActor func supersetBlijftHeel() {
+        let workout = [draft("Squat"), draft("Bench Press", superset: "A"), draft("Chest Fly", superset: "A")]
+
+        // Het paar als geheel naar voren: ze blijven buren, dus de groep blijft staan.
+        let out = workout.reordered(moving: IndexSet([1, 2]), to: 0)
+
+        #expect(out.map(\.name) == ["Bench Press", "Chest Fly", "Squat"])
+        #expect(out.prefix(2).allSatisfy { $0.superset == "A" })
+    }
+
+    @Test("Een groep van drie blijft staan als er één uit weggaat")
+    @MainActor func restVanDeGroepBlijft() {
+        let workout = [draft("Bench Press", superset: "A"), draft("Chest Fly", superset: "A"),
+                       draft("Dips", superset: "A"), draft("Squat")]
+
+        let out = workout.reordered(moving: IndexSet(integer: 2), to: 4)
+
+        #expect(out.map(\.name) == ["Bench Press", "Chest Fly", "Squat", "Dips"])
+        #expect(out[0].superset == "A" && out[1].superset == "A")
+        #expect(out.last?.superset == nil)
+    }
+}
