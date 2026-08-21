@@ -151,4 +151,82 @@ struct SyncTests {
         Sync.clearDeletionsForTesting()
     }
 
+    // MARK: - CSV-export
+
+    /// Het dialect ís de feature: puntkomma's, komma-decimalen en ISO-datums zijn wat
+    /// Numbers en Excel openen zonder dat je eerst een importwizard doorloopt. Daarom een
+    /// hele regel vastgepind en niet alleen "er staat een Squat in".
+    @Test("Een set wordt een regel die een draaitabel aankan")
+    func setRegelIsCompleet() {
+        let set = SetEntry(date: nlDate(2025, 6, 2, 19, 30), exercise: "Squat", weightKg: 82.5, reps: 5)
+        let regels = CSV.sets([set], spierVan: ["Squat": "Benen"]).split(separator: "\n")
+        #expect(regels.first == "datum;oefening;spiergroep;gewicht kg;herhalingen;volume kg;seconden;dropset;tot falen")
+        #expect(regels.last == "2025-06-02 19:30;Squat;Benen;82,5;5;412,5;0;nee;nee")
+    }
+
+    /// Een oefening die niet (meer) in de bibliotheek staat mag geen regel laten vallen:
+    /// dan klopt het totaal in de draaitabel niet met wat de app toont.
+    @Test("Onbekende oefening telt mee als Overig")
+    func onbekendeOefeningKrijgtOverig() {
+        let set = SetEntry(date: nlDate(2025, 6, 2), exercise: "Zelfbedachte Curl", weightKg: 10, reps: 12)
+        #expect(CSV.sets([set], spierVan: [:]).contains(";Overig;"))
+    }
+
+    /// Een puntkomma of aanhalingsteken in een productnaam schoof anders de rest van de
+    /// regel een kolom op — precies wat de oude gewichts-CSV met een komma in de datum deed.
+    @Test("Een puntkomma in een naam schuift de kolommen niet op")
+    func lastigeTekensGaanTussenQuotes() {
+        let entry = ProteinEntry(date: nlDate(2025, 6, 2, 8, 15), grams: 20, label: "Kwark \"naturel\"; 500 g")
+        let regel = CSV.food([entry]).split(separator: "\n")[1]
+        #expect(regel.hasPrefix("2025-06-02 08:15;\"Kwark \"\"naturel\"\"; 500 g\";Ontbijt;20;"))
+        #expect(CSV.line(["a;b", "c"]) == "\"a;b\";c")
+    }
+
+    @Test("Elke tabel krijgt een eigen bestand, ook als hij leeg is")
+    @MainActor func tabellenKrijgenEenBestand() throws {
+        let context = try memoryContext()
+        store([Exercise(name: "Squat", muscle: "Benen")], in: context)
+        store([SetEntry(date: nlDate(2025, 6, 2, 19, 30), exercise: "Squat", weightKg: 60, reps: 5)], in: context)
+        let stil = DayHabits(date: nlDate(2025, 6, 1), creatine: true)
+        let ingevuld = DayHabits(date: nlDate(2025, 6, 2))
+        ingevuld.energy = 4
+        store([stil, ingevuld], in: context)
+
+        let tabellen = Dictionary(uniqueKeysWithValues: Sync.csvTables(context).map { ($0.name, $0.text) })
+
+        #expect(Set(tabellen.keys) == ["sets.csv", "wegingen.csv", "voeding.csv",
+                                       "gewoontes.csv", "eigen-gewoontes.csv", "check-ins.csv"])
+        #expect(tabellen["sets.csv"]?.contains(";Benen;") == true)
+        // Leeg is niet niets: een bestand met alleen kolomkoppen laat zien dat er
+        // niets is, een ontbrekend bestand laat je zoeken naar wat er misging.
+        #expect(tabellen["wegingen.csv"] == "datum;kg;weegschaal\n")
+        #expect(tabellen["gewoontes.csv"]?.split(separator: "\n").count == 3) // kop + twee dagen
+
+        // Een niet-ingevulde check-in is geen 0 maar een lege dag, en die hoort niet in
+        // een gemiddelde mee te tellen.
+        let checkIns = try #require(tabellen["check-ins.csv"]).split(separator: "\n")
+        #expect(checkIns.count == 2)
+        #expect(checkIns.last?.hasPrefix("2025-06-02;4;") == true)
+    }
+
+    /// De zip komt van `NSFileCoordinator` in plaats van een library. Dat is precies het
+    /// soort truc dat stil kapot gaat, dus hier wordt 'ie echt geschreven en gelezen.
+    @Test("De export levert een zip op met de CSV's erin")
+    @MainActor func exportLevertEenZip() throws {
+        let context = try memoryContext()
+        store([WeightEntry(date: nlDate(2025, 6, 2), kg: 82.5)], in: context)
+
+        let zip = try #require(Sync.exportCSVZip(context))
+        defer { try? FileManager.default.removeItem(at: zip) }
+
+        #expect(zip.pathExtension == "zip")
+        let data = try Data(contentsOf: zip)
+        #expect(data.count > 0)
+        #expect(data.prefix(2) == Data("PK".utf8)) // een echte zip, geen lege map
+        // De namen staan onversleuteld in de zip-index, dus die kun je zo terugvinden.
+        let ruw = try #require(String(data: data, encoding: .isoLatin1))
+        #expect(ruw.contains("wegingen.csv"))
+        #expect(ruw.contains("sets.csv"))
+    }
+
 }

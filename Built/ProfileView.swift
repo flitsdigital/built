@@ -568,15 +568,9 @@ struct AccountSettingsView: View {
 struct AboutSettingsView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
-
-    private var weightCSV: String {
-        var lines = ["datum,kg,weegschaal"]
-        let df = Date.FormatStyle(date: .numeric, time: .shortened)
-        for w in weights {
-            lines.append("\(w.date.formatted(df)),\(w.kg),\(w.scale)")
-        }
-        return lines.joined(separator: "\n")
-    }
+    /// De zip wordt bij het openen van dit scherm geschreven, niet in `body`: die draait
+    /// bij elke hertekening, en dan zou elke scroll de hele database opnieuw wegschrijven.
+    @State private var csvZip: URL?
 
     var body: some View {
         List {
@@ -588,8 +582,16 @@ struct AboutSettingsView: View {
             }
 
             Section {
+                if let csvZip {
+                    ShareLink(item: csvZip, preview: SharePreview("Built-data (CSV)")) {
+                        Label("Exporteer alles als CSV", systemImage: "tablecells")
+                    }
+                }
                 if !weights.isEmpty {
-                    ShareLink(item: weightCSV, preview: SharePreview("Gewichtsdata (CSV)")) {
+                    // Zelfde opmaak als de wegingen in de zip: één CSV-schrijver, anders
+                    // lopen de twee exports uit elkaar. Deze blijft omdat je je gewicht
+                    // vaak los doorstuurt, zonder de rest erbij.
+                    ShareLink(item: CSV.weights(weights), preview: SharePreview("Gewichtsdata (CSV)")) {
                         Label("Exporteer gewichtsdata", systemImage: "square.and.arrow.up")
                     }
                 }
@@ -600,8 +602,11 @@ struct AboutSettingsView: View {
                 }
             } header: {
                 Text("Data")
+            } footer: {
+                Text("CSV om zelf mee te rekenen in Numbers of Excel — één bestand per tabel, in een zip. JSON is de volledige back-up.")
             }
         }
+        .task { csvZip = Sync.exportCSVZip(context) }
         .tabBarClearance()
         .navigationTitle("Over")
         .navigationBarTitleDisplayMode(.inline)
