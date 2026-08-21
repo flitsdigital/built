@@ -337,6 +337,15 @@ struct DashboardView: View {
     }
 
     private func writeSnapshot(_ idx: DayIndex, score: Int, streak: Int) {
+        // Staat het slot aan, dan gaan de cijfers het gedeelde bestand niet in: de widget
+        // hangt op je beginscherm en vraagt niemand om Face ID.
+        guard !AppLock.isOn else {
+            WidgetSnapshot(score: 0, protein: 0, proteinTarget: 0, trained: false,
+                           creatine: false, weighed: false, slept: false, streak: 0,
+                           locked: true).save()
+            WidgetCenter.shared.reloadAllTimelines()
+            return
+        }
         let h = idx.habits(today)
         WidgetSnapshot(score: score, protein: idx.protein(today), proteinTarget: profile.proteinTarget,
                        trained: idx.trained(today), creatine: h?.creatine == true,

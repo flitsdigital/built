@@ -33,6 +33,8 @@
 	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>Voor het scannen van barcodes op producten.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Om de app te ontgrendelen als je hem vergrendeld hebt.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Om je dagelijkse stappen te tonen en te vergelijken met je training, slaap en energie.</string>
 	<key>NSSupportsLiveActivities</key>
