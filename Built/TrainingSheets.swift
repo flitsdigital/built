@@ -170,6 +170,9 @@ struct SessionDetailView: View {
     @State private var showPicker = false
     /// De zojuist gemaakte routine, om meteen naartoe te navigeren.
     @State private var newRoutine: Routine?
+    /// De set waarvan je de notitie bewerkt, met de tekst zolang de alert openstaat.
+    @State private var noteSet: SetEntry?
+    @State private var noteText = ""
     /// De sessiesleutel leeft in state: verplaats je de training, dan verhuist z'n dag
     /// mee en klopt `session.id` niet meer.
     @State private var key: String
@@ -338,6 +341,20 @@ struct SessionDetailView: View {
             }
         }
         .navigationDestination(item: $newRoutine) { RoutineEditorView(routine: $0) }
+        .alert("Notitie bij deze set", isPresented: Binding(get: { noteSet != nil },
+                                                           set: { if !$0 { noteSet = nil } })) {
+            TextField("bijv. voelde de schouder", text: $noteText)
+            Button("Bewaar") {
+                noteSet?.note = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
+                noteSet = nil
+            }
+            Button("Annuleer", role: .cancel) { noteSet = nil }
+        }
+    }
+
+    private func editNote(_ set: SetEntry) {
+        noteText = set.note
+        noteSet = set
     }
 
     // MARK: - Kaarten
@@ -429,6 +446,35 @@ struct SessionDetailView: View {
     }
 
     private func setRow(_ i: Int, _ set: SetEntry, _ name: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            setFields(i, set, name)
+            // Het potloodje verschijnt pas als er iets staat. Een rij met drie
+            // invoervelden heeft geen vierde knop nodig die meestal niets te zeggen heeft;
+            // toevoegen doe je via het houd-ingedrukt-menu.
+            if !set.note.isEmpty {
+                Button { editNote(set) } label: {
+                    Label(set.note, systemImage: "pencil")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 40)
+            }
+        }
+        // Vegen bestaat niet buiten een List; ingedrukt houden is wat ervoor in de plaats komt.
+        .contextMenu {
+            Button(set.note.isEmpty ? "Notitie toevoegen" : "Notitie bewerken",
+                   systemImage: "square.and.pencil") { editNote(set) }
+            Button("Verwijder set \(i + 1)", systemImage: "trash", role: .destructive) {
+                context.deleteSynced(set)
+            }
+        }
+        .accessibilityAction(named: "Notitie bij set \(i + 1)") { editNote(set) }
+        .accessibilityAction(named: "Verwijder set \(i + 1)") { context.deleteSynced(set) }
+    }
+
+    private func setFields(_ i: Int, _ set: SetEntry, _ name: String) -> some View {
         HStack(spacing: 12) {
             Text("\(i + 1)\(set.dropset ? " D" : "")\(set.failure ? " F" : "")")
                 .font(.subheadline.monospacedDigit().bold())
@@ -452,13 +498,6 @@ struct SessionDetailView: View {
             }
             Spacer()
         }
-        // Vegen bestaat niet buiten een List; ingedrukt houden is wat ervoor in de plaats komt.
-        .contextMenu {
-            Button("Verwijder set \(i + 1)", systemImage: "trash", role: .destructive) {
-                context.deleteSynced(set)
-            }
-        }
-        .accessibilityAction(named: "Verwijder set \(i + 1)") { context.deleteSynced(set) }
     }
 
     private var actionsCard: some View {

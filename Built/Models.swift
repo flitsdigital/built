@@ -608,9 +608,12 @@ final class SetEntry {
     /// die dag deed", en schuift een tweede training van dezelfde dag bij de eerste in.
     /// `.zero` = van vóór deze kolom; die vallen terug op de dag.
     var workoutID: UUID = UUID.zero
+    /// Notitie bij déze set. "Derde set voelde de schouder" hoort bij die ene set, niet bij
+    /// de hele oefening van die dag — dat laatste is `DayHabits.exerciseNotes`.
+    var note: String = ""
     init(date: Date = .now, exercise: String, weightKg: Double, reps: Int,
          dropset: Bool = false, failure: Bool = false, seconds: Int = 0,
-         workoutID: UUID = .zero) {
+         workoutID: UUID = .zero, note: String = "") {
         self.syncID = UUID()
         self.date = date
         self.exercise = exercise
@@ -620,6 +623,7 @@ final class SetEntry {
         self.failure = failure
         self.seconds = seconds
         self.workoutID = workoutID
+        self.note = note
     }
 }
 

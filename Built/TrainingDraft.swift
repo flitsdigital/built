@@ -17,6 +17,8 @@ struct DraftSet: Identifiable {
     var failure = false
     /// Duur voor cardio in seconden; 0 = krachtset.
     var seconds = 0
+    /// Notitie bij deze ene set; gaat mee naar de `SetEntry` zodra hij is afgevinkt.
+    var note = ""
 }
 
 struct DraftExercise: Identifiable {
@@ -44,6 +46,7 @@ struct SavedWorkout: Codable, Equatable {
         var dropset: Bool?
         var failure: Bool?
         var seconds: Int?
+        var note: String?
     }
     struct SavedExercise: Codable, Equatable {
         var name: String

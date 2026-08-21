@@ -93,6 +93,9 @@ alter table public.set_entries add column if not exists seconds int not null def
 -- op de dag. Zonder dit is een training "alles wat je die dag deed", en schuift een
 -- tweede training van dezelfde dag bij de eerste in.
 alter table public.set_entries add column if not exists workout_id uuid;
+-- Notitie bij déze set ("derde set voelde de schouder"). De notitie per oefening en per
+-- sessie staat bij `day_habits`; deze hoort bij één rij.
+alter table public.set_entries add column if not exists note text not null default '';
 
 create table if not exists public.day_habits (
   id uuid primary key default gen_random_uuid(),
@@ -466,15 +469,15 @@ begin
     unit = excluded.unit, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, seconds, workout_id, updated_at, deleted_at)
+  insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, seconds, workout_id, note, updated_at, deleted_at)
   select r.id, uid, r.date, r.exercise, r.weight_kg, r.reps, coalesce(r.dropset, false),
-         coalesce(r.failure, false), coalesce(r.seconds, 0), r.workout_id,
+         coalesce(r.failure, false), coalesce(r.seconds, 0), r.workout_id, coalesce(r.note, ''),
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.set_entries, coalesce(payload->'sets', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     date = excluded.date, exercise = excluded.exercise, weight_kg = excluded.weight_kg,
     reps = excluded.reps, dropset = excluded.dropset, failure = excluded.failure,
-    seconds = excluded.seconds, workout_id = excluded.workout_id,
+    seconds = excluded.seconds, workout_id = excluded.workout_id, note = excluded.note,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
