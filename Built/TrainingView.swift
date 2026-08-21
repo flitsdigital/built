@@ -218,10 +218,27 @@ struct TrainingView: View {
         return nil
     }
 
-    /// Effectieve rusttijd voor een oefening (per-oefening override of globaal).
-    private func restFor(_ name: String) -> Int {
-        workout.first { $0.name == name }?.restSeconds ?? restSeconds
+    /// De rusttijd die de app zelf kiest: de tijd die je bij deze oefening feitelijk neemt,
+    /// met de instelling uit je profiel als terugval zolang daar te weinig van te meten valt.
+    /// Staat de timer daar op "uit", dan blijft hij uit — dat is een keuze, geen gebrek aan data.
+    private func autoRest(_ name: String) -> (seconds: Int, reason: String) {
+        guard restSeconds > 0,
+              let gemeten = sets.filter({ $0.date < startedAt }).restEstimate(for: name) else {
+            return (restSeconds, "standaard")
+        }
+        return (gemeten, "jouw tempo")
     }
+
+    /// Effectieve rusttijd voor een oefening, met waar hij vandaan komt. De handmatige
+    /// override wint: heb je 'm ooit zelf gezet, dan weet jij het beter dan de meting.
+    private func restSource(_ name: String) -> (seconds: Int, reason: String) {
+        if let ingesteld = workout.first(where: { $0.name == name })?.restSeconds {
+            return (ingesteld, "ingesteld")
+        }
+        return autoRest(name)
+    }
+
+    private func restFor(_ name: String) -> Int { restSource(name).seconds }
 
     /// Volledige vorige sessie van deze oefening, bijv. "40×8  40×8  37,5×7".
     /// Eén regel over hoe het met deze lift gaat — maar alleen als er iets te melden valt.
@@ -1272,8 +1289,8 @@ struct TrainingView: View {
                         Button("Warming-up toevoegen", systemImage: "flame") { addWarmup(ex.id) }
                     }
                 }
-                Menu("Rust: \(restLabel(ex.restSeconds ?? restSeconds))", systemImage: "timer") {
-                    Button("Standaard (\(restLabel(restSeconds)))") { setRest(ex.id, nil) }
+                Menu("Rust: \(restLabel(restFor(ex.name)))", systemImage: "timer") {
+                    Button("Automatisch (\(restLabel(autoRest(ex.name).seconds)))") { setRest(ex.id, nil) }
                     ForEach([60, 90, 120, 180], id: \.self) { sec in
                         Button(restLabel(sec)) { setRest(ex.id, sec) }
                     }
@@ -1386,7 +1403,8 @@ struct TrainingView: View {
                         }
                         // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
                         if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
-                            WorkoutStatus.shared.startRest(seconds: restFor(exercise))
+                            let rust = restSource(exercise)
+                            WorkoutStatus.shared.startRest(seconds: rust.seconds, reason: rust.reason)
                         }
                         if !set.wrappedValue.warmup, !cardio,
                            isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps, history) {

@@ -271,7 +271,7 @@ struct TrainingSettingsView: View {
                     Label("Rust-timer", systemImage: "timer")
                 }
             } footer: {
-                Text("De rust-timer start automatisch na elke afgevinkte set.")
+                Text("De rust-timer start automatisch na elke afgevinkte set. Bij een oefening die je vaker deed neemt hij de tijd die je er zelf tussen laat; deze waarde is de terugval zolang daar te weinig van te meten valt. Op \u{201C}Uit\u{201D} blijft de timer helemaal weg.")
             }
         }
         .tabBarClearance()

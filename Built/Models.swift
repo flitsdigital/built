@@ -12,6 +12,9 @@ final class WorkoutStatus {
     var startedAt: Date?
     var restStartedAt: Date?
     var restEndsAt: Date?
+    /// Waaróm de timer op deze tijd staat ("jouw tempo", "standaard", "ingesteld"). Een
+    /// tijd die de app zelf kiest voelt willekeurig zolang de balk er niets bij zegt.
+    var restReason: String?
     var restFired = false
     /// Training loopt, maar je kijkt naar het overzicht. Staat hier en niet in
     /// `TrainingView` omdat de "Training bezig"-balk buiten die view leeft en 'm weer
@@ -76,8 +79,9 @@ final class WorkoutStatus {
         Task { await activity.update(.init(state: state, staleDate: nil)) }
     }
 
-    func startRest(seconds: Int) {
+    func startRest(seconds: Int, reason: String? = nil) {
         guard seconds > 0 else { return }
+        restReason = reason
         startRest(until: .now.addingTimeInterval(Double(seconds)))
     }
 
@@ -112,6 +116,7 @@ final class WorkoutStatus {
     func stopRest() {
         restTask?.cancel()
         restEndsAt = nil
+        restReason = nil
         Notifier.shared.cancelRest()
         pushActivity()
     }
@@ -646,6 +651,35 @@ extension Array where Element == SetEntry {
             let rows = groups[key] ?? []
             return WorkoutSession(id: key, date: rows.first?.date ?? .now, sets: rows)
         }
+    }
+
+    /// Hoe lang je bij deze oefening zelf rust, in seconden — `nil` als er te weinig van
+    /// te meten valt. Elke set heeft een tijdstempel, dus de rust tussen twee sets is een
+    /// verschil van twee getallen: precies het venster dat de timer ook overbrugt (de set
+    /// zelf zit erin, want de klok start bij het vinkje).
+    ///
+    /// De mediaan en niet het gemiddelde: één set waar een telefoontje tussen kwam trekt
+    /// een gemiddelde minutenlang omhoog. Wat daar toch nog overheen komt valt af — onder
+    /// de 20 seconden zijn het sets die achteraf zijn ingetikt, boven de vijf minuten heb
+    /// je niet gerust maar iets anders gedaan.
+    func restEstimate(for exercise: String, sessions recent: Int = 5) -> Int? {
+        let mine = filter { $0.exercise == exercise }
+        guard !mine.isEmpty else { return nil }
+        var gaps: [Double] = []
+        for session in mine.sessions().suffix(recent) {
+            let times = session.sets.map(\.date).sorted()
+            for (eerder, later) in zip(times, times.dropFirst()) {
+                let gap = later.timeIntervalSince(eerder)
+                if gap >= 20, gap <= 300 { gaps.append(gap) }
+            }
+        }
+        // Drie metingen is het minimum waarbij een mediaan meer is dan een toevalstreffer.
+        guard gaps.count >= 3 else { return nil }
+        let sorted = gaps.sorted()
+        let mid = sorted.count / 2
+        let median = sorted.count.isMultiple(of: 2) ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+        // Op vijf seconden afgerond: "2:07" doet preciezer dan de meting is.
+        return Int((median / 5).rounded()) * 5
     }
 
     /// Oefeningen in de volgorde waarin ze gedaan zijn, met hun sets.

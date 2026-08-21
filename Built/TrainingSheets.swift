@@ -648,14 +648,14 @@ struct RoutineExerciseEditor: View {
                     get: { routine.restByExercise[exercise] ?? 0 },
                     set: { routine.restByExercise[exercise] = $0 == 0 ? nil : $0 }
                 )) {
-                    Text("Standaard").tag(0)
+                    Text("Automatisch").tag(0)
                     Text("1:00").tag(60)
                     Text("1:30").tag(90)
                     Text("2:00").tag(120)
                     Text("3:00").tag(180)
                 }
             } footer: {
-                Text("Rust ná een set van deze oefening. \u{201C}Standaard\u{201D} volgt de instelling in je profiel.")
+                Text("Rust ná een set van deze oefening. \u{201C}Automatisch\u{201D} neemt de tijd die je er zelf tussen laat, en valt terug op de instelling in je profiel zolang daar te weinig van te meten valt.")
             }
 
             Section {
