@@ -42,6 +42,7 @@ final class WorkoutStatus {
         startedAt = nil
         minimized = false
         context = .init()
+        stopTimedSet()
         stopRest()
         let activity = self.activity
         self.activity = nil
@@ -82,6 +83,10 @@ final class WorkoutStatus {
     }
 
     func startRest(until end: Date) {
+        // Loopt er een set op tijd, dan is rust een tegenspraak: je bent nog bezig. Twee
+        // tellers naast elkaar zouden elkaar in het scherm en op het lockscreen ook
+        // letterlijk overschrijven — de Live Activity heeft er maar één plek voor.
+        guard timedSetID == nil else { return }
         restStartedAt = .now
         schedule(end: end)
     }
@@ -114,6 +119,30 @@ final class WorkoutStatus {
         restEndsAt = nil
         Notifier.shared.cancelRest()
         pushActivity()
+    }
+
+    // MARK: - Set op tijd
+    //
+    // De tweede timer van de app, en de tegenpool van de rust: die telt af naar een tijd
+    // die je vooraf koos, deze telt op zolang je het volhoudt. Eén set tegelijk — het is
+    // een stopwatch voor de set waar je nú in zit — en de staat leeft hier omdat de rij
+    // die 'm toont opnieuw getekend wordt bij elke toetsaanslag in de training.
+    var timedSetID: UUID?
+    var timedSetStartedAt: Date?
+
+    func startTimedSet(_ id: UUID) {
+        stopRest() // rust en een lopende set kunnen niet allebei waar zijn
+        timedSetID = id
+        timedSetStartedAt = .now
+    }
+
+    /// Zet de teller uit en geeft terug hoe lang hij liep. 0 als er niets liep.
+    @discardableResult
+    func stopTimedSet() -> Int {
+        guard let started = timedSetStartedAt else { return 0 }
+        timedSetID = nil
+        timedSetStartedAt = nil
+        return max(Int(Date.now.timeIntervalSince(started).rounded()), 0)
     }
 
     /// Neemt een +15s/Skip over die via de Live Activity-knop is gedaan terwijl de app sliep.
@@ -308,9 +337,29 @@ final class PhotoEntry {
     var fileURL: URL { Self.directory.appendingPathComponent(fileName) }
 }
 
+/// Seconden als klok: "1:30". De vorm waarin je een tijd invoert en terugleest.
+func clockLabel(_ seconds: Int) -> String {
+    "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+}
+
 /// Rusttijd als "1:30". 0 of minder = uit.
 func restLabel(_ seconds: Int) -> String {
-    seconds <= 0 ? "uit" : "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
+    seconds <= 0 ? "uit" : clockLabel(seconds)
+}
+
+/// Duur van een set in overzichten: "20 min" bij hele minuten, anders "0:45". Een plank
+/// van 45 seconden werd anders "0 min", en dat is precies de tijd die je wilde zien.
+func durationLabel(_ seconds: Int) -> String {
+    seconds % 60 == 0 ? "\(seconds / 60) min" : clockLabel(seconds)
+}
+
+/// Getikte cijfers als duur, van rechts naar links: "45" → 0:45, "130" → 1:30.
+/// Zo past een plank van 45 seconden in hetzelfde veld als 20 minuten hometrainer,
+/// zonder dat je moet kiezen of het veld nu minuten of seconden bedoelt.
+func secondsFromDigits(_ text: String) -> Int {
+    let digits = String(text.filter(\.isNumber).suffix(4))
+    guard !digits.isEmpty else { return 0 }
+    return (Int(digits.dropLast(2)) ?? 0) * 60 + (Int(digits.suffix(2)) ?? 0)
 }
 
 /// Geschat 1RM via de Epley-formule.
@@ -329,11 +378,11 @@ func isPlateaued(_ e1rmPerSession: [Double]) -> Bool {
     return recent <= prior * 1.005
 }
 
-/// Set-notatie voor overzichten. Cardio toont de duur ("25 min"); bodyweight zonder
+/// Set-notatie voor overzichten. Cardio toont de duur ("25 min", "0:45"); bodyweight zonder
 /// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; met ondersteuning
 /// (assisted dip/pull-up) "-40×8"; anders "40×8".
 func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0) -> String {
-    if seconds > 0 { return "\(seconds / 60) min" }
+    if seconds > 0 { return durationLabel(seconds) }
     guard bodyweight else { return "\(kg.kgText)×\(reps)" }
     if kg == 0 { return "×\(reps)" }
     return "\(kg > 0 ? "+" : "")\(kg.kgText)×\(reps)"

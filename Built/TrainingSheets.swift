@@ -290,8 +290,8 @@ struct SessionDetailView: View {
     private func reps(_ set: SetEntry) -> Binding<Double> {
         Binding(get: { Double(set.reps) }, set: { set.reps = Int(min($0.rounded(), 9999)) })
     }
-    private func minutes(_ set: SetEntry) -> Binding<Double> {
-        Binding(get: { Double(set.seconds / 60) }, set: { set.seconds = Int(min($0.rounded(), 600)) * 60 })
+    private func seconds(_ set: SetEntry) -> Binding<Int> {
+        Binding(get: { set.seconds }, set: { set.seconds = $0 })
     }
 
     private var shareText: String {
@@ -435,10 +435,7 @@ struct SessionDetailView: View {
                 .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                 .frame(width: 40, alignment: .leading)
             if exercises.isCardio(name) {
-                NumericField(value: minutes(set), decimal: false, placeholder: "min",
-                             focus: $focused, id: nil, disabled: false)
-                    .numericFieldChrome(width: 64)
-                Text("min").font(.footnote).foregroundStyle(.secondary)
+                SetDurationField(id: set.syncID, seconds: seconds(set), focus: $focused)
             } else {
                 NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(name) ? "±kg" : "kg",
                              focus: $focused, id: nil, disabled: false,
@@ -699,6 +696,64 @@ extension View {
     }
 }
 
+// MARK: - Duur van een set: getikt of geklokt
+
+/// Het tijdveld van een set, met de timer die het vult. Loopt de timer, dan ís de rij de
+/// timer: het veld wordt de meelopende klok en de tijd landt bij stoppen (of bij afvinken)
+/// in dezelfde seconden die je anders zelf zou intikken. Vergeet je te starten, dan tik je
+/// 'm alsnog in — daarom blijft het veld gewoon een veld.
+///
+/// Eén set tegelijk, want de teller staat in `WorkoutStatus`: die weet ook van de rust, en
+/// dat is de enige plek waar "er loopt hier maar één timer" waar te maken is.
+struct SetDurationField: View {
+    /// Id van de set, zodat de rij weet of hij zelf degene is die loopt.
+    let id: UUID
+    @Binding var seconds: Int
+    var focus: FocusState<UUID?>.Binding
+    var disabled = false
+    private let status = WorkoutStatus.shared
+
+    private var running: Bool { status.timedSetID == id }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if running, let startedAt = status.timedSetStartedAt {
+                // Geen eigen tikker: Text(timerInterval:) telt zelf door, ook als de app
+                // tussendoor naar de achtergrond gaat. Zelfde truc als de stopwatch.
+                Text(timerInterval: startedAt...Date.distantFuture, countsDown: false)
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.green)
+                    .multilineTextAlignment(.center)
+                    .numericFieldChrome(width: 72)
+            } else {
+                NumericField(value: Binding(get: { Double(seconds) },
+                                            set: { seconds = Int($0) }),
+                             decimal: false, placeholder: "mm:ss",
+                             focus: focus, id: id, disabled: disabled, duration: true)
+                    .numericFieldChrome(width: 72, dimmed: disabled)
+            }
+            Button {
+                if running {
+                    let elapsed = status.stopTimedSet()
+                    // 0 seconden is een misklik, geen set van niks: dan blijft staan wat er stond.
+                    if elapsed > 0 { seconds = elapsed }
+                } else {
+                    status.startTimedSet(id)
+                }
+            } label: {
+                Image(systemName: running ? "stop.circle.fill" : "play.circle")
+                    .font(.title2)
+                    .foregroundStyle(running ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .accessibilityLabel(running ? "Timer stoppen" : "Timer starten")
+        }
+        .sensoryFeedback(.selection, trigger: running)
+    }
+}
+
 // MARK: - Numeriek invoerveld met cursor altijd achteraan
 
 /// UITextField-wrapper: reformat gebeurt niet tijdens het typen (geen cursor-sprong)
@@ -713,6 +768,11 @@ struct NumericField: UIViewRepresentable {
     /// Toont een ±-knop boven het toetsenbord. De decimalPad heeft geen minteken, en
     /// zonder die knop kun je assisted dips (−40 kg van je lichaamsgewicht) niet invoeren.
     var signed: Bool = false
+    /// De waarde is dan seconden, en je typt ze als klok: cijfers schuiven van rechts naar
+    /// links het mm:ss-veld in. Anders dan bij kg en reps herschrijft dit veld wél tijdens
+    /// het typen — dat opbouwende 0:45 ís de terugkoppeling, en de cursor staat toch al
+    /// altijd achteraan.
+    var duration: Bool = false
 
     func makeUIView(context: Context) -> UITextField {
         let tf = UITextField()
@@ -765,6 +825,10 @@ struct NumericField: UIViewRepresentable {
         init(_ parent: NumericField) { self.parent = parent }
 
         func string(from value: Double) -> String {
+            if parent.duration {
+                // Leeg bij 0, zodat de placeholder ("mm:ss") laat zien wat er verwacht wordt.
+                return value <= 0 ? "" : clockLabel(Int(value))
+            }
             if parent.decimal {
                 return value == value.rounded()
                     ? String(Int(value))
@@ -784,6 +848,13 @@ struct NumericField: UIViewRepresentable {
         }
 
         @objc func editingChanged(_ tf: UITextField) {
+            if parent.duration {
+                parent.value = Double(secondsFromDigits(tf.text ?? ""))
+                tf.text = string(from: parent.value)
+                let end = tf.endOfDocument
+                tf.selectedTextRange = tf.textRange(from: end, to: end)
+                return
+            }
             let raw = (tf.text ?? "").replacingOccurrences(of: ",", with: ".")
             if let v = Double(raw) { parent.value = v }
             else if raw.isEmpty { parent.value = 0 }

@@ -168,11 +168,14 @@ struct TrainingView: View {
         let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
         // Cardio: één blok met een duur. Doel-reps zijn hier minuten.
         if history.isCardio(name) {
-            let minutes = goalReps ?? last.compactMap { $0.seconds > 0 ? $0.seconds / 60 : nil }.max() ?? 20
-            let tip = last.isEmpty ? "Log je minuten — kg en reps blijven leeg."
-                                   : "Vorige keer \(last.map { $0.seconds / 60 }.max() ?? 0) min."
+            // In seconden rekenen en niet in hele minuten: sinds de timer de tijd vult
+            // staat er "0:45" in de historie, en dat werd anders een blok van nul.
+            let previous = last.map(\.seconds).max() ?? 0
+            let seconds = goalReps.map { $0 * 60 } ?? (previous > 0 ? previous : 20 * 60)
+            let tip = last.isEmpty ? "Start de timer, of tik je tijd in — kg en reps blijven leeg."
+                                   : "Vorige keer \(durationLabel(previous))."
             return DraftExercise(name: name, tip: tip,
-                                 sets: [DraftSet(kg: 0, reps: 0, seconds: minutes * 60)])
+                                 sets: [DraftSet(kg: 0, reps: 0, seconds: seconds)])
         }
         guard !last.isEmpty else {
             let n = goalSets ?? 3
@@ -1141,7 +1144,7 @@ struct TrainingView: View {
             Text("SET").frame(width: 24, alignment: .leading)
             Text("VORIGE").frame(width: 64, alignment: .leading)
             if cardio {
-                Text("MINUTEN").frame(width: 56)
+                Text("TIJD").frame(width: 72, alignment: .leading)
             } else {
                 Text(bodyweight ? "±KG" : "KG").frame(width: 56)
                 Text("REPS").frame(width: 48)
@@ -1353,13 +1356,8 @@ struct TrainingView: View {
                 .frame(width: 64, alignment: .leading)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
             if cardio {
-                NumericField(value: Binding(get: { Double(set.wrappedValue.seconds / 60) },
-                                            set: { set.wrappedValue.seconds = Int(min($0.rounded(), 600)) * 60 }),
-                             decimal: false, placeholder: "min",
-                             focus: $focusedSet, id: set.wrappedValue.id,
-                             disabled: set.wrappedValue.done)
-                    .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
-                Text("min").font(.footnote).foregroundStyle(.secondary)
+                SetDurationField(id: set.wrappedValue.id, seconds: set.seconds,
+                                 focus: $focusedSet, disabled: set.wrappedValue.done)
             } else {
                 NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "±kg" : "kg",
                              focus: $focusedSet, id: set.wrappedValue.id,
@@ -1377,6 +1375,13 @@ struct TrainingView: View {
                 withAnimation(.snappy(duration: 0.25)) {
                     set.wrappedValue.done.toggle()
                     if set.wrappedValue.done {
+                        // Afvinken terwijl de timer loopt is het natuurlijke einde van een
+                        // set op tijd. Eerst de tijd binnenhalen, dan pas opslaan — anders
+                        // gaat de oude waarde de database in.
+                        if WorkoutStatus.shared.timedSetID == set.wrappedValue.id {
+                            let elapsed = WorkoutStatus.shared.stopTimedSet()
+                            if elapsed > 0 { set.wrappedValue.seconds = elapsed }
+                        }
                         if !set.wrappedValue.warmup {
                             let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
                                              dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,

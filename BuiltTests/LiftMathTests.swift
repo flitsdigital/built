@@ -119,3 +119,31 @@ struct PlatesTests {
         }
     }
 }
+
+/// Een set op tijd wordt getikt óf geklokt, en beide landen in dezelfde seconden. Gaat
+/// het tikken of het teruglezen mis, dan staat er een plank van "0 min" in je logboek.
+@Suite("Duur van een set")
+struct DurationTests {
+    @Test("Cijfers schuiven van rechts naar links het klokveld in")
+    func tikken() {
+        #expect(secondsFromDigits("") == 0)
+        #expect(secondsFromDigits("4") == 4)
+        #expect(secondsFromDigits("45") == 45)
+        #expect(secondsFromDigits("130") == 90)
+        #expect(secondsFromDigits("2000") == 1200)
+        // Wat het veld toont moet er ook weer in kunnen: het herschrijft tijdens het typen.
+        #expect(secondsFromDigits("0:45") == 45)
+        #expect(secondsFromDigits("20:00") == 1200)
+        // Meer dan vier cijfers is een misslag, geen blok van elf uur.
+        #expect(secondsFromDigits("123456") == 34 * 60 + 56)
+    }
+
+    @Test("Overzichten tonen hele minuten als minuten en de rest als klok")
+    func teruglezen() {
+        #expect(durationLabel(1200) == "20 min")
+        #expect(durationLabel(45) == "0:45")
+        #expect(durationLabel(90) == "1:30")
+        #expect(setNotation(kg: 0, reps: 0, bodyweight: false, seconds: 45) == "0:45")
+        #expect(setNotation(kg: 0, reps: 0, bodyweight: false, seconds: 1500) == "25 min")
+    }
+}
