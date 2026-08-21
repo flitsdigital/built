@@ -994,9 +994,19 @@ struct TrainingView: View {
 
         BuiltSectionHeader("Geschiedenis")
         if pastSessions.isEmpty {
-            ContentUnavailableView("Nog geen trainingen", systemImage: "clock.arrow.circlepath",
-                                   description: Text("Je eerste training verschijnt hier — met volume, oefeningen en records."))
-                .builtCard()
+            // De knop staat hier én onder Profiel → Over: dit is het moment waarop je 'm
+            // nodig hebt (een lege historie), maar hij moet er ook nog zijn als je 'm pas
+            // ná je eerste training in Built bedenkt — dan is deze lege staat weg.
+            ContentUnavailableView {
+                Label("Nog geen trainingen", systemImage: "clock.arrow.circlepath")
+            } description: {
+                Text("Je eerste training verschijnt hier — met volume, oefeningen en records.")
+            } actions: {
+                NavigationLink("Importeer uit Hevy of Strong") { HistoryImportView() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+            }
+            .builtCard()
         }
         ForEach(pastSessions) { session in
             historyCard(session, history)
