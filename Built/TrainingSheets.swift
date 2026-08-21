@@ -167,6 +167,7 @@ struct SessionDetailView: View {
     @Query private var exercises: [Exercise]
     @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
     @FocusState private var focused: UUID?
+    @State private var showPicker = false
     /// De sessiesleutel leeft in state: verplaats je de training, dan verhuist z'n dag
     /// mee en klopt `session.id` niet meer.
     @State private var key: String
@@ -232,6 +233,12 @@ struct SessionDetailView: View {
     }
 
     private var byExercise: [(name: String, sets: [SetEntry])] { daySets.byExercise() }
+
+    /// De training waar nieuwe sets aan hangen. Bij een lege training — je logt er een na
+    /// die je niet live hebt bijgehouden — staat het id alleen nog in de sleutel.
+    private var workoutID: UUID {
+        daySets.first?.workoutID ?? UUID(uuidString: key) ?? .zero
+    }
 
     private var volume: Int {
         Int(daySets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
@@ -312,7 +319,11 @@ struct SessionDetailView: View {
             }
 
             Section("Training") {
-                DatePicker("Datum", selection: dayBinding, in: ...Date.now, displayedComponents: .date)
+                // Zonder sets valt er niets te verplaatsen: de training staat al op de
+                // dag waar je 'm begon.
+                if !daySets.isEmpty {
+                    DatePicker("Datum", selection: dayBinding, in: ...Date.now, displayedComponents: .date)
+                }
                 TextField("Naam (bijv. Push A)", text: workoutNameBinding)
                 TextField("Notitie over deze training", text: workoutNoteBinding, axis: .vertical)
                     .lineLimit(1...6)
@@ -370,6 +381,18 @@ struct SessionDetailView: View {
                     }
                 }
             }
+
+            Section {
+                Button {
+                    showPicker = true
+                } label: {
+                    Label("Oefening toevoegen", systemImage: "plus")
+                }
+            } footer: {
+                if daySets.isEmpty {
+                    Text("Nog niets gelogd. Kies een oefening; kg en reps vul je hier in.")
+                }
+            }
         }
         .tabBarClearance()
         .navigationTitle(workoutName.isEmpty
@@ -379,6 +402,17 @@ struct SessionDetailView: View {
         .toolbar {
             ShareLink(item: shareText)
             EditButton()
+        }
+        .sheet(isPresented: $showPicker) {
+            // Dezelfde oefening twee keer heeft hier geen zin: de sets zijn per naam
+            // gegroepeerd, dus die zouden bij de bestaande rij landen.
+            ExercisePickerSheet(exclude: Set(byExercise.map(\.name))) { name in
+                // Een minuut na de vorige set, zodat de volgorde klopt; bij een lege
+                // training is de dag zelf het startpunt.
+                let start = daySets.last?.date ?? session.date
+                context.insert(SetEntry(date: start.addingTimeInterval(60), exercise: name,
+                                        weightKg: 0, reps: 0, workoutID: workoutID))
+            }
         }
     }
 
