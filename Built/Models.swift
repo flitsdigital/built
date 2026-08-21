@@ -252,11 +252,41 @@ final class CustomHabit {
     var syncID: UUID = UUID.zero
     var name: String
     var createdAt: Date
+    /// Dosering, vrije tekst: "5 g", "2 capsules", "1 scoop". Leeg = een gewone habit;
+    /// staat er wél iets, dan leest de rij als supplement. Vrije tekst omdat de eenheid
+    /// per middel verschilt — een lijstje eenheden zou hier alleen maar in de weg staan.
+    var dose: String = ""
+    /// Doses die je nog in huis hebt. Elk vinkje haalt er één af, elk uitgevinkt vinkje
+    /// zet 'm terug; het is één vinkje per dag, dus dit is meteen het aantal dagen dat je
+    /// nog vooruit kunt. `nil` = je houdt geen voorraad bij, `0` = op. Dat onderscheid
+    /// moet bestaan: anders is "op" niet te onderscheiden van "nooit bijgehouden" en
+    /// verdwijnt de teller stilletjes op de dag dat je hem het hardst nodig hebt.
+    var stockLeft: Int?
     init(name: String) {
         self.syncID = UUID()
         self.name = name
         self.createdAt = .now
     }
+
+    /// Wat er onder de naam staat: "5 g · nog 12 dagen". Leeg als er niets te melden is.
+    /// Het dashboard, de dagdetails en het instellingenscherm tonen alle drie deze regel.
+    var detail: String {
+        var parts: [String] = []
+        if !dose.isEmpty { parts.append(dose) }
+        switch stockLeft {
+        case .none: break
+        case .some(0): parts.append("voorraad op")
+        case .some(let n): parts.append("nog \(n) \(n == 1 ? "dag" : "dagen")")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Bijna op — een week vooruit is net genoeg om te bestellen voordat je een dag mist.
+    var stockLow: Bool { (stockLeft ?? .max) <= 7 }
+
+    /// Een habit met dosering is een supplement, en krijgt het pillenicoon in plaats van
+    /// het sterretje. Geen apart type dus: het verschil zit in wat je invult.
+    var icon: String { dose.isEmpty ? "star.fill" : "pills.fill" }
 }
 
 @Model
@@ -802,6 +832,31 @@ extension ModelContext {
                           : cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day)
         insert(h)
         return h
+    }
+
+    /// Vinkje aan of uit voor een eigen habit, met de voorraad die meebeweegt: één vinkje
+    /// is één dosis. Het dashboard en de dagdetails vinken allebei af — met een tweede
+    /// kopie van deze regel telt er gegarandeerd één van de twee een keer verkeerd af.
+    ///
+    /// `logs` komt van de aanroeper: die heeft ze al als `@Query` in handen, en een
+    /// tweede fetch hier zou de lijst uit de view laten lopen.
+    @MainActor
+    func setHabit(_ habit: CustomHabit, on day: Date, done: Bool, logs: [HabitLog]) {
+        let key = dayKey(day)
+        let existing = logs.first { $0.name == habit.name && dayKey($0.date) == key }
+        if done {
+            guard existing == nil else { return }
+            let cal = Calendar.current
+            let date = cal.isDateInToday(day)
+                ? Date.now
+                : cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
+            insert(HabitLog(name: habit.name, date: date))
+            if let left = habit.stockLeft { habit.stockLeft = max(left - 1, 0) }
+        } else {
+            guard let existing else { return }
+            deleteSynced(existing)
+            if let left = habit.stockLeft { habit.stockLeft = left + 1 }
+        }
     }
 }
 

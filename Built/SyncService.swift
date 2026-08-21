@@ -184,8 +184,13 @@ enum Sync {
         var id: UUID; var name: String
         var updated_at: String?; var deleted_at: String?
     }
+    // `stock_left` is -1 op de draad als je geen voorraad bijhoudt. Zonder dat onderscheid
+    // zou "niet bijhouden" (nil) niet te scheiden zijn van "de server kent deze kolom nog
+    // niet" (ook nil) — en dan wist elke pull de voorraad tot de migration gedraaid is.
     private struct CustomHabitRow: Codable, Sendable, SyncRow {
         var id: UUID; var name: String; var created_at: Date
+        var dose: String? = ""
+        var stock_left: Int? = -1
         var updated_at: String?; var deleted_at: String?
     }
     private struct ExerciseRow: Codable, Sendable, SyncRow {
@@ -353,7 +358,8 @@ enum Sync {
         ScaleRow(id: e.syncID, name: e.name, updated_at: at)
     }
     private static func row(_ e: CustomHabit, _ at: String?) -> CustomHabitRow {
-        CustomHabitRow(id: e.syncID, name: e.name, created_at: e.createdAt, updated_at: at)
+        CustomHabitRow(id: e.syncID, name: e.name, created_at: e.createdAt,
+                       dose: e.dose, stock_left: e.stockLeft ?? -1, updated_at: at)
     }
     private static func row(_ e: HabitLog, _ at: String?) -> HabitLogRow {
         HabitLogRow(id: e.syncID, name: e.name, date: e.date, updated_at: at)
@@ -671,6 +677,10 @@ enum Sync {
     private static func apply(_ r: ScaleRow, to m: Scale) { m.name = r.name }
     private static func apply(_ r: CustomHabitRow, to m: CustomHabit) {
         m.name = r.name; m.createdAt = r.created_at
+        // `if let`, niet `?? default`: zolang de migration nog niet gedraaid is komen deze
+        // twee als nil terug, en dat betekent "die kolom staat daar nog niet" — niet "leeg".
+        if let dose = r.dose { m.dose = dose }
+        if let stock = r.stock_left { m.stockLeft = stock < 0 ? nil : stock }
     }
     private static func apply(_ r: HabitLogRow, to m: HabitLog) {
         m.name = r.name; m.date = r.date

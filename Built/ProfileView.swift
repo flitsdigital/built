@@ -289,9 +289,9 @@ struct HabitsSettingsView: View {
     @AppStorage("healthStepsOn") private var healthOn = false
 
     @State private var showAddHabit = false
-    @State private var habitName = ""
-    @State private var renameHabit: CustomHabit?
-    @State private var renameText = ""
+    /// De habit die je aan het bewerken bent; nil = geen editor open. Toevoegen loopt via
+    /// `showAddHabit` door hetzelfde formulier — één scherm voor beide.
+    @State private var editHabit: CustomHabit?
     @State private var habitToDelete: CustomHabit?
 
     var body: some View {
@@ -327,10 +327,19 @@ struct HabitsSettingsView: View {
                      : "Health is niet beschikbaar op dit toestel.")
             }
 
-            Section("Eigen habits") {
+            Section {
                 ForEach(customHabits) { habit in
-                    Button { renameHabit = habit; renameText = habit.name } label: {
-                        Text(habit.name).foregroundStyle(.primary)
+                    Button { editHabit = habit } label: {
+                        HStack {
+                            Label(habit.name, systemImage: habit.icon)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if !habit.detail.isEmpty {
+                                Text(habit.detail)
+                                    .font(.footnote)
+                                    .foregroundStyle(habit.stockLow ? Color.orange : Color.secondary)
+                            }
+                        }
                     }
                 }
                 .onDelete { offsets in
@@ -339,29 +348,29 @@ struct HabitsSettingsView: View {
                 Button { showAddHabit = true } label: {
                     Label("Habit toevoegen", systemImage: "plus")
                 }
+            } header: {
+                Text("Eigen habits")
+            } footer: {
+                Text("Vul een dosering in — \"5 g\", \"2 capsules\" — en de rij leest als supplement. Houd je ook de voorraad bij, dan telt elk vinkje er één dosis af en zie je hoeveel dagen je nog vooruit kunt.")
             }
         }
         .tabBarClearance()
         .navigationTitle("Habits")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Nieuwe habit", isPresented: $showAddHabit) {
-            TextField("bijv. Vitamine D", text: $habitName)
-            Button("Toevoegen") {
-                let name = habitName.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty { context.insert(CustomHabit(name: name)) }
-                habitName = ""
+        .sheet(isPresented: $showAddHabit) {
+            HabitEditor(habit: nil) { name, dose, stock in
+                let habit = CustomHabit(name: name)
+                habit.dose = dose
+                habit.stockLeft = stock
+                context.insert(habit)
             }
-            Button("Annuleer", role: .cancel) { habitName = "" }
-        } message: {
-            Text("Komt in je dagelijkse checklist en weekoverzicht. Telt niet mee voor de Groei Score.")
         }
-        .alert("Habit hernoemen", isPresented: Binding(get: { renameHabit != nil }, set: { if !$0 { renameHabit = nil } })) {
-            TextField("Naam", text: $renameText)
-            Button("Opslaan") {
-                if let h = renameHabit { renameCustomHabit(h, to: renameText) }
-                renameHabit = nil
+        .sheet(item: $editHabit) { habit in
+            HabitEditor(habit: habit) { name, dose, stock in
+                renameCustomHabit(habit, to: name)
+                habit.dose = dose
+                habit.stockLeft = stock
             }
-            Button("Annuleer", role: .cancel) { renameHabit = nil }
         }
         .confirmationDialog("Habit én alle vinkjes ervan verwijderen?",
                             isPresented: Binding(get: { habitToDelete != nil },
@@ -383,6 +392,81 @@ struct HabitsSettingsView: View {
         // HabitLog koppelt op naam → mee-updaten zodat de vinkjes niet losraken.
         let logs = (try? context.fetch(FetchDescriptor<HabitLog>())) ?? []
         for log in logs where log.name == old { log.name = new }
+    }
+}
+
+/// Eén formulier voor toevoegen én bewerken. Een habit mét dosering is een supplement, en
+/// dat is het hele verschil — geen tweede model, geen tweede lijst, geen tweede scherm.
+///
+/// Toevoegen ging eerder via een alert met alleen een naamveld. Met dosering en voorraad
+/// erbij past dat niet meer in een alert, en twee formulieren die hetzelfde invullen lopen
+/// vroeg of laat uit elkaar.
+private struct HabitEditor: View {
+    /// nil = een nieuwe habit.
+    let habit: CustomHabit?
+    /// Naam, dosering, en de voorraad — `nil` als je die niet bijhoudt.
+    let onSave: (String, String, Int?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var dose: String
+    @State private var tracksStock: Bool
+    @State private var stock: Int
+
+    init(habit: CustomHabit?, onSave: @escaping (String, String, Int?) -> Void) {
+        self.habit = habit
+        self.onSave = onSave
+        _name = State(initialValue: habit?.name ?? "")
+        _dose = State(initialValue: habit?.dose ?? "")
+        _tracksStock = State(initialValue: habit?.stockLeft != nil)
+        // 30 als startpunt: een potje is bijna altijd een maand.
+        _stock = State(initialValue: habit?.stockLeft ?? 30)
+    }
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("bijv. Vitamine D", text: $name)
+                    TextField("Dosering, bijv. 5 g", text: $dose)
+                } footer: {
+                    Text("Komt in je dagelijkse checklist en weekoverzicht. Telt niet mee voor de Groei Score. Met een dosering erbij leest de rij als supplement.")
+                }
+
+                Section {
+                    Toggle("Voorraad bijhouden", isOn: $tracksStock.animation(.snappy(duration: 0.2)))
+                    if tracksStock {
+                        LabeledContent("Doses in huis") {
+                            TextField("30", value: $stock, format: .number)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 64)
+                        }
+                    }
+                } footer: {
+                    Text(tracksStock
+                         ? "Elk vinkje haalt er één dosis af, een vinkje dat je weghaalt zet er één terug. Bij een week of minder kleurt de rij oranje — dan is het tijd om te bestellen."
+                         : "Aanzetten als je wilt zien hoeveel dagen je nog vooruit kunt.")
+                }
+            }
+            .navigationTitle(habit == nil ? "Nieuwe habit" : "Habit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuleer") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Bewaar") {
+                        onSave(trimmedName, dose.trimmingCharacters(in: .whitespaces),
+                               tracksStock ? max(stock, 0) : nil)
+                        dismiss()
+                    }
+                    .disabled(trimmedName.isEmpty)
+                }
+            }
+        }
     }
 }
 

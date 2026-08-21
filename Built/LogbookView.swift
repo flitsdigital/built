@@ -245,16 +245,10 @@ struct DayDetailView: View {
                 set: { record()[keyPath: keyPath] = $0 })
     }
 
-    private func customBinding(_ name: String) -> Binding<Bool> {
+    private func customBinding(_ habit: CustomHabit) -> Binding<Bool> {
         Binding(
-            get: { habitLogs.contains { $0.name == name && dayKey($0.date) == key } },
-            set: { on in
-                if on {
-                    context.insert(HabitLog(name: name, date: noon))
-                } else if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
-                    context.deleteSynced(log)
-                }
-            })
+            get: { habitLogs.contains { $0.name == habit.name && dayKey($0.date) == key } },
+            set: { on in context.setHabit(habit, on: day, done: on, logs: habitLogs) })
     }
 
     private func sleepTime(_ keyPath: ReferenceWritableKeyPath<DayHabits, Date?>, defaultHour: Int) -> Binding<Date> {
@@ -315,7 +309,18 @@ struct DayDetailView: View {
             if !customHabits.isEmpty {
                 Section("Eigen habits") {
                     ForEach(customHabits) { habit in
-                        Toggle(habit.name, isOn: customBinding(habit.name))
+                        Toggle(isOn: customBinding(habit)) {
+                            // Dezelfde regel als op het dashboard: dosering en voorraad
+                            // horen bij het vinkje, niet alleen bij de instellingen.
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(habit.name)
+                                if !habit.detail.isEmpty {
+                                    Text(habit.detail)
+                                        .font(.caption)
+                                        .foregroundStyle(habit.stockLow ? Color.orange : Color.secondary)
+                                }
+                            }
+                        }
                     }
                 }
             }
