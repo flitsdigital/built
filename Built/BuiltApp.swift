@@ -123,9 +123,12 @@ struct RootView: View {
             .accessibilityValue(restLabel(restSeconds))
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text("Rust")
+                    // Waaróm deze tijd: de app kiest hem zelf uit je eigen sets, en zonder
+                    // die reden erbij lijkt een timer van 2:10 een willekeurig getal.
+                    Text(workoutStatus.restReason.map { "Rust · \($0)" } ?? "Rust")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                     Text(timerInterval: Date.now...end, countsDown: true)
                         .font(.subheadline.bold().monospacedDigit())
                 }
