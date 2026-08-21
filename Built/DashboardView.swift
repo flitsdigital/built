@@ -22,6 +22,10 @@ struct DashboardView: View {
     @State private var showCheckIn = false
     @State private var showWeeklyReview = false
     @AppStorage("lastReviewWeek") private var lastReviewWeek = 0
+    /// Mijlpalen die je al gezien hebt, als id's gescheiden door "|". Bewust lokaal en
+    /// niet gesynchroniseerd: de mijlpaal zelf volgt uit je trainingen en rekent zichzelf
+    /// op elk toestel opnieuw uit — alleen "ik heb 'm gezien" hoort bij dit scherm.
+    @AppStorage("celebratedMilestones") private var celebratedMilestones = ""
     @State private var appeared = false
     /// Geselecteerde dag op het dashboard; swipe of tik in de week-strip om te wisselen.
     @State private var selectedDay = Calendar.current.startOfDay(for: .now)
@@ -160,12 +164,14 @@ struct DashboardView: View {
         let idx = makeIndex()
         let score = scoreOn(today, idx)
         let streak = streak(idx)
+        let milestone = newMilestone
         return ScrollView {
             LazyVStack(spacing: 16) {
                 entranced(0, header(idx, streak: streak))
                 if Sync.isConfigured, syncStatus.isStale { syncBanner }
-                entranced(1, weekCard(idx))
-                entranced(2, dayCards(idx))
+                if let milestone { entranced(1, milestoneCard(milestone)) }
+                entranced(2, weekCard(idx))
+                entranced(3, dayCards(idx))
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
@@ -217,6 +223,9 @@ struct DashboardView: View {
             Notifier.shared.pendingAction = nil
         }
         .sensoryFeedback(.success, trigger: score) { _, new in new == 100 } // succes-haptic alleen op het zeldzame moment
+        // Rol je na je training het dashboard binnen en staat de mijlpaal er ineens:
+        // dan mag je 'm ook voelen.
+        .sensoryFeedback(.success, trigger: milestone?.id)
         .sheet(isPresented: $showWeeklyReview) { WeeklyReviewSheet(profile: profile) }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: selectedDay) }
         .sheet(isPresented: $showSleepSheet) { SleepSheet(day: selectedDay) }
@@ -266,6 +275,43 @@ struct DashboardView: View {
         if syncStatus.lastError != nil { return "Profiel, synchronisatie-fout" }
         if syncStatus.isStale { return "Profiel, langer dan een dag niet gesynct" }
         return "Profiel"
+    }
+
+    // MARK: - Mijlpaal
+
+    /// De zwaarste mijlpaal die nog niet is voorbijgekomen, of nil. Eén tegelijk: drie
+    /// feestjes onder elkaar is geen feest meer, en de volgende staat er morgen wel.
+    private var newMilestone: Milestone? {
+        let seen = Set(celebratedMilestones.split(separator: "|").map(String.init))
+        return Milestones.reached(sets).first { !seen.contains($0.id) }
+    }
+
+    /// Komt één keer voorbij en is daarna weg — geen trofeeënkast, want de kast maakt van
+    /// een moment een lijstje. "Mooi" is niet het bedienen van de app maar het antwoord
+    /// erop: zonder die tik weet niemand of je het gezien hebt, en dan is de keuze
+    /// "verdwijnt vanzelf, ook als je er net niet was".
+    private func milestoneCard(_ m: Milestone) -> some View {
+        HStack(spacing: 12) {
+            BuiltIconTile(systemName: m.icon, color: .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(m.title).font(.subheadline.weight(.semibold))
+                Text(m.subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Mooi") { celebrate(m) }
+                .font(.subheadline.bold())
+                .foregroundStyle(.orange)
+                .buttonStyle(.plain)
+        }
+        .builtCard()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Mijlpaal: \(m.title). \(m.subtitle)")
+    }
+
+    private func celebrate(_ m: Milestone) {
+        var seen = celebratedMilestones.split(separator: "|").map(String.init)
+        seen.append(m.id)
+        withAnimation(.snappy(duration: 0.25)) { celebratedMilestones = seen.joined(separator: "|") }
     }
 
     private func header(_ idx: DayIndex, streak: Int) -> some View {
