@@ -167,6 +167,14 @@ struct SessionDetailView: View {
     @Query private var exercises: [Exercise]
     @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
     @FocusState private var focused: UUID?
+    /// De sessiesleutel leeft in state: verplaats je de training, dan verhuist z'n dag
+    /// mee en klopt `session.id` niet meer.
+    @State private var key: String
+
+    init(session: WorkoutSession) {
+        self.session = session
+        _key = State(initialValue: session.id)
+    }
 
     /// Lichaamsgewicht rond een dag, voor het meetellen van bodyweight-oefeningen.
     private func bodyWeight(on d: Date) -> Double {
@@ -174,22 +182,53 @@ struct SessionDetailView: View {
     }
 
     private var cal: Calendar { .current }
-    private var day: Date { cal.startOfDay(for: session.date) }
+    /// Uit de sets zelf, niet uit `session`: die is een momentopname van vóór een verplaatsing.
+    private var day: Date { cal.startOfDay(for: daySets.first?.date ?? session.date) }
     /// De sets van déze training, niet van de hele dag — er kunnen er twee zijn.
     private var daySets: [SetEntry] {
-        allSets.filter { $0.sessionKey == session.id }.sorted { $0.date < $1.date }
+        allSets.filter { $0.sessionKey == key }.sorted { $0.date < $1.date }
     }
 
     private var habitsRecord: DayHabits? { allHabits.first { dayKey($0.date) == dayKey(day) } }
-    private var workoutName: String { habitsRecord?.name(for: session.id) ?? "" }
+    private var workoutName: String { habitsRecord?.name(for: key) ?? "" }
 
     private var workoutNoteBinding: Binding<String> {
-        Binding(get: { habitsRecord?.note(for: session.id) ?? "" },
-                set: { context.habits(on: day).workoutNotes[session.id] = $0 })
+        Binding(get: { habitsRecord?.note(for: key) ?? "" },
+                set: { context.habits(on: day).workoutNotes[key] = $0 })
     }
 
     private var workoutNameBinding: Binding<String> {
-        Binding(get: { workoutName }, set: { context.habits(on: day).workoutNames[session.id] = $0 })
+        Binding(get: { workoutName }, set: { context.habits(on: day).workoutNames[key] = $0 })
+    }
+
+    private var dayBinding: Binding<Date> {
+        Binding(get: { day }, set: { move(to: $0) })
+    }
+
+    /// Verplaatst de hele training naar een andere dag: elke set schuift hetzelfde aantal
+    /// dagen op (tijdstippen blijven, dus de duur klopt nog), en naam en notitie verhuizen
+    /// naar de dagrecord van de nieuwe datum.
+    private func move(to newDay: Date) {
+        let rows = daySets
+        guard let first = rows.first else { return }
+        let delta = cal.startOfDay(for: newDay).timeIntervalSince(cal.startOfDay(for: first.date))
+        guard delta != 0 else { return }
+        let old = habitsRecord
+        let name = old?.name(for: key) ?? ""
+        let note = old?.note(for: key) ?? ""
+        // Sets van vóór `workoutID` hangen aan hun dag, dus zou de sleutel meeverhuizen
+        // en de training samenvallen met wat er op de nieuwe dag al stond.
+        let id = first.workoutID == .zero ? UUID() : first.workoutID
+        for s in rows {
+            s.date = s.date.addingTimeInterval(delta)
+            s.workoutID = id
+        }
+        old?.workoutNames[key] = nil
+        old?.workoutNotes[key] = nil
+        key = id.uuidString
+        let target = context.habits(on: cal.startOfDay(for: newDay))
+        if !name.isEmpty { target.workoutNames[key] = name }
+        if !note.isEmpty { target.workoutNotes[key] = note }
     }
 
     private var byExercise: [(name: String, sets: [SetEntry])] { daySets.byExercise() }
@@ -272,7 +311,8 @@ struct SessionDetailView: View {
                 }
             }
 
-            Section("Notitie") {
+            Section("Training") {
+                DatePicker("Datum", selection: dayBinding, in: ...Date.now, displayedComponents: .date)
                 TextField("Naam (bijv. Push A)", text: workoutNameBinding)
                 TextField("Notitie over deze training", text: workoutNoteBinding, axis: .vertical)
                     .lineLimit(1...6)

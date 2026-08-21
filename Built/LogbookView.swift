@@ -407,6 +407,10 @@ struct DayDetailView: View {
                             for s in groups[i].sets { context.deleteSynced(s) }
                         }
                     }
+                    // De datum van een training corrigeer je hier, want hier zie je 'm
+                    // op de verkeerde dag staan.
+                    NavigationLink("Training bewerken") { SessionDetailView(session: session) }
+                        .font(.footnote)
                 }
             }
 
