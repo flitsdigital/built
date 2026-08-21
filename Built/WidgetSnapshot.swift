@@ -15,6 +15,10 @@ struct WidgetSnapshot: Codable {
     var showSleep: Bool? = true
     var restDay: Bool? = false
     var showFood: Bool? = true
+    /// De app staat op slot. De widget hoort dan niets persoonlijks te tonen: hij staat
+    /// op het beginscherm, en daar komt geen Face ID aan te pas. De app schrijft de
+    /// cijfers dan ook niet weg — wat er niet in dit bestand staat, kan niet lekken.
+    var locked: Bool? = false
 
     static let appGroup = "group.com.jordiklavers.Built"
 

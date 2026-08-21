@@ -36,6 +36,9 @@ struct RootView: View {
     var body: some View {
         content
             .task {
+                // Vóór alles: staat het slot aan, dan hoort er niets zichtbaar te zijn
+                // vóór je jezelf hebt aangetoond.
+                AppLock.shared.start()
                 // Vóór alles wat hieronder naar de store schrijft: anders vallen die
                 // wijzigingen buiten de delta die de sync bijhoudt.
                 Sync.startTracking()
@@ -75,6 +78,7 @@ struct RootView: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in
+                AppLock.shared.scenePhaseChanged(to: phase) // afdekken vóór alles wat hierna komt
                 Sync.appActive = phase == .active
                 if phase == .active {
                     workoutStatus.reconcileRestOverride() // +15s/Skip vanaf het lockscreen overnemen

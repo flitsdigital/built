@@ -27,6 +27,7 @@ struct ProfileView: View {
     @AppStorage("notifReviewOn") private var notifReviewOn = true
     @AppStorage("notifRestOn") private var notifRestOn = true
     @AppStorage("notifCheckInOn") private var notifCheckInOn = true
+    @AppStorage(AppLock.key) private var appLockOn = false
 
     private let syncStatus = SyncStatus.shared
 
@@ -99,6 +100,9 @@ struct ProfileView: View {
                 // en twee deuren naar dezelfde kamer vind je bij geen van beide terug.
                 row("Meldingen", "bell.badge", value: activeNotifs == 0 ? "Uit" : "\(activeNotifs) actief") {
                     NotificationsSettingsView()
+                }
+                row("Vergrendeling", "lock", value: appLockOn ? "Aan" : "Uit") {
+                    AppLockSettingsView()
                 }
             }
 
@@ -433,6 +437,33 @@ struct ScalesSettingsView: View {
             }
             Button("Annuleer", role: .cancel) { scaleToDelete = nil }
         }
+    }
+}
+
+// MARK: - Vergrendeling
+
+/// Eén schakelaar, want er valt maar één ding te kiezen. De rest is uitleg: wat het wél
+/// doet, en — belangrijker — wat het niet doet.
+struct AppLockSettingsView: View {
+    @AppStorage(AppLock.key) private var appLockOn = false
+
+    var body: some View {
+        List {
+            Section {
+                Toggle("Vergrendel met \(AppLock.biometryName)", isOn: $appLockOn)
+                    .disabled(!AppLock.isAvailable)
+            } footer: {
+                if AppLock.isAvailable {
+                    Text("Built vraagt om \(AppLock.biometryName) zodra je de app een halve minuut niet gebruikt hebt — even naar de camera of een deelblad gooit je er dus niet uit. Je widget toont dan geen cijfers meer en op je lockscreen blijft van een training alleen de tijd staan.\n\nDit vergrendelt het scherm. Het versleutelt niet wat er op dit toestel staat, en het blijft op dit toestel: op je andere telefoon zet je het apart aan.")
+                } else {
+                    Label("Zet eerst een toegangscode op je iPhone in. Zonder toegangscode is er niets om de app mee te ontgrendelen.", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .tabBarClearance()
+        .navigationTitle("Vergrendeling")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

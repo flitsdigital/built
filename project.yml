@@ -37,6 +37,7 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
         NSCameraUsageDescription: Voor het scannen van barcodes op producten.
+        NSFaceIDUsageDescription: Om de app te ontgrendelen als je hem vergrendeld hebt.
         NSHealthShareUsageDescription: Om je dagelijkse stappen te tonen en te vergelijken met je training, slaap en energie.
         CFBundleURLTypes:
           - CFBundleURLSchemes: [built]

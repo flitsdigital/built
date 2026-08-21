@@ -33,7 +33,21 @@ struct BuiltWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        if family == .systemMedium {
+        if entry.snap.locked == true {
+            // Vergrendelde app: de cijfers staan niet eens in het bestand, dus dit is
+            // alles wat er te melden valt.
+            VStack(spacing: 6) {
+                Image(systemName: "lock.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
+                Text("Built")
+                    .font(.caption.bold())
+                Text("Vergrendeld")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if family == .systemMedium {
             HStack(spacing: 16) {
                 ring
                 checks

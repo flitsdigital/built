@@ -73,6 +73,15 @@ final class WorkoutStatus {
         var state = context
         state.restStartedAt = restStartedAt
         state.restEndsAt = restEndsAt
+        if AppLock.isOn {
+            // Het lockscreen laat dit zien zonder dat er iets ontgrendeld is. De oefening
+            // en de coach-tip zeggen wie je bent en waar je mee bezig bent; "Training
+            // bezig" met de klok erbij is precies genoeg om de timer te blijven volgen.
+            state.exercise = nil
+            state.tip = nil
+            state.setsDone = 0
+            state.setsTotal = 0
+        }
         Task { await activity.update(.init(state: state, staleDate: nil)) }
     }
 
