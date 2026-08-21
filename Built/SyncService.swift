@@ -149,6 +149,7 @@ enum Sync {
         var dropset: Bool? = false; var failure: Bool? = false
         var seconds: Int? = 0
         var workout_id: UUID? = nil
+        var note: String? = ""
         var updated_at: String?; var deleted_at: String?
     }
     private struct HabitsRow: Codable, Sendable, SyncRow {
@@ -319,7 +320,7 @@ enum Sync {
     private static func row(_ e: SetEntry, _ at: String?) -> SetRow {
         SetRow(id: e.syncID, date: e.date, exercise: e.exercise, weight_kg: e.weightKg, reps: e.reps,
                dropset: e.dropset, failure: e.failure, seconds: e.seconds,
-               workout_id: e.workoutID == .zero ? nil : e.workoutID, updated_at: at)
+               workout_id: e.workoutID == .zero ? nil : e.workoutID, note: e.note, updated_at: at)
     }
     private static func row(_ e: DayHabits, _ at: String?) -> HabitsRow {
         HabitsRow(id: e.syncID, date: e.date, creatine: e.creatine, slept_enough: e.sleptEnough,
@@ -632,6 +633,9 @@ enum Sync {
         // het sessie-id bij elke pull lokaal wissen — en vallen twee trainingen van
         // dezelfde dag weer samen.
         if let w = r.workout_id { m.workoutID = w }
+        // Zelfde reden: zonder de migration bestaat `note` daar niet, en zou `?? ""` de
+        // notitie bij elke pull lokaal wissen.
+        if let n = r.note { m.note = n }
     }
     private static func apply(_ r: HabitsRow, to m: DayHabits) {
         m.date = r.date; m.creatine = r.creatine; m.sleptEnough = r.slept_enough

@@ -56,6 +56,20 @@ struct SyncTests {
         #expect(json.contains("\"kg\""))
     }
 
+    /// De notitie bij één set hoort in de payload thuis; blijft hij in `row(_:)` achter,
+    /// dan staat hij alleen op het toestel waar je hem typte en merk je dat pas als je
+    /// hem op het andere toestel zoekt.
+    @Test("De notitie bij een set gaat mee in de payload")
+    @MainActor func setnotitieGaatMee() throws {
+        let context = try memoryContext()
+        context.insert(SetEntry(date: nlDate(2025, 6, 2), exercise: "Squat", weightKg: 60, reps: 5,
+                                note: "derde set voelde de schouder"))
+
+        let json = try #require(Sync.exportJSON(context))
+        #expect(json.contains("\"note\""))
+        #expect(json.contains("derde set voelde de schouder"))
+    }
+
     // MARK: - Sync-identiteit
 
     /// De standaardcatalogus zaait elk toestel zelf. Vallen die id's niet overal hetzelfde

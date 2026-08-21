@@ -43,6 +43,9 @@ struct TrainingView: View {
     @State private var confirmDiscard = false
     @State private var sessionToDelete: WorkoutSession?
     @State private var exerciseToRemove: DraftExercise.ID?
+    /// De set waarvan je de notitie bewerkt, met de tekst zolang de alert openstaat.
+    @State private var noteSet: DraftSet.ID?
+    @State private var noteText = ""
     @State private var prToast: String?
     /// Welke oefening je voortgang van bekijkt. Een sheet, geen push: je kijkt er tussen
     /// twee sets door naar en veegt 'm weg — een terugknop is dan omslachtig.
@@ -266,6 +269,25 @@ struct TrainingView: View {
         withAnimation(.snappy(duration: 0.25)) { workout[e].sets.insert(copy, at: s + 1) }
     }
 
+    /// Opent de notitie-alert voor deze set.
+    private func editNote(_ set: DraftSet) {
+        noteText = set.note
+        noteSet = set.id
+    }
+
+    /// Zet de notitie bij de set met dit id. Is de set al afgevinkt, dan staat hij ook al
+    /// in de database en moet de notitie daar meteen heen — anders zou hij pas meegaan bij
+    /// een volgende afvink, en dat gebeurt voor deze set niet meer.
+    private func saveNote(_ text: String, for id: DraftSet.ID) {
+        let note = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for e in workout.indices {
+            guard let s = workout[e].sets.firstIndex(where: { $0.id == id }) else { continue }
+            workout[e].sets[s].note = note
+            workout[e].sets[s].savedEntry?.note = note
+            return
+        }
+    }
+
     private func moveExercise(_ id: UUID, by offset: Int) {
         guard let i = workout.firstIndex(where: { $0.id == id }) else { return }
         let j = i + offset
@@ -309,7 +331,7 @@ struct TrainingView: View {
         guard active else { return nil }
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
             .init(name: ex.name, tip: ex.tip, note: ex.note,
-                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) },
+                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds, note: $0.note) },
                   originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }, alternatives: alternatives.isEmpty ? nil : alternatives,
            restEndsAt: workoutStatus.restEndsAt,
@@ -326,7 +348,7 @@ struct TrainingView: View {
         startedAt = saved.startedAt
         workout = saved.exercises.map { ex in
             DraftExercise(name: ex.name, tip: ex.tip,
-                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false, seconds: $0.seconds ?? 0) },
+                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false, seconds: $0.seconds ?? 0, note: $0.note ?? "") },
                           note: ex.note, originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }
         alternatives = saved.alternatives ?? [:]
@@ -710,6 +732,15 @@ struct TrainingView: View {
             ExercisePickerSheet { name in
                 addExercise(name)
             }
+        }
+        .alert("Notitie bij deze set", isPresented: Binding(get: { noteSet != nil },
+                                                           set: { if !$0 { noteSet = nil } })) {
+            TextField("bijv. voelde de schouder", text: $noteText)
+            Button("Bewaar") {
+                if let id = noteSet { saveNote(noteText, for: id) }
+                noteSet = nil
+            }
+            Button("Annuleer", role: .cancel) { noteSet = nil }
         }
         .alert("Nieuwe routine", isPresented: $showNewRoutine) {
             TextField("bijv. Push, Pull of Upper A", text: $newRoutineName)
@@ -1318,100 +1349,120 @@ struct TrainingView: View {
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, exerciseID: DraftExercise.ID,
                         bodyweight: Bool, cardio: Bool, history: HistoryIndex,
                         duplicate: @escaping () -> Void) -> some View {
-        HStack(spacing: 12) {
-            Menu {
-                Button("Set dupliceren", systemImage: "plus.square.on.square", action: duplicate)
-                if !cardio {
-                    Divider()
-                    Button { set.wrappedValue.warmup = false } label: {
-                        Label("Normale set", systemImage: set.wrappedValue.warmup ? "circle" : "checkmark")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Menu {
+                    Button("Set dupliceren", systemImage: "plus.square.on.square", action: duplicate)
+                    Button(set.wrappedValue.note.isEmpty ? "Notitie toevoegen" : "Notitie bewerken",
+                           systemImage: "square.and.pencil") { editNote(set.wrappedValue) }
+                    if !cardio {
+                        Divider()
+                        Button { set.wrappedValue.warmup = false } label: {
+                            Label("Normale set", systemImage: set.wrappedValue.warmup ? "circle" : "checkmark")
+                        }
+                        Button { set.wrappedValue.warmup = true } label: {
+                            Label("Warming-up", systemImage: set.wrappedValue.warmup ? "checkmark" : "flame")
+                        }
+                        Divider()
+                        Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
+                            set.wrappedValue.dropset.toggle()
+                        }
+                        Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
+                            set.wrappedValue.failure.toggle()
+                        }
                     }
-                    Button { set.wrappedValue.warmup = true } label: {
-                        Label("Warming-up", systemImage: set.wrappedValue.warmup ? "checkmark" : "flame")
-                    }
-                    Divider()
-                    Button(set.wrappedValue.dropset ? "Geen drop-set" : "Drop-set", systemImage: "arrow.down.right") {
-                        set.wrappedValue.dropset.toggle()
-                    }
-                    Button(set.wrappedValue.failure ? "Niet naar falen" : "Naar falen", systemImage: "flame") {
-                        set.wrappedValue.failure.toggle()
-                    }
+                } label: {
+                    Text(setLabel(set.wrappedValue, number: number))
+                        .font(.subheadline.monospacedDigit().bold())
+                        .foregroundStyle(set.wrappedValue.warmup || set.wrappedValue.dropset || set.wrappedValue.failure
+                                         ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                        .frame(width: 34, alignment: .leading)
+                        .opacity(set.wrappedValue.done ? 0.55 : 1)
+                        .contentShape(Rectangle())
                 }
-            } label: {
-                Text(setLabel(set.wrappedValue, number: number))
-                    .font(.subheadline.monospacedDigit().bold())
-                    .foregroundStyle(set.wrappedValue.warmup || set.wrappedValue.dropset || set.wrappedValue.failure
-                                     ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                    .frame(width: 34, alignment: .leading)
+                .tint(Color.secondary) // menu-label pikte anders de groene app-tint mee
+                Text(set.wrappedValue.previous ?? "—")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 64, alignment: .leading)
                     .opacity(set.wrappedValue.done ? 0.55 : 1)
-                    .contentShape(Rectangle())
-            }
-            .tint(Color.secondary) // menu-label pikte anders de groene app-tint mee
-            Text(set.wrappedValue.previous ?? "—")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .frame(width: 64, alignment: .leading)
-                .opacity(set.wrappedValue.done ? 0.55 : 1)
-            if cardio {
-                NumericField(value: Binding(get: { Double(set.wrappedValue.seconds / 60) },
-                                            set: { set.wrappedValue.seconds = Int(min($0.rounded(), 600)) * 60 }),
-                             decimal: false, placeholder: "min",
-                             focus: $focusedSet, id: set.wrappedValue.id,
-                             disabled: set.wrappedValue.done)
-                    .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
-                Text("min").font(.footnote).foregroundStyle(.secondary)
-            } else {
-                NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "±kg" : "kg",
-                             focus: $focusedSet, id: set.wrappedValue.id,
-                             disabled: set.wrappedValue.done, signed: bodyweight)
-                    .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
-                NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
-                                            set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
-                             decimal: false, placeholder: "reps",
-                             focus: $focusedSet, id: nil,
-                             disabled: set.wrappedValue.done)
-                    .numericFieldChrome(width: 48, dimmed: set.wrappedValue.done)
-            }
-            Spacer()
-            Button {
-                withAnimation(.snappy(duration: 0.25)) {
-                    set.wrappedValue.done.toggle()
-                    if set.wrappedValue.done {
-                        if !set.wrappedValue.warmup {
-                            let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
-                                             dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
-                                             seconds: set.wrappedValue.seconds, workoutID: workoutID)
-                            context.insert(e)
-                            set.wrappedValue.savedEntry = e
-                        }
-                        // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
-                        if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
-                            WorkoutStatus.shared.startRest(seconds: restFor(exercise))
-                        }
-                        if !set.wrappedValue.warmup, !cardio,
-                           isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps, history) {
-                            prToast = "🏆 Record — \(exercise)!"
-                        }
-                    } else {
-                        // Na een herstelde training is savedEntry weg — zoek 'm terug
-                        let e = set.wrappedValue.savedEntry ?? sets.first {
-                            $0.exercise == exercise && $0.date >= startedAt
-                                && $0.weightKg == set.wrappedValue.kg && $0.reps == set.wrappedValue.reps
-                                && $0.seconds == set.wrappedValue.seconds
-                        }
-                        if let e, !e.isDeleted { context.deleteSynced(e) }
-                        set.wrappedValue.savedEntry = nil
-                    }
-                    updateActivity(exerciseID, currentKg: set.wrappedValue.kg, history)
+                if cardio {
+                    NumericField(value: Binding(get: { Double(set.wrappedValue.seconds / 60) },
+                                                set: { set.wrappedValue.seconds = Int(min($0.rounded(), 600)) * 60 }),
+                                 decimal: false, placeholder: "min",
+                                 focus: $focusedSet, id: set.wrappedValue.id,
+                                 disabled: set.wrappedValue.done)
+                        .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
+                    Text("min").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "±kg" : "kg",
+                                 focus: $focusedSet, id: set.wrappedValue.id,
+                                 disabled: set.wrappedValue.done, signed: bodyweight)
+                        .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
+                    NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
+                                                set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
+                                 decimal: false, placeholder: "reps",
+                                 focus: $focusedSet, id: nil,
+                                 disabled: set.wrappedValue.done)
+                        .numericFieldChrome(width: 48, dimmed: set.wrappedValue.done)
                 }
-            } label: {
-                Image(systemName: set.wrappedValue.done ? "checkmark.circle.fill" : "circle")
-                    .font(.title2)
-                    .foregroundStyle(set.wrappedValue.done ? .green : .secondary)
-                    .contentTransition(.symbolEffect(.replace))
+                Spacer()
+                Button {
+                    withAnimation(.snappy(duration: 0.25)) {
+                        set.wrappedValue.done.toggle()
+                        if set.wrappedValue.done {
+                            if !set.wrappedValue.warmup {
+                                let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
+                                                 dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
+                                                 seconds: set.wrappedValue.seconds, workoutID: workoutID,
+                                                 note: set.wrappedValue.note)
+                                context.insert(e)
+                                set.wrappedValue.savedEntry = e
+                            }
+                            // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
+                            if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
+                                WorkoutStatus.shared.startRest(seconds: restFor(exercise))
+                            }
+                            if !set.wrappedValue.warmup, !cardio,
+                               isNewPR(exercise: exercise, kg: set.wrappedValue.kg, reps: set.wrappedValue.reps, history) {
+                                prToast = "🏆 Record — \(exercise)!"
+                            }
+                        } else {
+                            // Na een herstelde training is savedEntry weg — zoek 'm terug
+                            let e = set.wrappedValue.savedEntry ?? sets.first {
+                                $0.exercise == exercise && $0.date >= startedAt
+                                    && $0.weightKg == set.wrappedValue.kg && $0.reps == set.wrappedValue.reps
+                                    && $0.seconds == set.wrappedValue.seconds
+                            }
+                            if let e, !e.isDeleted { context.deleteSynced(e) }
+                            set.wrappedValue.savedEntry = nil
+                        }
+                        updateActivity(exerciseID, currentKg: set.wrappedValue.kg, history)
+                    }
+                } label: {
+                    Image(systemName: set.wrappedValue.done ? "checkmark.circle.fill" : "circle")
+                        .font(.title2)
+                        .foregroundStyle(set.wrappedValue.done ? .green : .secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(set.wrappedValue.done ? "Set afgevinkt" : "Set afvinken")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(set.wrappedValue.done ? "Set afgevinkt" : "Set afvinken")
+            // Het potloodje verschijnt pas als er iets staat: een rij met drie invoervelden en
+            // een vinkje heeft geen knop nodig die meestal niets te zeggen heeft. Toevoegen
+            // doe je via het menu onder het setnummer.
+            if !set.wrappedValue.note.isEmpty {
+                Button {
+                    editNote(set.wrappedValue)
+                } label: {
+                    Label(set.wrappedValue.note, systemImage: "pencil")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 34)
+            }
         }
         .listRowBackground(set.wrappedValue.done ? Color.builtTint(.green) : nil)
     }
