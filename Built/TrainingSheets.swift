@@ -127,7 +127,10 @@ struct WorkoutSummarySheet: View {
         }
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 12) {
-                ShareLink(item: summary.shareText) {
+                // Het plaatje is wat je post; de tekst gaat als bericht mee, zodat een
+                // appje niet slechter wordt dan hij was.
+                ShareLink(item: summary.shareImage, message: Text(summary.shareText),
+                          preview: SharePreview(summary.shareImage.title)) {
                     Image(systemName: "square.and.arrow.up")
                         .font(.headline)
                         .frame(height: 22)
@@ -294,14 +297,27 @@ struct SessionDetailView: View {
         Binding(get: { Double(set.seconds / 60) }, set: { set.seconds = Int(min($0.rounded(), 600)) * 60 })
     }
 
+    private var dayText: String { day.formatted(.dateTime.weekday(.wide).day().month()) }
+
+    private var shareLines: [WorkoutShareLine] {
+        byExercise.map { group in
+            let bw = exercises.isBodyweight(group.name)
+            return WorkoutShareLine(exercise: group.name,
+                                    sets: group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
+        }
+    }
+
     private var shareText: String {
-        workoutShareText(title: "Training van \(day.formatted(.dateTime.weekday(.wide).day().month()))",
-                         duration: durationText, volume: volume, sets: daySets.count,
-                         lines: byExercise.map { group in
-                             let bw = exercises.isBodyweight(group.name)
-                             return "\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
-                         },
-                         prs: prs)
+        workoutShareText(title: "Training van \(dayText)", duration: durationText,
+                         volume: volume, sets: daySets.count, lines: shareLines, prs: prs)
+    }
+
+    /// Dezelfde training als plaatje. De naam staat er wél op: hier heb je 'm zelf
+    /// ingevuld, en "Push A" zegt op een story meer dan "Training".
+    private var shareImage: WorkoutShareImage {
+        WorkoutShareImage(title: workoutName.isEmpty ? "Training" : workoutName, date: dayText,
+                          duration: durationText, volume: volume, sets: daySets.count,
+                          lines: shareLines, prs: prs)
     }
 
     var body: some View {
@@ -325,7 +341,10 @@ struct SessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         // Geen EditButton meer: die hoort bij een List, en verwijderen gebeurt nu via het
         // ⋯-menu van een oefening en het houd-ingedrukt-menu van een set.
-        .toolbar { ShareLink(item: shareText) }
+        .toolbar {
+            ShareLink(item: shareImage, message: Text(shareText),
+                      preview: SharePreview(shareImage.title))
+        }
         .sheet(isPresented: $showPicker) {
             // Dezelfde oefening twee keer heeft hier geen zin: de sets zijn per naam
             // gegroepeerd, dus die zouden bij de bestaande rij landen.

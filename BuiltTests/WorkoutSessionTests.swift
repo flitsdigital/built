@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
+import UIKit
 @testable import Built
 
 /// Een training was "alles wat je die dag deed". Twee trainingen op één dag schoven
@@ -71,5 +72,34 @@ struct WorkoutSessionTests {
         #expect(habits.name(for: "dag-123") == "Push A")
         // Een nieuwe training van diezelfde dag erft "Push A" niet.
         #expect(habits.name(for: UUID().uuidString) == "")
+    }
+}
+
+/// Het deelplaatje komt uit een `ImageRenderer`, en die geeft stilletjes nil als de kaart
+/// niet te tekenen is. Dan biedt de deelknop niets aan zonder dat iemand het merkt —
+/// deze suite is er om dat wél te zien.
+@Suite("Training delen")
+struct WorkoutShareTests {
+    private func voorbeeld(lines: [WorkoutShareLine], prs: [(exercise: String, new: Double, old: Double)]) -> WorkoutShareImage {
+        WorkoutShareImage(title: "Push A", date: "maandag 18 augustus", duration: "52 min",
+                          volume: 4320, sets: 18, lines: lines, prs: prs)
+    }
+
+    @Test("De kaart levert een PNG op de breedte die een story wil")
+    @MainActor func rendert() throws {
+        let image = voorbeeld(lines: [WorkoutShareLine(exercise: "Bench Press", sets: "60×8  60×8"),
+                                      WorkoutShareLine(exercise: "Dips", sets: "×10  +5×8")],
+                              prs: [("Bench Press", 75, 72.5)])
+        let png = try #require(image.png())
+        let bitmap = try #require(UIImage(data: png))
+        #expect(bitmap.size.width * bitmap.scale == 1080)
+        #expect(bitmap.size.height > bitmap.size.width) // staand, niet een streepje
+    }
+
+    /// Een training zonder oefeningen bestaat: je kunt in de historie alle sets wissen.
+    /// De kaart moet dan nog steeds te maken zijn, anders valt de deelknop stil.
+    @Test("Zonder oefeningen en records blijft er een kaart over")
+    @MainActor func leeg() {
+        #expect(voorbeeld(lines: [], prs: []).png() != nil)
     }
 }

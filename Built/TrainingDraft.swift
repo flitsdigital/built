@@ -74,12 +74,21 @@ struct WorkoutSummary: Identifiable {
     let prs: [(exercise: String, new: Double, old: Double)]
     var previousVolume: Int?
     var muscles: [String: Double] = [:]
-    /// "Bench Press: 60×8  60×8" per oefening — voor het deelbericht.
-    var lines: [String] = []
+    /// "Bench Press" + "60×8  60×8" per oefening — voor het deelbericht en -plaatje.
+    var lines: [WorkoutShareLine] = []
+
+    private var dateText: String { Date.now.formatted(.dateTime.weekday(.wide).day().month()) }
 
     var shareText: String {
-        workoutShareText(title: "Training van \(Date.now.formatted(.dateTime.weekday(.wide).day().month()))",
+        workoutShareText(title: "Training van \(dateText)",
                          duration: "\(minutes) min", volume: volume, sets: sets, lines: lines, prs: prs)
+    }
+
+    /// De training als plaatje. Naam ontbreekt hier bewust: bij het afronden is die net
+    /// opgeslagen en uit het scherm verdwenen, en de datum zegt op een story meer.
+    var shareImage: WorkoutShareImage {
+        WorkoutShareImage(title: "Training", date: dateText, duration: "\(minutes) min",
+                          volume: volume, sets: sets, lines: lines, prs: prs)
     }
 }
 

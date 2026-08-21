@@ -339,11 +339,19 @@ func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0) -> S
     return "\(kg > 0 ? "+" : "")\(kg.kgText)×\(reps)"
 }
 
+/// Eén oefening zoals hij gedeeld wordt: de naam en de sets ("60×8  60×8"). Als twee
+/// velden en niet als één kant-en-klare regel, omdat het deelbericht ze achter elkaar
+/// zet en het deelplaatje eronder — zie `WorkoutShareImage`.
+struct WorkoutShareLine {
+    let exercise: String
+    let sets: String
+}
+
 /// Platte tekst van een afgeronde training om te delen — werkt in elke app.
 func workoutShareText(title: String, duration: String, volume: Int, sets: Int,
-                      lines: [String], prs: [(exercise: String, new: Double, old: Double)]) -> String {
+                      lines: [WorkoutShareLine], prs: [(exercise: String, new: Double, old: Double)]) -> String {
     var out = ["💪 \(title)", "\(duration) · \(volume) kg volume · \(sets) sets", ""]
-    out += lines
+    out += lines.map { "\($0.exercise): \($0.sets)" }
     if !prs.isEmpty {
         out.append("")
         out += prs.map { "🏆 \($0.exercise): e1RM \($0.new.kgText) kg (was \($0.old.kgText))" }

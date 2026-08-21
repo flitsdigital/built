@@ -495,7 +495,8 @@ struct TrainingView: View {
                 let done = ex.sets.filter { $0.done && !$0.warmup }
                 guard !done.isEmpty else { return nil }
                 let bw = history.isBodyweight(ex.name)
-                return "\(ex.name): " + done.map { setNotation(kg: $0.kg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+                return WorkoutShareLine(exercise: ex.name,
+                                        sets: done.map { setNotation(kg: $0.kg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
             }
         )
         withAnimation(.snappy(duration: 0.3)) {
