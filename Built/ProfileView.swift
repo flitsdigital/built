@@ -487,6 +487,14 @@ struct AccountSettingsView: View {
                     if let backupMessage {
                         Text(backupMessage).font(.footnote).foregroundStyle(.secondary)
                     }
+                    // De statusregel hierboven toont alleen de laatste uitkomst, en die is
+                    // na één geslaagde push weer groen. Het log is waar je terugziet wat er
+                    // gebeurde toen het misging.
+                    NavigationLink {
+                        SyncLogView()
+                    } label: {
+                        Label("Sync-log", systemImage: "list.bullet.rectangle")
+                    }
                 } header: {
                     Text("Synchronisatie")
                 } footer: {
@@ -560,6 +568,51 @@ struct AccountSettingsView: View {
             await Sync.signOut(context: context)
             busy = false
         }
+    }
+}
+
+// MARK: - Sync-log
+
+/// Wat de sync deed, nieuwste bovenaan. Alleen kijken: er staat bewust geen knop op, want
+/// de sync heeft niets voor te leggen — hij voegt samen en dat is het. Dit is het antwoord
+/// op "is mijn training van gisteren nou echt weg?": je ziet of de push aankwam, met
+/// hoeveel rijen, en zo niet, waarop hij stukliep.
+struct SyncLogView: View {
+    private let log = SyncLog.shared
+
+    var body: some View {
+        List {
+            if log.entries.isEmpty {
+                ContentUnavailableView("Nog niets gebeurd", systemImage: "clock.arrow.2.circlepath",
+                                       description: Text("Zodra de app iets verstuurt of ophaalt komt het hier te staan."))
+                    .listRowBackground(Color.clear)
+            }
+            Section {
+                ForEach(log.entries) { entry in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Label(entry.kind == .push ? "Verstuurd" : "Opgehaald",
+                                  systemImage: entry.kind == .push ? "arrow.up.circle" : "arrow.down.circle")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(entry.error == nil ? Color.primary : .orange)
+                            Spacer()
+                            Text(entry.at.formatted(date: .abbreviated, time: .standard))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(entry.error ?? entry.summary)
+                            .font(.footnote)
+                            .foregroundStyle(entry.error == nil ? Color.secondary : .orange)
+                    }
+                    .padding(.vertical, 2)
+                }
+            } footer: {
+                Text("De laatste 200 regels, alleen op dit toestel. Er gaat niets van dit log naar de server.")
+            }
+        }
+        .tabBarClearance()
+        .navigationTitle("Sync-log")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

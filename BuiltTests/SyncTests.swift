@@ -134,6 +134,40 @@ struct SyncTests {
         #expect(Sync.pendingDeletionsForTesting.contains { $0.id == oudID })
     }
 
+    // MARK: - Sync-log
+
+    /// Zonder bovengrens groeit het log ongemerkt door in UserDefaults, en dat wordt bij
+    /// elke sync opnieuw geëncodeerd. De grens is dus geen detail maar de reden dat dit
+    /// log in UserDefaults mág staan.
+    @Test("Het log roteert en houdt de nieuwste bovenaan")
+    @MainActor func logRoteert() {
+        SyncLog.clearForTesting()
+        for i in 0..<250 { SyncLog.shared.record(.push, rows: ["sets": i]) }
+
+        #expect(SyncLog.shared.entries.count == 200)
+        #expect(SyncLog.shared.entries.first?.rows["sets"] == 249)
+        #expect(SyncLog.shared.entries.last?.rows["sets"] == 50)
+        SyncLog.clearForTesting()
+    }
+
+    /// Een mislukte push is precies de regel waarvoor dit log bestaat (#42): de statusregel
+    /// is na de volgende geslaagde push weer groen, deze regel blijft staan.
+    @Test("Een mislukte sync houdt z'n foutmelding, een geslaagde z'n aantallen")
+    @MainActor func logToontFoutEnAantallen() {
+        SyncLog.clearForTesting()
+        SyncLog.shared.record(.push, error: "column \"tracks_food\" does not exist")
+        SyncLog.shared.record(.pull, rows: ["sets": 12, "gewicht": 3])
+
+        let geslaagd = SyncLog.shared.entries[0]
+        #expect(geslaagd.error == nil)
+        #expect(geslaagd.summary == "12 sets · 3 gewicht")
+
+        let mislukt = SyncLog.shared.entries[1]
+        #expect(mislukt.error?.contains("tracks_food") == true)
+        #expect(mislukt.summary == "niets gewijzigd")
+        SyncLog.clearForTesting()
+    }
+
     @Test("Verwijderen laat een spoor achter voor de server")
     @MainActor func verwijderenLaatSpoorAchter() throws {
         let context = try memoryContext()

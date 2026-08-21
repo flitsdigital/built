@@ -78,6 +78,66 @@ final class SyncStatus {
     }
 }
 
+/// Wat de sync deed, regel voor regel. Alleen op dit toestel: dit is diagnose, geen data.
+///
+/// Bij #42 bleef een kapotte push maandenlang onopgemerkt omdat niemand kon zien dát hij
+/// faalde — de statusregel toont alleen de laatste uitkomst, en die was na de volgende
+/// geslaagde delta-push weer groen. Een log is geen knop om de sync te sturen (die horen
+/// er niet te zijn), het is het venster waarin je terugziet wat hij deed.
+@Observable
+final class SyncLog {
+    static let shared = SyncLog()
+
+    struct Entry: Codable, Identifiable, Sendable {
+        enum Kind: String, Codable, Sendable { case push, pull }
+
+        var id = UUID()
+        var at: Date
+        var kind: Kind
+        /// Aantal rijen per tabel, met de labels die de gebruiker in de app ziet. Leeg bij
+        /// een fout: dan is er niets aangekomen.
+        var rows: [String: Int] = [:]
+        var error: String?
+
+        /// "12 sets · 3 gewicht". Grootste eerst, en bij gelijke aantallen op naam, zodat
+        /// dezelfde push er twee keer hetzelfde uitziet.
+        var summary: String {
+            guard !rows.isEmpty else { return "niets gewijzigd" }
+            return rows.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+                .map { "\($0.value) \($0.key)" }
+                .joined(separator: " · ")
+        }
+    }
+
+    /// Nieuwste bovenaan, roterend: alleen de laatste 200 regels blijven staan. Genoeg om
+    /// weken terug te kijken, klein genoeg om in UserDefaults te passen — een aparte tabel
+    /// zou de diagnose zelf laten meeliften op het datamodel dat je aan het diagnosticeren bent.
+    private(set) var entries: [Entry] = []
+
+    private static let key = "syncLog"
+    private static let limit = 200
+
+    init() {
+        guard let data = UserDefaults.standard.data(forKey: Self.key),
+              let stored = try? JSONDecoder().decode([Entry].self, from: data) else { return }
+        entries = stored
+    }
+
+    func record(_ kind: Entry.Kind, rows: [String: Int] = [:], error: String? = nil) {
+        entries.insert(Entry(at: .now, kind: kind, rows: rows, error: error), at: 0)
+        if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
+        if let data = try? JSONEncoder().encode(entries) {
+            UserDefaults.standard.set(data, forKey: Self.key)
+        }
+    }
+
+    /// Alleen voor tests: een vers log, zonder wat een eerdere test achterliet.
+    static func clearForTesting() {
+        shared.entries = []
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
 // Supabase bewaart wat het toestel heeft: de app pusht wijzigingen automatisch en een
 // lege install haalt alles op.
 //
@@ -225,6 +285,28 @@ enum Sync {
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
                 && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty && deletions.isEmpty
         }
+
+        /// Wat er in deze push zat, voor het sync-log. Alleen wat er echt in zit: een regel
+        /// met twaalf nullen zegt niets, en het verschil tussen een delta van één set en een
+        /// volledige push van 6.980 rijen is precies wat je wil kunnen zien.
+        var counts: [String: Int] {
+            var c: [String: Int] = [:]
+            func add(_ label: String, _ n: Int) { if n > 0 { c[label] = n } }
+            if profile != nil { c["profiel"] = 1 }
+            add("gewicht", weights.count)
+            add("voeding", proteins.count)
+            add("sets", sets.count)
+            add("dagen", habits.count)
+            add("routines", routines.count)
+            add("maaltijden", meals.count)
+            add("producten", foods.count)
+            add("oefeningen", exercises.count)
+            add("weegschalen", scales.count)
+            add("habits", customHabits.count)
+            add("afgevinkt", habitLogs.count)
+            add("verwijderd", deletions.count)
+            return c
+        }
     }
 
     private struct PushParams: Encodable, Sendable {
@@ -253,6 +335,26 @@ enum Sync {
             profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
                 && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty
+        }
+
+        /// Wat er binnenkwam, voor het sync-log. Geen tombstones apart: een pull levert die
+        /// als gewone rijen met een `deleted_at`, en ze zitten dus al in hun eigen tabel.
+        var counts: [String: Int] {
+            var c: [String: Int] = [:]
+            func add(_ label: String, _ n: Int) { if n > 0 { c[label] = n } }
+            if profile != nil { c["profiel"] = 1 }
+            add("gewicht", weights.count)
+            add("voeding", proteins.count)
+            add("sets", sets.count)
+            add("dagen", habits.count)
+            add("routines", routines.count)
+            add("maaltijden", meals.count)
+            add("producten", foods.count)
+            add("oefeningen", exercises.count)
+            add("weegschalen", scales.count)
+            add("habits", customHabits.count)
+            add("afgevinkt", habitLogs.count)
+            return c
         }
     }
 
@@ -439,9 +541,11 @@ enum Sync {
             try await send(p)
         } catch {
             SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
+            SyncLog.shared.record(.push, error: message(for: error))
             throw error
         }
         lastFullPush = .now
+        SyncLog.shared.record(.push, rows: p.counts)
         finishPush(upTo: cutoff, deletions: p.deletions)
     }
 
@@ -458,8 +562,10 @@ enum Sync {
             try await send(p)
         } catch {
             SyncStatus.shared.lastError = "Sync mislukt: \(message(for: error))"
+            SyncLog.shared.record(.push, error: message(for: error))
             throw error
         }
+        SyncLog.shared.record(.push, rows: p.counts)
         finishPush(upTo: cutoff, deletions: p.deletions)
         return true
     }
@@ -515,6 +621,7 @@ enum Sync {
 
         try applyMerge(response, context)
         pullAnchor = response.server_time
+        SyncLog.shared.record(.pull, rows: response.counts)
         SyncStatus.shared.lastError = nil
         SyncStatus.shared.lastSyncAt = .now
         UserDefaults.standard.set(Date.now.timeIntervalSinceReferenceDate, forKey: "lastSync")
@@ -754,6 +861,7 @@ enum Sync {
             try await pull(context, incremental: hasLocalProfile && pullAnchor != nil)
         } catch {
             SyncStatus.shared.lastError = "Sync-check mislukt: \(message(for: error))"
+            SyncLog.shared.record(.pull, error: message(for: error))
         }
     }
 
