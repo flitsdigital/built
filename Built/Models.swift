@@ -687,6 +687,132 @@ final class Routine {
     }
 }
 
+// MARK: - Een routine delen
+
+/// De inhoud van een routine als waardetype: wat er in een deel-link past, en de plek waar
+/// "3 × 10 · Superset A" en het totaal één keer beschreven staan.
+///
+/// Bewust zónder `syncID`. Dat id is van de afzender, en de primary key staat op `id`
+/// alleen (zie STATUS.md): dezelfde rij-id onder een ander account botst, en een geërfd id
+/// zou de ontvanger een routine geven die nooit meer pusht. Wie 'm toevoegt krijgt een
+/// eigen kopie met een eigen id.
+///
+/// De sleutels zijn één letter omdat ze letterlijk in de link belanden.
+struct SharedRoutine: Codable, Identifiable {
+    var name: String
+    var exercises: [String]
+    var targets: [String: [Int]] = [:]
+    var supersets: [String: String] = [:]
+    var restByExercise: [String: Int] = [:]
+    var alternatives: [String: [String]] = [:]
+
+    /// Alleen voor `.sheet(item:)`; staat niet in de link. `var`, omdat `init?(url:)`
+    /// zichzelf in één keer toekent en een `let` daar maar één keer gezet mag worden.
+    var id = UUID()
+
+    private enum CodingKeys: String, CodingKey {
+        case name = "n", exercises = "e", targets = "t"
+        case supersets = "s", restByExercise = "r", alternatives = "a"
+    }
+
+    init(_ routine: Routine) {
+        name = routine.name
+        exercises = routine.exercises
+        targets = routine.targets
+        supersets = routine.supersets
+        restByExercise = routine.restByExercise
+        alternatives = routine.alternatives
+    }
+}
+
+extension SharedRoutine {
+    private static let scheme = "built"
+    private static let host = "routine"
+    private static let key = "r"
+
+    /// Wat je in totaal gaat doen — de kop boven de lijst.
+    var totals: String {
+        let count = exercises.count
+        let setCount = exercises.reduce(0) { $0 + (targets[$1]?.first ?? 3) }
+        return "\(count) oefening\(count == 1 ? "" : "en") · \(setCount) sets"
+    }
+
+    /// De regel onder een oefening: doel, superset en alternatieven.
+    func subtitle(for name: String, isCardio: Bool) -> String {
+        var parts: [String] = []
+        if let t = targets[name], t.count > 1 {
+            parts.append(isCardio ? "\(t[1]) min" : "\(t[0]) × \(t[1])")
+        }
+        if let group = supersets[name] { parts.append("Superset \(group)") }
+        let alts = alternatives[name] ?? []
+        if !alts.isEmpty { parts.append("Alt: \(alts.joined(separator: ", "))") }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    /// De routine als link, op het schema dat de app al had.
+    ///
+    /// Alles zit ín de link, gecomprimeerd — dat is het antwoord op de vraag uit #59. Een
+    /// routine noemt elke oefeningsnaam drie of vier keer (in de volgorde, in de doelen, in
+    /// de rusttijden), en juist die herhaling haalt zlib eruit: een routine van tien
+    /// oefeningen wordt ongeveer gehalveerd. Delen via de server zou een tabel vragen die
+    /// een vreemde mag lezen, en dat is een beveiligingsvraag, geen link.
+    var url: URL {
+        let json = (try? JSONEncoder().encode(self)) ?? Data()
+        // Comprimeren kan in theorie mislukken; dan gaat de JSON er onverpakt in, en de
+        // kant hiernaast herkent dat vanzelf omdat uitpakken dán mislukt.
+        let packed = (try? (json as NSData).compressed(using: .zlib) as Data) ?? json
+        // base64url bevat alleen A–Z, a–z, 0–9, `-` en `_`: dit is altijd een geldige URL.
+        return URL(string: "\(Self.scheme)://\(Self.host)?\(Self.key)=\(packed.base64URLEncoded)")!
+    }
+
+    /// Voor wie de app niet heeft: dezelfde routine gewoon leesbaar.
+    func shareText(isCardio: (String) -> Bool) -> String {
+        let lines = exercises.map { name -> String in
+            guard let t = targets[name], t.count > 1 else { return "• \(name)" }
+            return isCardio(name) ? "• \(name) — \(t[1]) min" : "• \(name) — \(t[0]) × \(t[1])"
+        }
+        return ([name] + lines).joined(separator: "\n")
+    }
+
+    /// Een link terug naar een routine, of `nil` als het er geen is.
+    ///
+    /// Dit komt uit een chat en is dus vreemde invoer: alles wat niet klopt loopt hier
+    /// dood in plaats van in de UI.
+    init?(url: URL) {
+        guard url.scheme == Self.scheme, url.host() == Self.host,
+              let payload = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?.first(where: { $0.name == Self.key })?.value,
+              // Begrenzen vóór het uitpakken: een kleine payload kan tot megabytes
+              // opblazen, en zo groot is een routine nooit.
+              payload.count <= 8_000,
+              let packed = Data(base64URLEncoded: payload) else { return nil }
+        let json = (try? (packed as NSData).decompressed(using: .zlib) as Data) ?? packed
+        guard json.count <= 200_000,
+              let shared = try? JSONDecoder().decode(SharedRoutine.self, from: json),
+              !shared.exercises.isEmpty else { return nil }
+        self = shared
+    }
+}
+
+extension Data {
+    /// base64url: `+` en `/` worden `-` en `_`, en de `=`-vulling gaat eruit. Zo overleeft
+    /// de link het knippen en plakken door een chatprogramma.
+    var base64URLEncoded: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    init?(base64URLEncoded string: String) {
+        var padded = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        padded += String(repeating: "=", count: (4 - padded.count % 4) % 4)
+        self.init(base64Encoded: padded)
+    }
+}
+
 @Model
 final class DayHabits {
     var syncID: UUID = UUID.zero
