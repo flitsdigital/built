@@ -166,6 +166,8 @@ struct SessionDetailView: View {
     @Query private var allHabits: [DayHabits]
     @Query private var exercises: [Exercise]
     @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
+    /// Aflopend: de laatste wijziging is de interessantste.
+    @Query(sort: \SetEdit.changedAt, order: .reverse) private var allEdits: [SetEdit]
     @FocusState private var focused: UUID?
     @State private var showPicker = false
     /// De zojuist gemaakte routine, om meteen naartoe te navigeren.
@@ -173,6 +175,10 @@ struct SessionDetailView: View {
     /// De sessiesleutel leeft in state: verplaats je de training, dan verhuist z'n dag
     /// mee en klopt `session.id` niet meer.
     @State private var key: String
+    /// Sets die je hier zelf hebt toegevoegd, op `syncID` en niet op `persistentModelID`:
+    /// dat laatste is vóór de eerste save nog tijdelijk. Een nieuwe set invullen is loggen
+    /// en geen wijziging: zonder dit staat elke nieuwe set als "0 → 100 kg" in de historie.
+    @State private var added: Set<UUID> = []
 
     init(session: WorkoutSession) {
         self.session = session
@@ -219,6 +225,8 @@ struct SessionDetailView: View {
         let old = habitsRecord
         let name = old?.name(for: key) ?? ""
         let note = old?.note(for: key) ?? ""
+        // Vóór de lus: die verzet `first.date` zelf, en dan is de oude datum weg.
+        let was = first.date
         // Sets van vóór `workoutID` hangen aan hun dag, dus zou de sleutel meeverhuizen
         // en de training samenvallen met wat er op de nieuwe dag al stond.
         let id = first.workoutID == .zero ? UUID() : first.workoutID
@@ -228,7 +236,21 @@ struct SessionDetailView: View {
         }
         old?.workoutNames[key] = nil
         old?.workoutNotes[key] = nil
+        let previous = key
         key = id.uuidString
+        // Sets zonder eigen id hangen aan hun dag, dus krijgt de training hier een nieuwe
+        // sleutel. Zonder deze regel blijft haar geschiedenis achter op de oude dag. Vers
+        // opgehaald en niet uit `allEdits`: die is van de vorige keer dat de view tekende,
+        // dus een wijziging van net zit er nog niet in.
+        let history = (try? context.fetch(FetchDescriptor<SetEdit>(
+            predicate: #Predicate { $0.session == previous }))) ?? []
+        for e in history { e.session = key }
+        // Ná het omhangen, met de nieuwe sleutel: anders zou deze regel er zelf net naast
+        // vallen.
+        SetEdit.record(.datum, session: key,
+                       from: was.formatted(date: .abbreviated, time: .omitted),
+                       to: cal.startOfDay(for: newDay).formatted(date: .abbreviated, time: .omitted),
+                       in: context)
         let target = context.habits(on: cal.startOfDay(for: newDay))
         if !name.isEmpty { target.workoutNames[key] = name }
         if !note.isEmpty { target.workoutNotes[key] = note }
@@ -284,11 +306,28 @@ struct SessionDetailView: View {
         }
     }
 
-    private func kg(_ set: SetEntry) -> Binding<Double> {
-        Binding(get: { set.weightKg }, set: { set.weightKg = $0 })
+    private func kg(_ set: SetEntry, _ number: Int, _ name: String) -> Binding<Double> {
+        Binding(get: { set.weightKg }, set: { new in
+            logEdit(.kg, set, number, name, from: set.weightKg.kgText, to: new.kgText)
+            set.weightKg = new
+        })
     }
-    private func reps(_ set: SetEntry) -> Binding<Double> {
-        Binding(get: { Double(set.reps) }, set: { set.reps = Int(min($0.rounded(), 9999)) })
+    private func reps(_ set: SetEntry, _ number: Int, _ name: String) -> Binding<Double> {
+        Binding(get: { Double(set.reps) }, set: { new in
+            let reps = Int(min(new.rounded(), 9999))
+            logEdit(.reps, set, number, name, from: "\(set.reps)", to: "\(reps)")
+            set.reps = reps
+        })
+    }
+
+    /// Legt een aanpassing van een bestaande set vast. Alleen hier, niet in het
+    /// trainingsscherm: daar leg je een training vást, hier verander je 'm achteraf — en
+    /// dat laatste is precies wat je later wilt kunnen terugzien.
+    private func logEdit(_ field: SetEdit.Field, _ set: SetEntry, _ number: Int, _ name: String,
+                      from old: String, to new: String) {
+        guard !added.contains(set.syncID) else { return }
+        SetEdit.record(field, session: key, exercise: name, setNumber: number,
+                       from: old, to: new, in: context)
     }
     private func minutes(_ set: SetEntry) -> Binding<Double> {
         Binding(get: { Double(set.seconds / 60) }, set: { set.seconds = Int(min($0.rounded(), 600)) * 60 })
@@ -313,6 +352,7 @@ struct SessionDetailView: View {
                     exerciseCard(group)
                 }
                 actionsCard
+                if !edits.isEmpty { historyCard }
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
@@ -333,8 +373,10 @@ struct SessionDetailView: View {
                 // Een minuut na de vorige set, zodat de volgorde klopt; bij een lege
                 // training is de dag zelf het startpunt.
                 let start = daySets.last?.date ?? session.date
-                context.insert(SetEntry(date: start.addingTimeInterval(60), exercise: name,
-                                        weightKg: 0, reps: 0, workoutID: workoutID))
+                let new = SetEntry(date: start.addingTimeInterval(60), exercise: name,
+                                   weightKg: 0, reps: 0, workoutID: workoutID)
+                context.insert(new)
+                added.insert(new.syncID)
             }
         }
         .navigationDestination(item: $newRoutine) { RoutineEditorView(routine: $0) }
@@ -382,6 +424,33 @@ struct SessionDetailView: View {
                         in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
     }
 
+    /// De wijzigingen van déze training, nieuwste eerst.
+    private var edits: [SetEdit] { allEdits.filter { $0.session == key } }
+
+    /// Zonder dit is een aangepaste training niet te onderscheiden van een training die
+    /// altijd al zo was. De kaart staat onderaan: het is een voetnoot bij de training,
+    /// geen kop. Is er niets aangepast, dan staat er ook niets — een lege kaart die bij
+    /// elke training "niets veranderd" zegt is ruis.
+    private var historyCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Later aangepast").font(.caption.bold()).foregroundStyle(.secondary)
+            ForEach(edits) { edit in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(edit.subject).font(.subheadline.bold())
+                    Text(edit.summary).font(.subheadline).monospacedDigit()
+                    Text(edit.changedAt.formatted(.relative(presentation: .named)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Text("Wijzigingen blijven \(SetEdit.retentionDays) dagen staan.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .builtCard()
+    }
+
     private var recordsCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("🏆 Nieuw record").font(.caption.bold()).foregroundStyle(.orange)
@@ -417,9 +486,11 @@ struct SessionDetailView: View {
                 if let last = group.sets.last {
                     // Zelfde sessie als de rij erboven, anders valt de nieuwe set buiten
                     // deze training.
-                    context.insert(SetEntry(date: last.date.addingTimeInterval(1),
-                                            exercise: group.name, weightKg: last.weightKg, reps: last.reps,
-                                            seconds: last.seconds, workoutID: last.workoutID))
+                    let new = SetEntry(date: last.date.addingTimeInterval(1),
+                                       exercise: group.name, weightKg: last.weightKg, reps: last.reps,
+                                       seconds: last.seconds, workoutID: last.workoutID)
+                    context.insert(new)
+                    added.insert(new.syncID)
                 }
             } label: {
                 Label("Set toevoegen", systemImage: "plus").font(.subheadline)
@@ -440,12 +511,12 @@ struct SessionDetailView: View {
                     .numericFieldChrome(width: 64)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
-                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(name) ? "±kg" : "kg",
+                NumericField(value: kg(set, i + 1, name), decimal: true, placeholder: exercises.isBodyweight(name) ? "±kg" : "kg",
                              focus: $focused, id: nil, disabled: false,
                              signed: exercises.isBodyweight(name))
                     .numericFieldChrome(width: 64)
                 Text(exercises.isBodyweight(name) ? "±kg" : "kg").font(.footnote).foregroundStyle(.secondary)
-                NumericField(value: reps(set), decimal: false, placeholder: "reps",
+                NumericField(value: reps(set, i + 1, name), decimal: false, placeholder: "reps",
                              focus: $focused, id: nil, disabled: false)
                     .numericFieldChrome(width: 52)
                 Text("reps").font(.footnote).foregroundStyle(.secondary)

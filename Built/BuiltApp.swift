@@ -16,7 +16,7 @@ struct BuiltApp: App {
                 .buttonBorderShape(.capsule)
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
-        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self, Exercise.self])
+        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self, Exercise.self, SetEdit.self])
     }
 }
 
@@ -59,6 +59,7 @@ struct RootView: View {
                 workoutStatus.cleanupStaleActivities() // na herstart hangt er anders een oude activity
                 Exercise.bootstrap(context) // catalogus vullen + vrije-tekst-namen inhalen
                 SyncIdentity.backfill(context) // rijen van vóór de delta-sync een eigen id geven
+                SetEdit.prune(context) // trainingshistorie ouder dan de bewaartermijn opruimen
                 Exercise.dedupe(context) // één rij per naam, met het afgeleide id
                 Notifier.shared.context = context
                 guard Sync.isConfigured else { return }

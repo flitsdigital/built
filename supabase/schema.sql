@@ -94,6 +94,23 @@ alter table public.set_entries add column if not exists seconds int not null def
 -- tweede training van dezelfde dag bij de eerste in.
 alter table public.set_entries add column if not exists workout_id uuid;
 
+-- Wat er ná afloop aan een training veranderd is (#72): één rij per aanpassing van kg,
+-- reps of datum. Oud en nieuw staan als tekst, zodat die drie soorten waarden in dezelfde
+-- twee kolommen passen. Geen foreign key naar set_entries: een training is een groepering
+-- van sets, en de regel moet leesbaar blijven als de set later verdwijnt.
+create table if not exists public.set_edits (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  -- `workout_id` als tekst, of "dag-<n>" voor sets van vóór die kolom.
+  session_key text not null,
+  exercise text not null default '',
+  set_number int not null default 0,
+  field text not null,
+  old_value text not null default '',
+  new_value text not null default '',
+  changed_at timestamptz not null
+);
+
 create table if not exists public.day_habits (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -169,7 +186,7 @@ create table if not exists public.habit_logs (
 do $$
 declare t text;
 begin
-  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','day_habits','routines','meals','scales','custom_habits','habit_logs','food_products','exercises']
+  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','set_edits','day_habits','routines','meals','scales','custom_habits','habit_logs','food_products','exercises']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "own rows" on public.%I', t);
@@ -190,7 +207,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['weight_entries','protein_entries','set_entries','day_habits',
+  foreach t in array array['weight_entries','protein_entries','set_entries','set_edits','day_habits',
                            'routines','meals','scales','custom_habits','habit_logs',
                            'food_products','exercises']
   loop
@@ -383,7 +400,7 @@ declare
   stamp timestamptz := now();
   tables text[] := array['weight_entries','protein_entries','set_entries','day_habits',
                          'routines','meals','scales','custom_habits','habit_logs',
-                         'food_products','exercises'];
+                         'food_products','exercises','set_edits'];
   rec record;
 begin
   if uid is null then
@@ -475,6 +492,20 @@ begin
     date = excluded.date, exercise = excluded.exercise, weight_kg = excluded.weight_kg,
     reps = excluded.reps, dropset = excluded.dropset, failure = excluded.failure,
     seconds = excluded.seconds, workout_id = excluded.workout_id,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+  where t.updated_at <= excluded.updated_at;
+
+  -- Het spoor van wat er ná afloop aan een training veranderd is (#72).
+  insert into public.set_edits as t (id, user_id, session_key, exercise, set_number, field, old_value, new_value, changed_at, updated_at, deleted_at)
+  select r.id, uid, r.session_key, coalesce(r.exercise, ''), coalesce(r.set_number, 0),
+         r.field, coalesce(r.old_value, ''), coalesce(r.new_value, ''), r.changed_at,
+         least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
+  from jsonb_populate_recordset(null::public.set_edits, coalesce(payload->'setEdits', '[]'::jsonb)) r
+  on conflict (id, user_id) do update set
+    session_key = excluded.session_key, exercise = excluded.exercise,
+    set_number = excluded.set_number, field = excluded.field,
+    old_value = excluded.old_value, new_value = excluded.new_value,
+    changed_at = excluded.changed_at,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
@@ -638,6 +669,10 @@ as $$
                 where x.user_id = (select auth.uid())
                   and (since is null or x.updated_at >= since)
                   and (since is not null or x.deleted_at is null)),
+    'setEdits', (select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) from public.set_edits x
+                where x.user_id = (select auth.uid())
+                  and (since is null or x.updated_at >= since)
+                  and (since is not null or x.deleted_at is null)),
     'habits', (select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) from public.day_habits x
                 where x.user_id = (select auth.uid())
                   and (since is null or x.updated_at >= since)
@@ -682,7 +717,7 @@ security invoker
 as $$
 declare t text;
 begin
-  foreach t in array array['weight_entries','protein_entries','set_entries','day_habits',
+  foreach t in array array['weight_entries','protein_entries','set_entries','set_edits','day_habits',
                            'routines','meals','scales','custom_habits','habit_logs',
                            'food_products','exercises']
   loop
