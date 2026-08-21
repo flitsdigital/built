@@ -40,6 +40,7 @@ struct TrainingView: View {
     @State private var showExercisePicker = false
     @State private var showNewRoutine = false
     @State private var newRoutineName = ""
+    @State private var showPasteRoutine = false
     @State private var confirmDiscard = false
     @State private var sessionToDelete: WorkoutSession?
     @State private var exerciseToRemove: DraftExercise.ID?
@@ -703,6 +704,11 @@ struct TrainingView: View {
                              supersets: r.supersets, restByExercise: r.restByExercise)
             })
         }
+        .sheet(isPresented: $showPasteRoutine) {
+            // Na het plakken meteen door naar de preview: daar zie je de hele routine,
+            // hernoem je 'm en start je 'm — de kiezer hoef je niet meer open.
+            PasteRoutineSheet { routine in editingRoutine = routine }
+        }
         .sheet(isPresented: $showExercisePicker) {
             // ponytail: geen exclude — dezelfde oefening twee keer in één training mag
             // (bench voor en na de superset, tweede ronde curls). Rijen zijn op id, dus
@@ -917,6 +923,7 @@ struct TrainingView: View {
         BuiltScreenTitle(eyebrow: "Training", title: weekTitle) {
             Menu {
                 Button("Nieuwe routine…", systemImage: "plus") { showNewRoutine = true }
+                Button("Routine plakken…", systemImage: "doc.on.clipboard") { showPasteRoutine = true }
                 Divider()
                 Button("Template: Push / Pull / Legs") { addTemplate(Self.pplTemplate) }
                 Button("Template: Upper / Lower") { addTemplate(Self.ulTemplate) }
