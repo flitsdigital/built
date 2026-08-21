@@ -122,6 +122,36 @@ struct BuiltWidget: Widget {
 
 /// Dynamic Island + lockscreen tijdens een training: verstreken tijd, en bij rust een aflopende timer.
 struct WorkoutLiveActivity: Widget {
+    /// De knoppenrij. Lockscreen en eiland tonen dezelfde, dus staat hij hier één keer.
+    /// Tijdens de rust bedien je de timer; daarbuiten is er maar één ding dat je wilt doen,
+    /// en dat is de set afvinken die je net gedaan hebt.
+    @ViewBuilder private func controls(_ state: WorkoutActivity.ContentState) -> some View {
+        Group {
+            if state.restEndsAt != nil {
+                HStack(spacing: 8) {
+                    Button(intent: RestControlIntent(action: "extend")) {
+                        Text("+15s").font(.caption.bold()).frame(maxWidth: .infinity)
+                    }
+                    .tint(.green)
+                    Button(intent: RestControlIntent(action: "skip")) {
+                        Text("Skip").font(.caption.bold()).frame(maxWidth: .infinity)
+                    }
+                    .tint(.secondary)
+                }
+            } else if state.setsLeft > 0 {
+                Button(intent: RestControlIntent(action: "done")) {
+                    Label("Set klaar", systemImage: "checkmark.circle.fill")
+                        .font(.caption.bold())
+                        .frame(maxWidth: .infinity)
+                }
+                .tint(.green)
+            }
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+    }
+
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: WorkoutActivity.self) { context in
             // Lockscreen-kaart
@@ -162,20 +192,8 @@ struct WorkoutLiveActivity: Widget {
                     ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
                                  countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
                         .tint(.green)
-                    HStack(spacing: 8) {
-                        Button(intent: RestControlIntent(action: "extend")) {
-                            Text("+15s").font(.caption.bold()).frame(maxWidth: .infinity)
-                        }
-                        .tint(.green)
-                        Button(intent: RestControlIntent(action: "skip")) {
-                            Text("Skip").font(.caption.bold()).frame(maxWidth: .infinity)
-                        }
-                        .tint(.secondary)
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
                 }
+                controls(context.state)
                 if let tip = context.state.tip {
                     Label(tip, systemImage: "lightbulb.fill")
                         .font(.caption2)
@@ -228,20 +246,8 @@ struct WorkoutLiveActivity: Widget {
                             ProgressView(timerInterval: (context.state.restStartedAt ?? end.addingTimeInterval(-120))...end,
                                          countsDown: true) { EmptyView() } currentValueLabel: { EmptyView() }
                                 .tint(.green)
-                            HStack(spacing: 8) {
-                                Button(intent: RestControlIntent(action: "extend")) {
-                                    Text("+15s").font(.caption.bold()).frame(maxWidth: .infinity)
-                                }
-                                .tint(.green)
-                                Button(intent: RestControlIntent(action: "skip")) {
-                                    Text("Skip").font(.caption.bold()).frame(maxWidth: .infinity)
-                                }
-                                .tint(.secondary)
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.capsule)
-                            .controlSize(.small)
                         }
+                        controls(context.state)
                         if let tip = context.state.tip {
                             Label(tip, systemImage: "lightbulb.fill")
                                 .font(.caption2)
