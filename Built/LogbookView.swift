@@ -111,6 +111,20 @@ struct LogbookView: View {
                     .accessibilityLabel("Filter")
                     .accessibilityValue(filter.rawValue) // actieve filter zit alleen in de icoonvariant
                 }
+                if groups.isEmpty {
+                    // Een filter dat niets oplevert liet een leeg scherm achter, zonder
+                    // te zeggen dat het aan het filter lag.
+                    ContentUnavailableView {
+                        Label("Geen dagen met \(filter.rawValue.lowercased())", systemImage: "line.3.horizontal.decrease")
+                    } description: {
+                        Text("Je logboek is niet leeg — dit filter vindt alleen niets.")
+                    } actions: {
+                        Button("Toon alles") { filter = .all }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                    }
+                    .builtCard()
+                }
                 ForEach(groups, id: \.month) { group in
                     BuiltSectionHeader(group.month.formatted(.dateTime.month(.wide).year()))
                     // Eén kaart per maand, dagen als rijen erbinnen — dat leest als een

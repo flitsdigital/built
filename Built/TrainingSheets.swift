@@ -168,6 +168,8 @@ struct SessionDetailView: View {
     @Query(sort: \WeightEntry.date) private var allWeights: [WeightEntry]
     @FocusState private var focused: UUID?
     @State private var showPicker = false
+    /// De zojuist gemaakte routine, om meteen naartoe te navigeren.
+    @State private var newRoutine: Routine?
     /// De sessiesleutel leeft in state: verplaats je de training, dan verhuist z'n dag
     /// mee en klopt `session.id` niet meer.
     @State private var key: String
@@ -303,106 +305,27 @@ struct SessionDetailView: View {
     }
 
     var body: some View {
-        List {
-            Section {
-                HStack {
-                    StatTile(value: durationText, label: "duur")
-                    StatTile(value: "\(volume)", label: "kg volume")
-                    StatTile(value: "\(daySets.count)", label: "sets")
+        ScrollView {
+            LazyVStack(spacing: 14) {
+                headerCard
+                if !prs.isEmpty { recordsCard }
+                ForEach(byExercise, id: \.name) { group in
+                    exerciseCard(group)
                 }
-                if let d = volumeDelta {
-                    Text("\(d >= 0 ? "+" : "")\(d) kg volume t.o.v. je vorige training")
-                        .font(.footnote)
-                        .foregroundStyle(d >= 0 ? .green : .secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                }
+                actionsCard
             }
-
-            Section("Training") {
-                // Zonder sets valt er niets te verplaatsen: de training staat al op de
-                // dag waar je 'm begon.
-                if !daySets.isEmpty {
-                    DatePicker("Datum", selection: dayBinding, in: ...Date.now, displayedComponents: .date)
-                }
-                TextField("Naam (bijv. Push A)", text: workoutNameBinding)
-                TextField("Notitie over deze training", text: workoutNoteBinding, axis: .vertical)
-                    .lineLimit(1...6)
-            }
-
-            if !prs.isEmpty {
-                Section("Records") {
-                    ForEach(prs, id: \.exercise) { pr in
-                        Text("🏆 \(pr.exercise): e1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
-                            .font(.subheadline.bold())
-                    }
-                }
-            }
-
-            ForEach(byExercise, id: \.name) { group in
-                Section(group.name) {
-                    ForEach(Array(group.sets.enumerated()), id: \.element.persistentModelID) { i, set in
-                        HStack(spacing: 12) {
-                            Text("\(i + 1)\(set.dropset ? " D" : "")\(set.failure ? " F" : "")")
-                                .font(.subheadline.monospacedDigit().bold())
-                                .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                                .frame(width: 40, alignment: .leading)
-                            if exercises.isCardio(group.name) {
-                                NumericField(value: minutes(set), decimal: false, placeholder: "min",
-                                             focus: $focused, id: nil, disabled: false)
-                                    .numericFieldChrome(width: 64)
-                                Text("min").font(.footnote).foregroundStyle(.secondary)
-                            } else {
-                                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(group.name) ? "±kg" : "kg",
-                                             focus: $focused, id: nil, disabled: false,
-                                             signed: exercises.isBodyweight(group.name))
-                                    .numericFieldChrome(width: 64)
-                                Text(exercises.isBodyweight(group.name) ? "±kg" : "kg").font(.footnote).foregroundStyle(.secondary)
-                                NumericField(value: reps(set), decimal: false, placeholder: "reps",
-                                             focus: $focused, id: nil, disabled: false)
-                                    .numericFieldChrome(width: 52)
-                                Text("reps").font(.footnote).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                    }
-                    .onDelete { offsets in
-                        for i in offsets { context.deleteSynced(group.sets[i]) }
-                    }
-                    Button {
-                        if let last = group.sets.last {
-                            // Zelfde sessie als de rij erboven, anders valt de nieuwe set
-                            // buiten deze training.
-                            context.insert(SetEntry(date: last.date.addingTimeInterval(1),
-                                                    exercise: group.name, weightKg: last.weightKg, reps: last.reps,
-                                                    seconds: last.seconds, workoutID: last.workoutID))
-                        }
-                    } label: {
-                        Label("Set toevoegen", systemImage: "plus")
-                    }
-                }
-            }
-
-            Section {
-                Button {
-                    showPicker = true
-                } label: {
-                    Label("Oefening toevoegen", systemImage: "plus")
-                }
-            } footer: {
-                if daySets.isEmpty {
-                    Text("Nog niets gelogd. Kies een oefening; kg en reps vul je hier in.")
-                }
-            }
+            .padding(.horizontal)
+            .padding(.bottom, 24)
         }
+        .background(Color(.systemGroupedBackground))
         .tabBarClearance()
         .navigationTitle(workoutName.isEmpty
                          ? (cal.isDateInToday(day) ? "Vandaag" : day.formatted(.dateTime.weekday(.wide).day().month()))
                          : workoutName)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ShareLink(item: shareText)
-            EditButton()
-        }
+        // Geen EditButton meer: die hoort bij een List, en verwijderen gebeurt nu via het
+        // ⋯-menu van een oefening en het houd-ingedrukt-menu van een set.
+        .toolbar { ShareLink(item: shareText) }
         .sheet(isPresented: $showPicker) {
             // Dezelfde oefening twee keer heeft hier geen zin: de sets zijn per naam
             // gegroepeerd, dus die zouden bij de bestaande rij landen.
@@ -414,8 +337,163 @@ struct SessionDetailView: View {
                                         weightKg: 0, reps: 0, workoutID: workoutID))
             }
         }
+        .navigationDestination(item: $newRoutine) { RoutineEditorView(routine: $0) }
     }
 
+    // MARK: - Kaarten
+
+    private var headerCard: some View {
+        VStack(spacing: 12) {
+            HStack {
+                StatTile(value: durationText, label: "duur")
+                StatTile(value: "\(volume)", label: "kg volume")
+                StatTile(value: "\(daySets.count)", label: "sets")
+            }
+            if let d = volumeDelta {
+                Text("\(d >= 0 ? "+" : "")\(d) kg volume t.o.v. je vorige training")
+                    .font(.footnote)
+                    .foregroundStyle(d >= 0 ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            Divider()
+            field { TextField("Naam (bijv. Push A)", text: workoutNameBinding).font(.subheadline) }
+            // Zonder sets valt er niets te verplaatsen: de training staat al op de dag
+            // waar je 'm begon.
+            if !daySets.isEmpty {
+                DatePicker("Datum", selection: dayBinding, in: ...Date.now, displayedComponents: .date)
+                    .font(.subheadline)
+            }
+            field {
+                TextField("Notitie over deze training", text: workoutNoteBinding, axis: .vertical)
+                    .font(.subheadline)
+                    .lineLimit(1...6)
+            }
+        }
+        .builtCard()
+    }
+
+    /// In een kaart heeft een tekstveld geen lijstrij om zich aan vast te houden, dus
+    /// krijgt het zelf een vlak — anders leest het als gewone tekst.
+    private func field<V: View>(@ViewBuilder _ content: () -> V) -> some View {
+        content()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(.tertiarySystemFill),
+                        in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+    }
+
+    private var recordsCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("🏆 Nieuw record").font(.caption.bold()).foregroundStyle(.orange)
+            ForEach(prs, id: \.exercise) { pr in
+                Text("\(pr.exercise): e1RM \(pr.new.kgText) kg (was \(pr.old.kgText))")
+                    .font(.subheadline)
+            }
+        }
+        .builtCard()
+    }
+
+    private func exerciseCard(_ group: (name: String, sets: [SetEntry])) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(group.name).font(.headline)
+                Spacer()
+                Menu {
+                    Button("Verwijder oefening", systemImage: "trash", role: .destructive) {
+                        for s in group.sets { context.deleteSynced(s) }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(.rect)
+                }
+                .accessibilityLabel("Acties voor \(group.name)")
+            }
+            ForEach(Array(group.sets.enumerated()), id: \.element.persistentModelID) { i, set in
+                setRow(i, set, group.name)
+            }
+            Button {
+                if let last = group.sets.last {
+                    // Zelfde sessie als de rij erboven, anders valt de nieuwe set buiten
+                    // deze training.
+                    context.insert(SetEntry(date: last.date.addingTimeInterval(1),
+                                            exercise: group.name, weightKg: last.weightKg, reps: last.reps,
+                                            seconds: last.seconds, workoutID: last.workoutID))
+                }
+            } label: {
+                Label("Set toevoegen", systemImage: "plus").font(.subheadline)
+            }
+        }
+        .builtCard()
+    }
+
+    private func setRow(_ i: Int, _ set: SetEntry, _ name: String) -> some View {
+        HStack(spacing: 12) {
+            Text("\(i + 1)\(set.dropset ? " D" : "")\(set.failure ? " F" : "")")
+                .font(.subheadline.monospacedDigit().bold())
+                .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .frame(width: 40, alignment: .leading)
+            if exercises.isCardio(name) {
+                NumericField(value: minutes(set), decimal: false, placeholder: "min",
+                             focus: $focused, id: nil, disabled: false)
+                    .numericFieldChrome(width: 64)
+                Text("min").font(.footnote).foregroundStyle(.secondary)
+            } else {
+                NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(name) ? "±kg" : "kg",
+                             focus: $focused, id: nil, disabled: false,
+                             signed: exercises.isBodyweight(name))
+                    .numericFieldChrome(width: 64)
+                Text(exercises.isBodyweight(name) ? "±kg" : "kg").font(.footnote).foregroundStyle(.secondary)
+                NumericField(value: reps(set), decimal: false, placeholder: "reps",
+                             focus: $focused, id: nil, disabled: false)
+                    .numericFieldChrome(width: 52)
+                Text("reps").font(.footnote).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        // Vegen bestaat niet buiten een List; ingedrukt houden is wat ervoor in de plaats komt.
+        .contextMenu {
+            Button("Verwijder set \(i + 1)", systemImage: "trash", role: .destructive) {
+                context.deleteSynced(set)
+            }
+        }
+        .accessibilityAction(named: "Verwijder set \(i + 1)") { context.deleteSynced(set) }
+    }
+
+    private var actionsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { showPicker = true } label: {
+                Label("Oefening toevoegen", systemImage: "plus")
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if daySets.isEmpty {
+                Text("Nog niets gelogd. Kies een oefening; kg en reps vul je hier in.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+            } else {
+                Divider().padding(.vertical, 12)
+                Button { makeRoutine() } label: {
+                    Label("Maak routine van deze training", systemImage: "square.stack.3d.up")
+                        .font(.subheadline.bold())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .builtCard()
+    }
+
+    /// De routine krijgt bewust géén doelen mee: hij ís de volgorde van je oefeningen.
+    /// Wat je vorige keer tilde staat tijdens de training toch al bij elke oefening, en
+    /// een doel dat van één training is afgeleid is een gok die je daarna moet corrigeren.
+    private func makeRoutine() {
+        let routine = Routine(name: workoutName.isEmpty ? "Nieuwe routine" : workoutName,
+                              exercises: byExercise.map(\.name))
+        context.insert(routine)
+        newRoutine = routine
+    }
 }
 
 /// Preview van een routine: zie wat je gaat doen, pas het aan, of start hem meteen.
@@ -426,6 +504,8 @@ struct RoutineEditorView: View {
     @Environment(\.modelContext) private var context
     @Query private var exercises: [Exercise]
     @State private var showPicker = false
+    /// De zojuist gemaakte routine, om meteen naartoe te navigeren.
+    @State private var newRoutine: Routine?
 
     private func subtitle(for name: String) -> String {
         var parts: [String] = []
