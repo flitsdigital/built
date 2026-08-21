@@ -15,7 +15,6 @@ struct WeightView: View {
     @State private var periodDays = 90
     @State private var scrubDate: Date?
     @State private var editEntry: WeightEntry?
-    @State private var editText = ""
 
     private var cal: Calendar { .current }
 
@@ -203,7 +202,7 @@ struct WeightView: View {
             ForEach(monthGroups, id: \.month) { group in
                 Section(group.month.formatted(.dateTime.month(.wide).year())) {
                     ForEach(group.entries) { entry in
-                        Button { editEntry = entry; editText = entry.kg.kgText } label: { entryRow(entry) }
+                        Button { editEntry = entry } label: { entryRow(entry) }
                             .buttonStyle(.plain)
                     }
                     .onDelete { offsets in
@@ -217,14 +216,7 @@ struct WeightView: View {
             Button("Wegen", systemImage: "plus") { showLogSheet = true }
         }
         .sheet(isPresented: $showLogSheet) { WeightLogSheet() }
-        .alert("Weging aanpassen", isPresented: Binding(get: { editEntry != nil }, set: { if !$0 { editEntry = nil } })) {
-            TextField("kg", text: $editText).keyboardType(.decimalPad)
-            Button("Opslaan") {
-                if let e = editEntry, let v = Double(editText.replacingOccurrences(of: ",", with: ".")), v > 0 { e.kg = v }
-                editEntry = nil
-            }
-            Button("Annuleer", role: .cancel) { editEntry = nil }
-        }
+        .sheet(item: $editEntry) { WeightLogSheet(entry: $0) }
         .sensoryFeedback(.increase, trigger: weights.count) { old, new in new > old }
     }
 
@@ -399,18 +391,28 @@ struct WeightView: View {
     }
 }
 
+/// Wegen, en een weging terug bewerken. Dat laatste was een alert met alleen een
+/// kg-veld — datum en weegschaal lagen vast zodra je had opgeslagen.
 struct WeightLogSheet: View {
+    var entry: WeightEntry?
+
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \Scale.name) private var scales: [Scale]
-    @AppStorage("lastScale") private var selectedScale = ""
-    @State private var kgText = ""
+    @AppStorage("lastScale") private var lastScale = ""
+    @State private var selectedScale: String
+    @State private var kgText: String
     @State private var date: Date
     @State private var showAddScale = false
     @State private var newScaleName = ""
 
-    init(initialDate: Date = .now) {
-        _date = State(initialValue: initialDate)
+    init(entry: WeightEntry? = nil, initialDate: Date = .now) {
+        self.entry = entry
+        _date = State(initialValue: entry?.date ?? initialDate)
+        _kgText = State(initialValue: entry.map { $0.kg.kgText } ?? "")
+        // Bij bewerken telt de weegschaal van die meting, niet de laatstgebruikte.
+        _selectedScale = State(initialValue: entry?.scale
+                               ?? UserDefaults.standard.string(forKey: "lastScale") ?? "")
     }
 
     private static let addTag = "\u{0}+"  // sentinel voor "Weegschaal toevoegen"
@@ -439,7 +441,7 @@ struct WeightLogSheet: View {
                     if new == Self.addTag { selectedScale = old; showAddScale = true }
                 }
             }
-            .navigationTitle("Wegen")
+            .navigationTitle(entry == nil ? "Wegen" : "Weging aanpassen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -450,7 +452,16 @@ struct WeightLogSheet: View {
                         let entryDate = Calendar.current.isDateInToday(date)
                             ? Date.now
                             : Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: date) ?? date
-                        context.insert(WeightEntry(date: entryDate, kg: kg ?? 0, scale: selectedScale))
+                        if let entry {
+                            entry.kg = kg ?? entry.kg
+                            entry.scale = selectedScale
+                            // Zelfde dag = zelfde tijdstip: een ochtendweging hoort niet
+                            // naar 9:00 te schuiven omdat je het gewicht corrigeerde.
+                            if dayKey(date) != dayKey(entry.date) { entry.date = entryDate }
+                        } else {
+                            context.insert(WeightEntry(date: entryDate, kg: kg ?? 0, scale: selectedScale))
+                        }
+                        lastScale = selectedScale
                         dismiss()
                     }
                     .disabled((kg ?? 0) < 20)

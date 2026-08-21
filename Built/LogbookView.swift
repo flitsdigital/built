@@ -203,8 +203,10 @@ struct DayDetailView: View {
     @State private var day: Date
     @State private var showProteinSheet = false
     @State private var editingEntry: ProteinEntry?
-    @State private var showWeightAlert = false
-    @State private var weightInput = ""
+    @State private var showWeightSheet = false
+    @State private var editWeight: WeightEntry?
+    /// De sleutel van een training die je hier begint; `nil` = geen.
+    @State private var newWorkout: String?
 
     init(day: Date, profile: Profile) {
         self.profile = profile
@@ -414,21 +416,36 @@ struct DayDetailView: View {
                 }
             }
 
+            Section {
+                Button {
+                    // Nog geen sets: de training bestaat pas zodra je er een oefening in
+                    // zet. Weglopen laat dus niets achter.
+                    newWorkout = UUID().uuidString
+                } label: {
+                    Label("Training toevoegen", systemImage: "dumbbell")
+                }
+            } footer: {
+                Text("Voor een training die je niet live hebt gelogd.")
+            }
+
             Section("Gewicht") {
                 ForEach(weights) { w in
-                    LabeledContent {
-                        Text("\(w.kg.kgText) kg")
-                    } label: {
-                        Text(w.date.formatted(date: .omitted, time: .shortened))
-                        if !w.scale.isEmpty {
-                            Text(w.scale).font(.footnote).foregroundStyle(.secondary)
+                    Button { editWeight = w } label: {
+                        LabeledContent {
+                            Text("\(w.kg.kgText) kg")
+                        } label: {
+                            Text(w.date.formatted(date: .omitted, time: .shortened))
+                                .foregroundStyle(.primary)
+                            if !w.scale.isEmpty {
+                                Text(w.scale).font(.footnote).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
                 .onDelete { offsets in
                     for i in offsets { context.deleteSynced(weights[i]) }
                 }
-                Button { showWeightAlert = true } label: {
+                Button { showWeightSheet = true } label: {
                     Label("Toevoegen", systemImage: "plus")
                 }
             }
@@ -463,16 +480,10 @@ struct DayDetailView: View {
         .sheet(item: $editingEntry) { entry in
             ProteinEntrySheet(entry: entry)
         }
-        .alert("Gewicht toevoegen", isPresented: $showWeightAlert) {
-            TextField("bijv. 70,4", text: $weightInput).keyboardType(.decimalPad)
-            Button("Opslaan") {
-                if let kg = Double(weightInput.replacingOccurrences(of: ",", with: ".")), kg > 20 {
-                    let date = cal.isDateInToday(day) ? Date.now : noon
-                    context.insert(WeightEntry(date: date, kg: kg))
-                }
-                weightInput = ""
-            }
-            Button("Annuleer", role: .cancel) { weightInput = "" }
+        .navigationDestination(item: $newWorkout) { id in
+            SessionDetailView(session: WorkoutSession(id: id, date: cal.isDateInToday(day) ? .now : noon, sets: []))
         }
+        .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: day) }
+        .sheet(item: $editWeight) { WeightLogSheet(entry: $0) }
     }
 }
