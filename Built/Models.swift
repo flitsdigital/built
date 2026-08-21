@@ -1074,6 +1074,84 @@ struct WeekStats {
     }
 }
 
+// MARK: - Mijlpalen
+//
+// De app viert de dag — score, streak, week rond — en nooit het jaar. Dit is dat jaar:
+// de dingen die je niet in een week haalt. De lat ligt bewust hoog. Een mijlpaal die je
+// zomaar aantikt is geen mijlpaal, en een muur vol trofeeën maakt de echte goedkoop.
+
+/// Eén gehaalde mijlpaal, klaar om te tonen.
+struct Milestone: Identifiable {
+    /// Stabiel over versies heen: het dashboard onthoudt onder dit id dat je 'm gezien hebt.
+    let id: String
+    let icon: String
+    let title: String
+    let subtitle: String
+}
+
+enum Milestones {
+    /// Vaste drempels, hoger dan wat een goede maand oplevert.
+    static let workouts = [10, 50, 100, 250, 500, 1000]
+    static let volumes = [100_000, 250_000, 500_000, 1_000_000]
+    static let weeks = [12, 26, 52, 104]
+
+    /// Wat je gehaald hebt: per soort alleen de hóógste drempel, niet elke drempel
+    /// eronder. Wie met jaren historie binnenkomt krijgt zo drie mijlpalen te zien in
+    /// plaats van veertien.
+    static func reached(_ sets: [SetEntry], now: Date = .now) -> [Milestone] {
+        var sessions = Set<String>()
+        var volume = 0.0
+        // Per kalenderdag één datum: de weekreeks rekent per dag, en een Calendar-vraag
+        // per set is over duizenden sets zonde van de tijd.
+        var days: [Int: Date] = [:]
+        for s in sets {
+            sessions.insert(s.sessionKey)
+            volume += s.weightKg * Double(s.reps)
+            days[dayKey(s.date)] = s.date
+        }
+        var out: [Milestone] = []
+        if let n = highest(workouts, sessions.count) {
+            out.append(Milestone(id: "trainingen-\(n)", icon: "dumbbell.fill",
+                                 title: "Je \(n)e training",
+                                 subtitle: "Zo vaak stond je inmiddels in de gym."))
+        }
+        if let kg = highest(volumes, Int(volume)) {
+            out.append(Milestone(id: "volume-\(kg)", icon: "trophy.fill",
+                                 title: "\(kg.formatted()) kg getild",
+                                 subtitle: "Al je sets bij elkaar opgeteld, sinds je begon."))
+        }
+        if let w = highest(weeks, weekStreak(Array(days.values), now: now)) {
+            out.append(Milestone(id: "weken-\(w)", icon: "calendar",
+                                 title: w == 52 ? "Een jaar zonder een week over te slaan"
+                                                : "\(w) weken op rij getraind",
+                                 subtitle: "Elke week minstens één training."))
+        }
+        return out
+    }
+
+    /// Weken op rij met minstens één training, tot en met deze week. De lopende week mag
+    /// nog leeg zijn — die is nog niet voorbij, net zoals vandaag nog open mag staan bij
+    /// de dagstreak.
+    static func weekStreak(_ trainingDays: [Date], now: Date = .now) -> Int {
+        let cal = Calendar.current
+        let trained = Set(trainingDays.compactMap { cal.dateInterval(of: .weekOfYear, for: $0)?.start })
+        guard var week = cal.dateInterval(of: .weekOfYear, for: now)?.start else { return 0 }
+        var count = 0
+        for n in 0..<520 { // tien jaar; verder terug kijkt geen enkele drempel
+            if trained.contains(week) { count += 1 }
+            else if n > 0 { break }
+            guard let previous = cal.date(byAdding: .weekOfYear, value: -1, to: week) else { break }
+            week = previous
+        }
+        return count
+    }
+
+    /// De zwaarste drempel die deze waarde haalt; nil zolang de eerste nog niet binnen is.
+    private static func highest(_ thresholds: [Int], _ value: Int) -> Int? {
+        thresholds.last { $0 <= value }
+    }
+}
+
 extension Array where Element == ProteinEntry {
     /// Meest gelogde items eerst, extra gewicht voor items die je vaak rond dit uur logt.
     func suggestions(limit: Int = 4) -> [(key: String, label: String, grams: Int, kcal: Int)] {
