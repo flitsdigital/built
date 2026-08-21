@@ -507,22 +507,13 @@ struct RoutineEditorView: View {
     /// De zojuist gemaakte routine, om meteen naartoe te navigeren.
     @State private var newRoutine: Routine?
 
-    private func subtitle(for name: String) -> String {
-        var parts: [String] = []
-        if let t = routine.targets[name], t.count > 1 {
-            parts.append(exercises.isCardio(name) ? "\(t[1]) min" : "\(t[0]) × \(t[1])")
-        }
-        if let group = routine.supersets[name] { parts.append("Superset \(group)") }
-        let alts = routine.alternatives[name] ?? []
-        if !alts.isEmpty { parts.append("Alt: \(alts.joined(separator: ", "))") }
-        return parts.joined(separator: "  ·  ")
-    }
+    /// De inhoud van deze routine als waardetype. Het totaal en de regel onder een oefening
+    /// staan daar beschreven, zodat de preview van een gedeelde link exact hetzelfde toont
+    /// als deze editor — en het ook de vorm is die in een deel-link past.
+    private var content: SharedRoutine { SharedRoutine(routine) }
 
-    /// Wat je in totaal gaat doen — de kern van de preview.
-    private var totals: String {
-        let count = routine.exercises.count
-        let setCount = routine.exercises.reduce(0) { $0 + (routine.targets[$1]?.first ?? 3) }
-        return "\(count) oefening\(count == 1 ? "" : "en") · \(setCount) sets"
+    private func subtitle(for name: String) -> String {
+        content.subtitle(for: name, isCardio: exercises.isCardio(name))
     }
 
     var body: some View {
@@ -563,7 +554,7 @@ struct RoutineEditorView: View {
                     Label("Oefening toevoegen", systemImage: "plus")
                 }
             } header: {
-                Text(routine.exercises.isEmpty ? "Oefeningen" : "\(totals) — sleep om de volgorde te bepalen")
+                Text(routine.exercises.isEmpty ? "Oefeningen" : "\(content.totals) — sleep om de volgorde te bepalen")
             } footer: {
                 Text("Tik op een oefening voor sets × reps en alternatieven. Tijdens de training wissel je via het ⋯-menu als een toestel bezet is.")
             }
@@ -586,12 +577,95 @@ struct RoutineEditorView: View {
         .tabBarClearance()
         .navigationTitle($routine.name)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { EditButton() }
+        .toolbar {
+            // De link is de routine zelf, dus een lege routine valt er niets te delen.
+            // Het bericht erbij is de leesbare versie, voor wie de app niet heeft.
+            if !routine.exercises.isEmpty {
+                ShareLink(item: content.url,
+                          subject: Text(routine.name),
+                          message: Text(content.shareText { exercises.isCardio($0) }))
+            }
+            EditButton()
+        }
         .sheet(isPresented: $showPicker) {
             ExercisePickerSheet(exclude: Set(routine.exercises)) { name in
                 if !routine.exercises.contains(name) { routine.exercises.append(name) }
             }
         }
+    }
+}
+
+/// Wat er in een gedeelde link zit, vóór je 'm toevoegt.
+///
+/// Een link uit een chat mag niets ongevraagd aan je routines toevoegen — je ziet eerst wat
+/// je krijgt, en toevoegen is een aparte tik. Wat je toevoegt is een eigen kopie: pas je 'm
+/// aan, dan verandert er niets bij degene die 'm stuurde.
+struct SharedRoutineSheet: View {
+    let shared: SharedRoutine
+    /// Ná het toevoegen, zodat de app naar de trainingstab kan springen.
+    var onAdd: () -> Void = {}
+    @Environment(\.modelContext) private var context
+    @Environment(\.dismiss) private var dismiss
+    @Query private var exercises: [Exercise]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    // Op index, niet op naam: dezelfde oefening mag twee keer in een routine.
+                    ForEach(Array(shared.exercises.enumerated()), id: \.offset) { _, name in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(name)
+                            let sub = shared.subtitle(for: name, isCardio: exercises.isCardio(name))
+                            if !sub.isEmpty {
+                                Text(sub)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text(shared.totals)
+                } footer: {
+                    Text("Je krijgt een eigen kopie. Oefeningen die je nog niet had komen erbij te staan.")
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    add()
+                } label: {
+                    Label("Toevoegen aan mijn routines", systemImage: "plus")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .builtBottomAction()
+            }
+            .navigationTitle(shared.name.isEmpty ? "Gedeelde routine" : shared.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuleer") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func add() {
+        let routine = Routine(name: shared.name.isEmpty ? "Gedeelde routine" : shared.name,
+                              exercises: shared.exercises)
+        routine.targets = shared.targets
+        routine.supersets = shared.supersets
+        routine.restByExercise = shared.restByExercise
+        routine.alternatives = shared.alternatives
+        context.insert(routine)
+        // Namen die deze catalogus nog niet kent halen we meteen in, in plaats van pas bij
+        // de volgende start: `bootstrap` neemt vrije-tekst-namen uit routines al mee, dus
+        // dat werk staat er maar één keer.
+        Exercise.bootstrap(context)
+        dismiss()
+        onAdd()
     }
 }
 

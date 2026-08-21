@@ -26,6 +26,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var tab = 0
     @State private var restoring = false
+    /// De routine uit een zojuist geopende `built://routine`-link, in afwachting van "Toevoegen".
+    @State private var incomingRoutine: SharedRoutine?
     @AppStorage("restSeconds") private var restSeconds = 120
     private let workoutStatus = WorkoutStatus.shared
 
@@ -71,6 +73,14 @@ struct RootView: View {
             .onOpenURL { url in
                 // Tik op Live Activity of Dynamic Island → direct naar de training
                 if url.host() == "training" {
+                    withAnimation(.snappy(duration: 0.3)) { tab = 1 }
+                }
+                // Een gedeelde routine: eerst laten zien wat erin zit, toevoegen doe je zelf.
+                if let shared = SharedRoutine(url: url) { incomingRoutine = shared }
+            }
+            .sheet(item: $incomingRoutine) { shared in
+                SharedRoutineSheet(shared: shared) {
+                    // De routine staat op de trainingstab; daar breng je 'm ook heen.
                     withAnimation(.snappy(duration: 0.3)) { tab = 1 }
                 }
             }
