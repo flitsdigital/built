@@ -72,9 +72,12 @@ struct PhotosView: View {
 
             Section {
                 if filtered.isEmpty {
-                    Text("Nog geen foto's voor deze hoek. Zelfde plek, zelfde licht, zelfde pose — dan zie je het verschil echt.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    ContentUnavailableView {
+                        Label("Nog geen foto's", systemImage: "camera")
+                    } description: {
+                        Text("Zelfde plek, zelfde licht, zelfde pose — dan zie je het verschil echt.")
+                    }
+                    .listRowBackground(Color.clear)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
                     ForEach(filtered) { photo in

@@ -111,63 +111,81 @@ struct WeightView: View {
 
     @ViewBuilder private var content: some View {
         List {
-            Section {
-                HStack(spacing: 0) {
-                    StatTile(value: profile.startWeight.kgText, label: "Start", size: .compact)
-                    Divider()
-                    // "Huidig" las als "wat de weegschaal vanochtend zei"; het is het
-                    // 7-daags gemiddelde. Zelfde getal, eerlijk label.
-                    StatTile(value: current?.kgText ?? "—", label: "Gem. 7d", size: .compact)
-                    Divider()
-                    StatTile(value: current.map { "\($0 - profile.startWeight >= 0 ? "+" : "")\(($0 - profile.startWeight).kgText)" } ?? "—",
-                             label: "Verschil", size: .compact,
-                             tint: current.map { ($0 - profile.startWeight) * (profile.goalWeight - profile.startWeight) >= 0 ? .green : .orange })
-                }
-                Button {
-                    showLogSheet = true
-                } label: {
-                    Label("Nieuwe meting", systemImage: "plus.circle.fill")
-                        .font(.headline)
-                }
-            }
-
-            Section {
-                Picker("Periode", selection: $periodDays) {
-                    Text("1 mnd").tag(30)
-                    Text("3 mnd").tag(90)
-                    Text("Alles").tag(36_500)
-                }
-                .pickerStyle(.segmented)
-                .listRowSeparator(.hidden)
-                chart
-                legend
-                if weights.count < 5 {
-                    Text("Weeg jezelf ±2 weken dagelijks, dan wordt de trendlijn betrouwbaar.")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                if let projection {
-                    Label(projection.text, systemImage: "flag.checkered")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Inzicht") {
-                if let trend = weights.trendPerWeek {
-                    Label {
-                        Text("Trend: \(trend >= 0 ? "+" : "")\(trend.formatted(.number.precision(.fractionLength(2)))) kg/week — doel \(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2))))")
-                    } icon: {
-                        Image(systemName: "chart.line.uptrend.xyaxis")
-                            .foregroundStyle(abs(trend - profile.weeklyRate) < 0.1 ? .green : .secondary)
+            if weights.isEmpty {
+                // Een statrij met drie streepjes en een lege grafiek is geen scherm maar
+                // een formulier dat op je wacht. Eén uitnodiging is genoeg.
+                Section {
+                    ContentUnavailableView {
+                        Label("Nog geen wegingen", systemImage: "scalemass")
+                    } description: {
+                        Text("Weeg je 's ochtends, dan tekent de trendlijn na een week je richting — losse dagen zeggen niets.")
+                    } actions: {
+                        Button("Eerste weging") { showLogSheet = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
                     }
-                    .font(.footnote)
-                    scheduleRow
-                } else {
-                    Text("Log minimaal twee weken gewicht voor een betrouwbare trend.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
                 }
+            } else {
+                Section {
+                    HStack(spacing: 0) {
+                        StatTile(value: profile.startWeight.kgText, label: "Start", size: .compact)
+                        Divider()
+                        // "Huidig" las als "wat de weegschaal vanochtend zei"; het is het
+                        // 7-daags gemiddelde. Zelfde getal, eerlijk label.
+                        StatTile(value: current?.kgText ?? "—", label: "Gem. 7d", size: .compact)
+                        Divider()
+                        StatTile(value: current.map { "\($0 - profile.startWeight >= 0 ? "+" : "")\(($0 - profile.startWeight).kgText)" } ?? "—",
+                                 label: "Verschil", size: .compact,
+                                 tint: current.map { ($0 - profile.startWeight) * (profile.goalWeight - profile.startWeight) >= 0 ? .green : .orange })
+                    }
+                    Button {
+                        showLogSheet = true
+                    } label: {
+                        Label("Nieuwe meting", systemImage: "plus.circle.fill")
+                            .font(.headline)
+                    }
+                }
+
+                Section {
+                    Picker("Periode", selection: $periodDays) {
+                        Text("1 mnd").tag(30)
+                        Text("3 mnd").tag(90)
+                        Text("Alles").tag(36_500)
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
+                    chart
+                    legend
+                    if weights.count < 5 {
+                        Text("Weeg jezelf ±2 weken dagelijks, dan wordt de trendlijn betrouwbaar.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let projection {
+                        Label(projection.text, systemImage: "flag.checkered")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Inzicht") {
+                    if let trend = weights.trendPerWeek {
+                        Label {
+                            Text("Trend: \(trend >= 0 ? "+" : "")\(trend.formatted(.number.precision(.fractionLength(2)))) kg/week — doel \(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2))))")
+                        } icon: {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .foregroundStyle(abs(trend - profile.weeklyRate) < 0.1 ? .green : .secondary)
+                        }
+                        .font(.footnote)
+                        scheduleRow
+                    } else {
+                        Text("Log minimaal twee weken gewicht voor een betrouwbare trend.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
             }
 
             Section {
