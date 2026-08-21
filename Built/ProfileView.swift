@@ -154,6 +154,17 @@ struct GoalSettingsView: View {
                 LabeledContent("Naam") {
                     TextField("Naam", text: $profile.name).multilineTextAlignment(.trailing)
                 }
+                // Aanpasbaar, want het komt uit de onboarding en die vult niet iedereen
+                // meteen goed in. Het voedt de voortgangsbalk, het tempo en de projectie.
+                LabeledContent("Startgewicht") {
+                    HStack(spacing: 4) {
+                        TextField("70", value: $profile.startWeight, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 64)
+                        Text("kg").foregroundStyle(.secondary)
+                    }
+                }
                 LabeledContent("Doelgewicht") {
                     HStack(spacing: 4) {
                         TextField("75", value: $profile.goalWeight, format: .number)

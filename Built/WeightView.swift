@@ -21,8 +21,9 @@ struct WeightView: View {
 
     // MARK: - Data
 
+    private var cutoff: Date { Date.now.addingTimeInterval(-Double(periodDays) * 86_400) }
+
     private var chartWeights: [WeightEntry] {
-        let cutoff = Date.now.addingTimeInterval(-Double(periodDays) * 86_400)
         let filtered = weights.filter { $0.date > cutoff }
         return filtered.isEmpty ? weights : filtered
     }
@@ -56,14 +57,32 @@ struct WeightView: View {
                 "Op dit tempo bereik je \(profile.goalWeight.kgText) kg rond \(goalDate.formatted(.dateTime.month(.wide).year())).")
     }
 
-    private var yDomain: ClosedRange<Double> {
-        var vals = chartWeights.map(\.kg) + [profile.goalWeight, profile.startWeight]
-        if let projection { vals += projection.points.map(\.kg) }
-        let low = vals.min() ?? 0
-        let high = vals.max() ?? 1
-        let pad = max((high - low) * 0.15, 0.8)
-        return (low - pad)...(high + pad)
+    /// Het venster dat de periodekiezer aanwijst. Zonder eigen domein rekt Charts de x-as
+    /// op tot de verste mark — de projectie loopt een half jaar vooruit, en dan zag je van
+    /// "1 mnd" niets terug.
+    private var xDomain: ClosedRange<Date> {
+        let start = max(cutoff, chartWeights.first?.date ?? cutoff)
+        // Ruimte rechts voor de projectie, maar nooit zo veel dat de metingen wegvallen.
+        let ahead = projection == nil ? 0 : min(Double(periodDays) * 0.25, 45) * 86_400
+        let end = Date.now.addingTimeInterval(ahead)
+        return end > start ? start...end : start...start.addingTimeInterval(86_400)
     }
+
+    private var yDomain: ClosedRange<Double> {
+        var vals = chartWeights.map(\.kg)
+        if let projection { vals += projection.points.map(\.kg) }
+        let low = vals.min() ?? profile.goalWeight
+        let high = vals.max() ?? profile.goalWeight
+        // Het doel mag de as niet platdrukken: ligt het meer dan een meetbereik weg, dan
+        // blijft het buiten beeld en vertelt de projectieregel het verhaal.
+        let span = max(high - low, 1)
+        let lo = profile.goalWeight > low - span ? min(low, profile.goalWeight) : low
+        let hi = profile.goalWeight < high + span ? max(high, profile.goalWeight) : high
+        let pad = max((hi - lo) * 0.15, 0.8)
+        return (lo - pad)...(hi + pad)
+    }
+
+    private var showsGoal: Bool { yDomain.contains(profile.goalWeight) }
 
     private var scrubbedEntry: WeightEntry? {
         guard let scrubDate else { return nil }
@@ -221,6 +240,12 @@ struct WeightView: View {
                 }
             }
             ForEach(movingAvg, id: \.date) { p in
+                AreaMark(x: .value("Datum", p.date),
+                         yStart: .value("Onder", yDomain.lowerBound),
+                         yEnd: .value("Trend", p.kg))
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(.linearGradient(colors: [.green.opacity(0.22), .green.opacity(0.02)],
+                                                     startPoint: .top, endPoint: .bottom))
                 LineMark(x: .value("Datum", p.date), y: .value("Trend", p.kg),
                          series: .value("Serie", "Trend"))
                     .interpolationMethod(.catmullRom)
@@ -235,14 +260,16 @@ struct WeightView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
                 }
             }
-            RuleMark(y: .value("Doel", profile.goalWeight))
-                .foregroundStyle(.secondary)
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [5]))
-                .annotation(position: .top, alignment: .trailing) {
-                    Text("Doel \(profile.goalWeight.kgText) kg")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+            if showsGoal {
+                RuleMark(y: .value("Doel", profile.goalWeight))
+                    .foregroundStyle(.secondary)
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [5]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text("Doel \(profile.goalWeight.kgText) kg")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+            }
             if let scrubbed = scrubbedEntry {
                 RuleMark(x: .value("Datum", scrubbed.date))
                     .foregroundStyle(.secondary.opacity(0.4))
@@ -262,7 +289,16 @@ struct WeightView: View {
                     }
             }
         }
+        .chartXScale(domain: xDomain)
         .chartYScale(domain: yDomain)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) {
+                AxisGridLine()
+                AxisValueLabel(format: periodDays <= 90
+                               ? Date.FormatStyle.dateTime.day().month(.abbreviated)
+                               : Date.FormatStyle.dateTime.month(.abbreviated).year(.twoDigits))
+            }
+        }
         .chartForegroundStyleScale(range: [Color.green, .orange, .purple, .cyan, .pink])
         .chartLegend(.hidden)
         .chartOverlay { proxy in
@@ -294,7 +330,7 @@ struct WeightView: View {
             if projection != nil {
                 legendItem(color: .green.opacity(0.5), label: "projectie")
             }
-            legendItem(color: .secondary.opacity(0.7), label: "doel")
+            if showsGoal { legendItem(color: .secondary.opacity(0.7), label: "doel") }
             Spacer()
         }
         .listRowSeparator(.hidden)
