@@ -588,6 +588,13 @@ struct AboutSettingsView: View {
             }
 
             Section {
+                // Importeren hoort naast exporteren: dit is de plek waar data de app in
+                // en uit gaat, en de enige die er ook nog is als je historie niet meer leeg is.
+                NavigationLink {
+                    HistoryImportView()
+                } label: {
+                    Label("Importeer uit Hevy of Strong", systemImage: "square.and.arrow.down")
+                }
                 if !weights.isEmpty {
                     ShareLink(item: weightCSV, preview: SharePreview("Gewichtsdata (CSV)")) {
                         Label("Exporteer gewichtsdata", systemImage: "square.and.arrow.up")
