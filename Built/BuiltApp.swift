@@ -7,9 +7,23 @@ struct BuiltApp: App {
         Notifier.shared.setup()
     }
 
+    /// PROTOTYPE-ingang: `simctl launch … -prototype` opent de varianten-gallery in
+    /// plaats van de app. Weggooiwerk, zie branch prototype/ui-varianten.
+    @ViewBuilder private var root: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-prototype") {
+            PrototypeGallery()
+        } else {
+            RootView()
+        }
+        #else
+        RootView()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            root
                 .tint(.green) // ponytail: één accentkleur voor de hele app
                 // Idem voor de vorm: capsule is een environment-waarde, dus dit geldt
                 // voor élke .bordered/.borderedProminent knop, ook in sheets.
