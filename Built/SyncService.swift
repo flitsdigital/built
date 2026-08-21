@@ -687,6 +687,60 @@ enum Sync {
         return s
     }
 
+    /// Alle meetgegevens als één zip met een CSV per tabel — de vorm die je zonder
+    /// programmeren opent. JSON blijft ernaast staan: dat is de volledige back-up (ook
+    /// routines, maaltijden en producten), CSV is om zelf mee te rekenen.
+    ///
+    /// Zippen zonder library: `NSFileCoordinator` levert bij `.forUploading` een zip van
+    /// een map aan. Die staat in een tijdelijke map die na het blok weer verdwijnt, dus
+    /// hier wordt 'ie eerst naar onze eigen tempmap gekopieerd.
+    static func exportCSVZip(_ context: ModelContext) -> URL? {
+        let fm = FileManager.default
+        let naam = "built-export-\(CSV.day(.now))"
+        let map = fm.temporaryDirectory.appendingPathComponent(naam, isDirectory: true)
+        try? fm.removeItem(at: map)
+        guard (try? fm.createDirectory(at: map, withIntermediateDirectories: true)) != nil else { return nil }
+        for tabel in csvTables(context) {
+            // Mét BOM: zonder leest Excel een UTF-8-bestand als latin-1, en staat er
+            // "KwarkÃ©" waar "Kwarké" hoort. Numbers heeft er geen last van.
+            guard let data = "\u{FEFF}\(tabel.text)".data(using: .utf8),
+                  (try? data.write(to: map.appendingPathComponent(tabel.name))) != nil else { return nil }
+        }
+
+        var zip: URL?
+        var fout: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: map, options: .forUploading, error: &fout) { tijdelijk in
+            let doel = fm.temporaryDirectory.appendingPathComponent("\(naam).zip")
+            try? fm.removeItem(at: doel)
+            if (try? fm.copyItem(at: tijdelijk, to: doel)) != nil { zip = doel }
+        }
+        try? fm.removeItem(at: map) // de zip is nu het enige dat we nog delen
+        return zip
+    }
+
+    /// De losse tabellen: bestandsnaam → inhoud. Apart van `exportCSVZip` omdat hier de
+    /// beslissingen zitten (welke kolommen, welke notatie) en daar alleen bestandswerk.
+    static func csvTables(_ context: ModelContext) -> [(name: String, text: String)] {
+        func alles<T: PersistentModel>(_ sort: [SortDescriptor<T>]) -> [T] {
+            (try? context.fetch(FetchDescriptor<T>(sortBy: sort))) ?? []
+        }
+        // De spiergroep staat bij de oefening, niet bij de set. Zonder die koppeling is
+        // "volume per spiergroep" — de reden dat dit issue bestaat — niet te draaien.
+        let spierVan = Dictionary(alles([SortDescriptor<Exercise>(\.name)]).map { ($0.name, $0.muscle) },
+                                  uniquingKeysWith: { a, _ in a })
+        let dagen: [DayHabits] = alles([SortDescriptor(\.date)])
+        return [
+            ("sets.csv", CSV.sets(alles([SortDescriptor(\.date)]), spierVan: spierVan)),
+            ("wegingen.csv", CSV.weights(alles([SortDescriptor(\.date)]))),
+            ("voeding.csv", CSV.food(alles([SortDescriptor(\.date)]))),
+            ("gewoontes.csv", CSV.habits(dagen)),
+            ("eigen-gewoontes.csv", CSV.habitLogs(alles([SortDescriptor(\.date)]))),
+            // Alleen de dagen die je echt hebt ingevuld: een 0 betekent "niet gevraagd",
+            // en die als nul laten meetellen in een gemiddelde is gewoon fout.
+            ("check-ins.csv", CSV.checkIns(dagen.filter(\.checkedIn))),
+        ]
+    }
+
     /// Het toestel leegmaken. Nog maar één aanroeper: uitloggen. De sync gebruikt dit sinds
     /// #42 niet meer — een pull voegt samen en wist nooit.
     private static func wipeLocal(_ context: ModelContext) throws {
@@ -1071,4 +1125,118 @@ enum Sync {
 protocol SyncRow {
     var id: UUID { get }
     var deleted_at: String? { get }
+}
+
+// MARK: - CSV
+
+/// De tabellen uit `Sync.csvTables`, in een dialect dat Numbers en Excel openen zonder
+/// importwizard.
+///
+/// Puntkomma als scheidingsteken en komma als decimaalteken: dat is wat Excel in een
+/// Nederlandse regio verwacht als je het bestand dubbelklikt. Met komma's ertussen belandt
+/// daar de hele regel in kolom A, en dat is precies het "je moet eerst iets uitzoeken" dat
+/// dit issue wegneemt. Datums blijven ISO (`2026-08-21`): die leest elke regio, en als
+/// tekst sorteren ze nog goed ook.
+enum CSV {
+
+    // MARK: Tabellen
+
+    static func sets(_ rows: [SetEntry], spierVan: [String: String]) -> String {
+        table(["datum", "oefening", "spiergroep", "gewicht kg", "herhalingen", "volume kg",
+               "seconden", "dropset", "tot falen"],
+              rows.map { s in
+                  [moment(s.date), s.exercise, spierVan[s.exercise] ?? "Overig",
+                   number(s.weightKg), String(s.reps),
+                   // Volume staat erbij omdat een draaitabel niet kan vermenigvuldigen
+                   // zonder er eerst een berekende kolom bij te maken.
+                   number(s.weightKg * Double(s.reps)),
+                   String(s.seconds), bool(s.dropset), bool(s.failure)]
+              })
+    }
+
+    static func weights(_ rows: [WeightEntry]) -> String {
+        table(["datum", "kg", "weegschaal"],
+              rows.map { [moment($0.date), number($0.kg), $0.scale] })
+    }
+
+    static func food(_ rows: [ProteinEntry]) -> String {
+        table(["datum", "omschrijving", "maaltijd", "eiwit g", "kcal", "koolhydraten g", "vet g",
+               "hoeveelheid", "eenheid"],
+              rows.map { e in
+                  // `mealKey` raadt de maaltijd op het tijdstip als je 'm niet koos —
+                  // hetzelfde als wat de app toont, anders klopt je dagtotaal niet.
+                  [moment(e.date), e.label, mealSlotNames[e.mealKey] ?? "",
+                   String(e.grams), String(e.kcal), String(e.carbs), String(e.fat),
+                   e.amount > 0 ? number(e.amount) : "", e.amount > 0 ? e.unit : ""]
+              })
+    }
+
+    static func habits(_ rows: [DayHabits]) -> String {
+        table(["datum", "creatine", "genoeg geslapen", "bedtijd", "waaktijd", "slaapuren",
+               "slaapkwaliteit", "notitie"],
+              rows.map { d in
+                  [day(d.date), bool(d.creatine), bool(d.sleptEnough),
+                   d.bedTime.map(clock) ?? "", d.wakeTime.map(clock) ?? "",
+                   d.sleepHours.map(number) ?? "",
+                   // 0 = niet ingevuld; leeg laten, want een 3 en een lege cel zijn wat
+                   // anders dan een 0 die als "heel slecht geslapen" meetelt.
+                   d.sleepQuality > 0 ? String(d.sleepQuality) : "", d.note]
+              })
+    }
+
+    static func habitLogs(_ rows: [HabitLog]) -> String {
+        table(["datum", "gewoonte"], rows.map { [day($0.date), $0.name] })
+    }
+
+    static func checkIns(_ rows: [DayHabits]) -> String {
+        table(["datum", "energie", "stemming", "spierpijn", "stress"],
+              rows.map { d in
+                  [day(d.date), String(d.energy), String(d.mood), String(d.soreness), String(d.stress)]
+              })
+    }
+
+    // MARK: Opmaak
+
+    static func table(_ header: [String], _ rows: [[String]]) -> String {
+        ([line(header)] + rows.map(line)).joined(separator: "\n") + "\n"
+    }
+
+    static func line(_ fields: [String]) -> String {
+        fields.map(escape).joined(separator: ";")
+    }
+
+    /// Alles wat de kolomindeling kan breken gaat tussen aanhalingstekens, met verdubbelde
+    /// quotes erin (RFC 4180). Een productnaam als `Kwark "naturel"; 500 g` schoof anders
+    /// de rest van de regel een kolom op.
+    private static func escape(_ field: String) -> String {
+        guard field.contains(where: { ";\"\n\r".contains($0) }) else { return field }
+        return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    static func day(_ date: Date) -> String {
+        verbatim(date, "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits)")
+    }
+
+    /// Datum én tijd, want op één dag passen meerdere sets en maaltijden; zonder tijd is
+    /// de volgorde binnen een training weg.
+    static func moment(_ date: Date) -> String { "\(day(date)) \(clock(date))" }
+
+    static func clock(_ date: Date) -> String {
+        verbatim(date, "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)")
+    }
+
+    /// Vast patroon in de tijdzone van het toestel: een set die je om 19:30 deed hoort in
+    /// de export ook om 19:30 te staan, niet in UTC.
+    private static func verbatim(_ date: Date, _ format: Date.FormatString) -> String {
+        date.formatted(Date.VerbatimFormatStyle(format: format, timeZone: .current, calendar: .current))
+    }
+
+    /// Komma als decimaalteken en geen duizendtalscheiding: `1.234,5` zou Excel in een
+    /// andere regio als tekst lezen, en `82,5` is wat er in de app ook staat.
+    static func number(_ value: Double) -> String {
+        value.formatted(.number.grouping(.never).precision(.fractionLength(0...2))
+            .locale(Locale(identifier: "nl_NL")))
+    }
+
+    static func bool(_ value: Bool) -> String { value ? "ja" : "nee" }
 }
