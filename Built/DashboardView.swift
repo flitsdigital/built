@@ -131,11 +131,6 @@ struct DashboardView: View {
             }
     }
 
-    /// Tijdstempel voor een nieuw record op de geselecteerde dag (nu voor vandaag, anders 12:00).
-    private func stamp(_ day: Date) -> Date {
-        cal.isDateInToday(day) ? .now : (cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day)
-    }
-
     private var greeting: String {
         switch cal.component(.hour, from: .now) {
         case 6..<12: "Goedemorgen"
@@ -541,10 +536,13 @@ struct DashboardView: View {
             }
             .buttonStyle(PressableStyle())
             ForEach(customHabits) { habit in
+                let done = idx.logged(habit.name, on: selectedDay)
                 Divider()
-                checkRow(icon: "star.fill", color: .habitCustom, title: habit.name,
-                         done: idx.logged(habit.name, on: selectedDay),
-                         streak: habitStreak { idx.logged(habit.name, on: $0) }) { toggleCustom(habit.name) }
+                checkRow(icon: habit.icon, color: habit.color, title: habit.name,
+                         detail: habit.detail, detailWarns: habit.stockLow, done: done,
+                         streak: habitStreak { idx.logged(habit.name, on: $0) }) {
+                    context.setHabit(habit, on: selectedDay, done: !done, logs: habitLogs)
+                }
             }
             Text("Slaaptijden en losse metingen: tik op Dagdetails.")
                 .font(.caption2)
@@ -598,35 +596,41 @@ struct DashboardView: View {
         .buttonStyle(PressableStyle(scale: 0.985))
     }
 
-    private func toggleCustom(_ name: String) {
-        let key = dayKey(selectedDay)
-        if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
-            context.deleteSynced(log)
-        } else {
-            context.insert(HabitLog(name: name, date: stamp(selectedDay)))
-        }
-    }
-
     /// done = gehaald (groen ✓), missed = wel gelogd maar niet gehaald (oranje ⃠), anders open (leeg bolletje).
-    private func checkRow(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
+    private func checkRow(icon: String, color: Color, title: String, detail: String = "",
+                          detailWarns: Bool = false, done: Bool, missed: Bool = false,
                           streak: Int = 0, action: @escaping () -> Void) -> some View {
         Button { if !swipeActive { action() } } label: {
-            checkRowLabel(icon: icon, color: color, title: title, done: done, missed: missed, streak: streak)
+            checkRowLabel(icon: icon, color: color, title: title, detail: detail,
+                          detailWarns: detailWarns, done: done, missed: missed, streak: streak)
         }
         .buttonStyle(PressableStyle())
     }
 
     /// `navigates` = geen habit maar een doorverwijzing; dan een chevron i.p.v. een
     /// bolletje, anders leest de rij als iets wat je nog moet afvinken.
-    private func checkRowLabel(icon: String, color: Color, title: String, done: Bool, missed: Bool = false,
+    /// `detail` is de regel eronder (dosering en voorraad); `detailWarns` kleurt 'm oranje
+    /// als de voorraad bijna op is — dan is het een aansporing, geen bijschrift.
+    private func checkRowLabel(icon: String, color: Color, title: String, detail: String = "",
+                               detailWarns: Bool = false, done: Bool, missed: Bool = false,
                                streak: Int = 0, navigates: Bool = false) -> some View {
         HStack(spacing: 12) {
             BuiltIconTile(systemName: icon, color: color)
-            Text(title)
-                .foregroundStyle(done && !navigates ? .secondary : .primary)
-                .strikethrough(done && !navigates, color: .secondary)
-                .lineLimit(1)
-            StreakBadge(days: streak)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 12) {
+                    Text(title)
+                        .foregroundStyle(done && !navigates ? .secondary : .primary)
+                        .strikethrough(done && !navigates, color: .secondary)
+                        .lineLimit(1)
+                    StreakBadge(days: streak)
+                }
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(detailWarns ? Color.orange : Color.secondary)
+                        .lineLimit(1)
+                }
+            }
             Spacer()
             if navigates {
                 Image(systemName: "chevron.right")

@@ -39,6 +39,21 @@ extension Color {
     static let habitJournal = Color.gray
 
     /// Groen-intensiteit voor de body-map: meer volume = voller groen op een grijze basis.
+    /// De kleuren die je aan een eigen habit kunt geven, in de volgorde van de kiezer.
+    /// Sleutels en geen hex: een kleur die synct moet ook op een ouder toestel kloppen,
+    /// en dan is "de mintkleur van de app" beter dan #3EB489.
+    static let habitTints: [(key: String, color: Color)] = [
+        ("mint", habitCustom), ("teal", habitCreatine), ("purple", habitWeight),
+        ("indigo", habitSleep), ("cyan", habitSteps), ("orange", habitTraining),
+        ("pink", .pink), ("red", .red),
+    ]
+
+    /// Onbekende of lege sleutel valt terug op mint — ook als een nieuwer toestel een
+    /// kleur stuurt die deze versie nog niet kent.
+    static func habitTint(_ key: String) -> Color {
+        habitTints.first { $0.key == key }?.color ?? habitCustom
+    }
+
     static func muscleTint(_ value: Double) -> Color {
         let v = min(max(value, 0), 1)
         return v <= 0.001 ? Color(.tertiarySystemFill) : Color.green.opacity(0.22 + 0.6 * v)

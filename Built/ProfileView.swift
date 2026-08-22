@@ -289,9 +289,9 @@ struct HabitsSettingsView: View {
     @AppStorage("healthStepsOn") private var healthOn = false
 
     @State private var showAddHabit = false
-    @State private var habitName = ""
-    @State private var renameHabit: CustomHabit?
-    @State private var renameText = ""
+    /// De habit die je aan het bewerken bent; nil = geen editor open. Toevoegen loopt via
+    /// `showAddHabit` door hetzelfde formulier — één scherm voor beide.
+    @State private var editHabit: CustomHabit?
     @State private var habitToDelete: CustomHabit?
 
     var body: some View {
@@ -327,10 +327,22 @@ struct HabitsSettingsView: View {
                      : "Health is niet beschikbaar op dit toestel.")
             }
 
-            Section("Eigen habits") {
+            Section {
                 ForEach(customHabits) { habit in
-                    Button { renameHabit = habit; renameText = habit.name } label: {
-                        Text(habit.name).foregroundStyle(.primary)
+                    Button { editHabit = habit } label: {
+                        HStack {
+                            Label {
+                                Text(habit.name).foregroundStyle(.primary)
+                            } icon: {
+                                Image(systemName: habit.icon).foregroundStyle(habit.color)
+                            }
+                            Spacer()
+                            if !habit.detail.isEmpty {
+                                Text(habit.detail)
+                                    .font(.footnote)
+                                    .foregroundStyle(habit.stockLow ? Color.orange : Color.secondary)
+                            }
+                        }
                     }
                 }
                 .onDelete { offsets in
@@ -339,29 +351,33 @@ struct HabitsSettingsView: View {
                 Button { showAddHabit = true } label: {
                     Label("Habit toevoegen", systemImage: "plus")
                 }
+            } header: {
+                Text("Eigen habits")
+            } footer: {
+                Text("Vul een dosering in — \"5 g\", \"2 capsules\" — en de rij leest als supplement. Houd je ook de voorraad bij, dan telt elk vinkje er één dosis af en zie je hoeveel dagen je nog vooruit kunt.")
             }
         }
         .tabBarClearance()
         .navigationTitle("Habits")
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Nieuwe habit", isPresented: $showAddHabit) {
-            TextField("bijv. Vitamine D", text: $habitName)
-            Button("Toevoegen") {
-                let name = habitName.trimmingCharacters(in: .whitespaces)
-                if !name.isEmpty { context.insert(CustomHabit(name: name)) }
-                habitName = ""
+        .sheet(isPresented: $showAddHabit) {
+            HabitEditor(habit: nil) { name, dose, stock, symbol, tint in
+                let habit = CustomHabit(name: name)
+                habit.dose = dose
+                habit.stockLeft = stock
+                habit.symbol = symbol
+                habit.tint = tint
+                context.insert(habit)
             }
-            Button("Annuleer", role: .cancel) { habitName = "" }
-        } message: {
-            Text("Komt in je dagelijkse checklist en weekoverzicht. Telt niet mee voor de Groei Score.")
         }
-        .alert("Habit hernoemen", isPresented: Binding(get: { renameHabit != nil }, set: { if !$0 { renameHabit = nil } })) {
-            TextField("Naam", text: $renameText)
-            Button("Opslaan") {
-                if let h = renameHabit { renameCustomHabit(h, to: renameText) }
-                renameHabit = nil
+        .sheet(item: $editHabit) { habit in
+            HabitEditor(habit: habit) { name, dose, stock, symbol, tint in
+                renameCustomHabit(habit, to: name)
+                habit.dose = dose
+                habit.stockLeft = stock
+                habit.symbol = symbol
+                habit.tint = tint
             }
-            Button("Annuleer", role: .cancel) { renameHabit = nil }
         }
         .confirmationDialog("Habit én alle vinkjes ervan verwijderen?",
                             isPresented: Binding(get: { habitToDelete != nil },
@@ -383,6 +399,152 @@ struct HabitsSettingsView: View {
         // HabitLog koppelt op naam → mee-updaten zodat de vinkjes niet losraken.
         let logs = (try? context.fetch(FetchDescriptor<HabitLog>())) ?? []
         for log in logs where log.name == old { log.name = new }
+    }
+}
+
+/// Eén formulier voor toevoegen én bewerken. Een habit mét dosering is een supplement, en
+/// dat is het hele verschil — geen tweede model, geen tweede lijst, geen tweede scherm.
+///
+/// Toevoegen ging eerder via een alert met alleen een naamveld. Met dosering en voorraad
+/// erbij past dat niet meer in een alert, en twee formulieren die hetzelfde invullen lopen
+/// vroeg of laat uit elkaar.
+private struct HabitEditor: View {
+    /// nil = een nieuwe habit.
+    let habit: CustomHabit?
+    /// Naam, dosering, de voorraad (`nil` = niet bijhouden), en het gekozen icoon en de
+    /// gekozen kleur (leeg = de app kiest).
+    let onSave: (String, String, Int?, String, String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String
+    @State private var dose: String
+    @State private var tracksStock: Bool
+    @State private var stock: Int
+    @State private var symbol: String
+    @State private var tint: String
+
+    init(habit: CustomHabit?, onSave: @escaping (String, String, Int?, String, String) -> Void) {
+        self.habit = habit
+        self.onSave = onSave
+        _name = State(initialValue: habit?.name ?? "")
+        _dose = State(initialValue: habit?.dose ?? "")
+        _symbol = State(initialValue: habit?.symbol ?? "")
+        _tint = State(initialValue: habit?.tint ?? "")
+        _tracksStock = State(initialValue: habit?.stockLeft != nil)
+        // 30 als startpunt: een potje is bijna altijd een maand.
+        _stock = State(initialValue: habit?.stockLeft ?? 30)
+    }
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+
+    /// Wat de tegel toont zolang je nog niets koos: dezelfde regel als op het dashboard.
+    private var shownSymbol: String {
+        symbol.isEmpty ? (dose.trimmingCharacters(in: .whitespaces).isEmpty ? "star.fill" : "pills.fill") : symbol
+    }
+    /// Voor het vinkje in de kleurenrij: leeg betekent mint, en dat is ook een keuze om te tonen.
+    private var effectiveTint: String { tint.isEmpty ? "mint" : tint }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("bijv. Vitamine D", text: $name)
+                    TextField("Dosering, bijv. 5 g", text: $dose)
+                } footer: {
+                    Text("Komt in je dagelijkse checklist en weekoverzicht. Telt niet mee voor de Groei Score. Met een dosering erbij leest de rij als supplement.")
+                }
+
+                Section {
+                    HStack(spacing: 12) {
+                        BuiltIconTile(systemName: shownSymbol, color: .habitTint(tint))
+                        Text(trimmedName.isEmpty ? "Zo komt hij in de lijst" : trimmedName)
+                            .foregroundStyle(trimmedName.isEmpty ? .secondary : .primary)
+                        Spacer()
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(CustomHabit.symbols, id: \.self) { s in
+                                Button {
+                                    // Nogmaals tikken laat de app weer kiezen — hetzelfde
+                                    // gebaar als bij de check-in-emoji's.
+                                    symbol = symbol == s ? "" : s
+                                } label: {
+                                    Image(systemName: s)
+                                        .font(.body)
+                                        .foregroundStyle(symbol == s ? Color.habitTint(tint) : .secondary)
+                                        .frame(width: 38, height: 38)
+                                        .background(symbol == s ? .builtTint(.habitTint(tint)) : Color(.tertiarySystemFill),
+                                                    in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+                                        .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(s)
+                                .accessibilityAddTraits(symbol == s ? [.isSelected] : [])
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    HStack(spacing: 10) {
+                        ForEach(Color.habitTints, id: \.key) { choice in
+                            Button {
+                                tint = tint == choice.key ? "" : choice.key
+                            } label: {
+                                Circle()
+                                    .fill(choice.color)
+                                    .frame(width: 26, height: 26)
+                                    .overlay {
+                                        if effectiveTint == choice.key {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption2.bold())
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(choice.key)
+                            .accessibilityAddTraits(effectiveTint == choice.key ? [.isSelected] : [])
+                        }
+                        Spacer()
+                    }
+                } header: {
+                    Text("Icoon en kleur")
+                } footer: {
+                    Text("Kies niets en de app doet het: het pillenicoon zodra er een dosering staat, anders een ster. Nogmaals tikken op je keuze zet 'm weer terug.")
+                }
+
+                Section {
+                    Toggle("Voorraad bijhouden", isOn: $tracksStock.animation(.snappy(duration: 0.2)))
+                    if tracksStock {
+                        LabeledContent("Doses in huis") {
+                            TextField("30", value: $stock, format: .number)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 64)
+                        }
+                    }
+                } footer: {
+                    Text(tracksStock
+                         ? "Elk vinkje haalt er één dosis af, een vinkje dat je weghaalt zet er één terug. Bij een week of minder kleurt de rij oranje — dan is het tijd om te bestellen."
+                         : "Aanzetten als je wilt zien hoeveel dagen je nog vooruit kunt.")
+                }
+            }
+            .navigationTitle(habit == nil ? "Nieuwe habit" : "Habit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuleer") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Bewaar") {
+                        onSave(trimmedName, dose.trimmingCharacters(in: .whitespaces),
+                               tracksStock ? max(stock, 0) : nil, symbol, tint)
+                        dismiss()
+                    }
+                    .disabled(trimmedName.isEmpty)
+                }
+            }
+        }
     }
 }
 
