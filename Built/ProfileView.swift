@@ -331,8 +331,11 @@ struct HabitsSettingsView: View {
                 ForEach(customHabits) { habit in
                     Button { editHabit = habit } label: {
                         HStack {
-                            Label(habit.name, systemImage: habit.icon)
-                                .foregroundStyle(.primary)
+                            Label {
+                                Text(habit.name).foregroundStyle(.primary)
+                            } icon: {
+                                Image(systemName: habit.icon).foregroundStyle(habit.color)
+                            }
                             Spacer()
                             if !habit.detail.isEmpty {
                                 Text(habit.detail)
@@ -358,18 +361,22 @@ struct HabitsSettingsView: View {
         .navigationTitle("Habits")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddHabit) {
-            HabitEditor(habit: nil) { name, dose, stock in
+            HabitEditor(habit: nil) { name, dose, stock, symbol, tint in
                 let habit = CustomHabit(name: name)
                 habit.dose = dose
                 habit.stockLeft = stock
+                habit.symbol = symbol
+                habit.tint = tint
                 context.insert(habit)
             }
         }
         .sheet(item: $editHabit) { habit in
-            HabitEditor(habit: habit) { name, dose, stock in
+            HabitEditor(habit: habit) { name, dose, stock, symbol, tint in
                 renameCustomHabit(habit, to: name)
                 habit.dose = dose
                 habit.stockLeft = stock
+                habit.symbol = symbol
+                habit.tint = tint
             }
         }
         .confirmationDialog("Habit én alle vinkjes ervan verwijderen?",
@@ -404,26 +411,38 @@ struct HabitsSettingsView: View {
 private struct HabitEditor: View {
     /// nil = een nieuwe habit.
     let habit: CustomHabit?
-    /// Naam, dosering, en de voorraad — `nil` als je die niet bijhoudt.
-    let onSave: (String, String, Int?) -> Void
+    /// Naam, dosering, de voorraad (`nil` = niet bijhouden), en het gekozen icoon en de
+    /// gekozen kleur (leeg = de app kiest).
+    let onSave: (String, String, Int?, String, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var dose: String
     @State private var tracksStock: Bool
     @State private var stock: Int
+    @State private var symbol: String
+    @State private var tint: String
 
-    init(habit: CustomHabit?, onSave: @escaping (String, String, Int?) -> Void) {
+    init(habit: CustomHabit?, onSave: @escaping (String, String, Int?, String, String) -> Void) {
         self.habit = habit
         self.onSave = onSave
         _name = State(initialValue: habit?.name ?? "")
         _dose = State(initialValue: habit?.dose ?? "")
+        _symbol = State(initialValue: habit?.symbol ?? "")
+        _tint = State(initialValue: habit?.tint ?? "")
         _tracksStock = State(initialValue: habit?.stockLeft != nil)
         // 30 als startpunt: een potje is bijna altijd een maand.
         _stock = State(initialValue: habit?.stockLeft ?? 30)
     }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespaces) }
+
+    /// Wat de tegel toont zolang je nog niets koos: dezelfde regel als op het dashboard.
+    private var shownSymbol: String {
+        symbol.isEmpty ? (dose.trimmingCharacters(in: .whitespaces).isEmpty ? "star.fill" : "pills.fill") : symbol
+    }
+    /// Voor het vinkje in de kleurenrij: leeg betekent mint, en dat is ook een keuze om te tonen.
+    private var effectiveTint: String { tint.isEmpty ? "mint" : tint }
 
     var body: some View {
         NavigationStack {
@@ -433,6 +452,65 @@ private struct HabitEditor: View {
                     TextField("Dosering, bijv. 5 g", text: $dose)
                 } footer: {
                     Text("Komt in je dagelijkse checklist en weekoverzicht. Telt niet mee voor de Groei Score. Met een dosering erbij leest de rij als supplement.")
+                }
+
+                Section {
+                    HStack(spacing: 12) {
+                        BuiltIconTile(systemName: shownSymbol, color: .habitTint(tint))
+                        Text(trimmedName.isEmpty ? "Zo komt hij in de lijst" : trimmedName)
+                            .foregroundStyle(trimmedName.isEmpty ? .secondary : .primary)
+                        Spacer()
+                    }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(CustomHabit.symbols, id: \.self) { s in
+                                Button {
+                                    // Nogmaals tikken laat de app weer kiezen — hetzelfde
+                                    // gebaar als bij de check-in-emoji's.
+                                    symbol = symbol == s ? "" : s
+                                } label: {
+                                    Image(systemName: s)
+                                        .font(.body)
+                                        .foregroundStyle(symbol == s ? Color.habitTint(tint) : .secondary)
+                                        .frame(width: 38, height: 38)
+                                        .background(symbol == s ? .builtTint(.habitTint(tint)) : Color(.tertiarySystemFill),
+                                                    in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+                                        .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(s)
+                                .accessibilityAddTraits(symbol == s ? [.isSelected] : [])
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    HStack(spacing: 10) {
+                        ForEach(Color.habitTints, id: \.key) { choice in
+                            Button {
+                                tint = tint == choice.key ? "" : choice.key
+                            } label: {
+                                Circle()
+                                    .fill(choice.color)
+                                    .frame(width: 26, height: 26)
+                                    .overlay {
+                                        if effectiveTint == choice.key {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption2.bold())
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(choice.key)
+                            .accessibilityAddTraits(effectiveTint == choice.key ? [.isSelected] : [])
+                        }
+                        Spacer()
+                    }
+                } header: {
+                    Text("Icoon en kleur")
+                } footer: {
+                    Text("Kies niets en de app doet het: het pillenicoon zodra er een dosering staat, anders een ster. Nogmaals tikken op je keuze zet 'm weer terug.")
                 }
 
                 Section {
@@ -460,7 +538,7 @@ private struct HabitEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Bewaar") {
                         onSave(trimmedName, dose.trimmingCharacters(in: .whitespaces),
-                               tracksStock ? max(stock, 0) : nil)
+                               tracksStock ? max(stock, 0) : nil, symbol, tint)
                         dismiss()
                     }
                     .disabled(trimmedName.isEmpty)

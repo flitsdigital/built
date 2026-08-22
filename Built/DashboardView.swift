@@ -538,7 +538,7 @@ struct DashboardView: View {
             ForEach(customHabits) { habit in
                 let done = idx.logged(habit.name, on: selectedDay)
                 Divider()
-                checkRow(icon: habit.icon, color: .habitCustom, title: habit.name,
+                checkRow(icon: habit.icon, color: habit.color, title: habit.name,
                          detail: habit.detail, detailWarns: habit.stockLow, done: done,
                          streak: habitStreak { idx.logged(habit.name, on: $0) }) {
                     context.setHabit(habit, on: selectedDay, done: !done, logs: habitLogs)

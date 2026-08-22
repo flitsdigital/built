@@ -310,10 +310,14 @@ struct DayDetailView: View {
                 Section("Eigen habits") {
                     ForEach(customHabits) { habit in
                         Toggle(isOn: customBinding(habit)) {
-                            // Dezelfde regel als op het dashboard: dosering en voorraad
-                            // horen bij het vinkje, niet alleen bij de instellingen.
+                            // Dezelfde regel als op het dashboard: icoon, kleur, dosering
+                            // en voorraad horen bij het vinkje, niet alleen bij de instellingen.
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(habit.name)
+                                Label {
+                                    Text(habit.name)
+                                } icon: {
+                                    Image(systemName: habit.icon).foregroundStyle(habit.color)
+                                }
                                 if !habit.detail.isEmpty {
                                     Text(habit.detail)
                                         .font(.caption)

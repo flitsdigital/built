@@ -1,6 +1,7 @@
 import ActivityKit
 import Foundation
 import SwiftData
+import SwiftUI
 import Observation
 
 /// Gedeelde trainingsstatus: andere tabs tonen de "bezig"-pill, en de rust-timer
@@ -262,6 +263,11 @@ final class CustomHabit {
     /// moet bestaan: anders is "op" niet te onderscheiden van "nooit bijgehouden" en
     /// verdwijnt de teller stilletjes op de dag dat je hem het hardst nodig hebt.
     var stockLeft: Int?
+    /// Zelfgekozen icoon en kleur. Leeg = de app kiest, zoals hij dat altijd deed: het
+    /// pillenicoon zodra er een dosering staat, anders het sterretje, en mint. Twee losse
+    /// velden en geen "thema", want dit is precies zo veel keuze als het waard is.
+    var symbol: String = ""
+    var tint: String = ""
     init(name: String) {
         self.syncID = UUID()
         self.name = name
@@ -285,8 +291,16 @@ final class CustomHabit {
     var stockLow: Bool { (stockLeft ?? .max) <= 7 }
 
     /// Een habit met dosering is een supplement, en krijgt het pillenicoon in plaats van
-    /// het sterretje. Geen apart type dus: het verschil zit in wat je invult.
-    var icon: String { dose.isEmpty ? "star.fill" : "pills.fill" }
+    /// het sterretje. Geen apart type dus: het verschil zit in wat je invult. Kies je zelf
+    /// een icoon, dan wint dat.
+    var icon: String { symbol.isEmpty ? (dose.isEmpty ? "star.fill" : "pills.fill") : symbol }
+    var color: Color { .habitTint(tint) }
+
+    /// De iconen waaruit je kiest. Bewust kort: een habit is een rij van 34 punten hoog,
+    /// en met honderd symbolen kies je niet sneller maar langer.
+    static let symbols = ["star.fill", "pills.fill", "drop.fill", "leaf.fill", "cup.and.saucer.fill",
+                          "book.fill", "figure.walk", "figure.cooldown", "sun.max.fill", "moon.fill",
+                          "heart.fill", "brain.head.profile"]
 }
 
 @Model

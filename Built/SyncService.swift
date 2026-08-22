@@ -191,6 +191,8 @@ enum Sync {
         var id: UUID; var name: String; var created_at: Date
         var dose: String? = ""
         var stock_left: Int? = -1
+        var symbol: String? = ""
+        var tint: String? = ""
         var updated_at: String?; var deleted_at: String?
     }
     private struct ExerciseRow: Codable, Sendable, SyncRow {
@@ -359,7 +361,8 @@ enum Sync {
     }
     private static func row(_ e: CustomHabit, _ at: String?) -> CustomHabitRow {
         CustomHabitRow(id: e.syncID, name: e.name, created_at: e.createdAt,
-                       dose: e.dose, stock_left: e.stockLeft ?? -1, updated_at: at)
+                       dose: e.dose, stock_left: e.stockLeft ?? -1,
+                       symbol: e.symbol, tint: e.tint, updated_at: at)
     }
     private static func row(_ e: HabitLog, _ at: String?) -> HabitLogRow {
         HabitLogRow(id: e.syncID, name: e.name, date: e.date, updated_at: at)
@@ -678,9 +681,11 @@ enum Sync {
     private static func apply(_ r: CustomHabitRow, to m: CustomHabit) {
         m.name = r.name; m.createdAt = r.created_at
         // `if let`, niet `?? default`: zolang de migration nog niet gedraaid is komen deze
-        // twee als nil terug, en dat betekent "die kolom staat daar nog niet" — niet "leeg".
+        // vier als nil terug, en dat betekent "die kolom staat daar nog niet" — niet "leeg".
         if let dose = r.dose { m.dose = dose }
         if let stock = r.stock_left { m.stockLeft = stock < 0 ? nil : stock }
+        if let symbol = r.symbol { m.symbol = symbol }
+        if let tint = r.tint { m.tint = tint }
     }
     private static func apply(_ r: HabitLogRow, to m: HabitLog) {
         m.name = r.name; m.date = r.date

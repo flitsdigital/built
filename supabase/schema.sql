@@ -161,6 +161,9 @@ create table if not exists public.custom_habits (
 alter table public.custom_habits add column if not exists dose text not null default '';
 -- Doses die nog in huis zijn. -1 = niet bijhouden, 0 = op; zie 0021.
 alter table public.custom_habits add column if not exists stock_left integer not null default -1;
+-- Zelfgekozen icoon en kleur; leeg = de app kiest. Kleur is een sleutel, geen hex.
+alter table public.custom_habits add column if not exists symbol text not null default '';
+alter table public.custom_habits add column if not exists tint text not null default '';
 
 create table if not exists public.habit_logs (
   id uuid primary key default gen_random_uuid(),
@@ -561,13 +564,15 @@ begin
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.custom_habits as t (id, user_id, name, created_at, dose, stock_left, updated_at, deleted_at)
+  insert into public.custom_habits as t (id, user_id, name, created_at, dose, stock_left, symbol, tint, updated_at, deleted_at)
   select r.id, uid, r.name, r.created_at, coalesce(r.dose, ''), coalesce(r.stock_left, -1),
+         coalesce(r.symbol, ''), coalesce(r.tint, ''),
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.custom_habits, coalesce(payload->'customHabits', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     name = excluded.name, created_at = excluded.created_at,
     dose = excluded.dose, stock_left = excluded.stock_left,
+    symbol = excluded.symbol, tint = excluded.tint,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
