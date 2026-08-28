@@ -44,6 +44,10 @@ struct SavedWorkout: Codable, Equatable {
         var dropset: Bool?
         var failure: Bool?
         var seconds: Int?
+        /// De `syncID` van de rij die deze set al in de database heeft. Zonder dit is een
+        /// herstelde training z'n koppeling kwijt: terugdateren sloeg die sets over,
+        /// annuleren liet ze staan, en een vinkje weghalen verwijderde de verkeerde rij.
+        var entryID: UUID?
     }
     struct SavedExercise: Codable, Equatable {
         var name: String
