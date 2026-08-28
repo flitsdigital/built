@@ -309,7 +309,7 @@ struct TrainingView: View {
         guard active else { return nil }
         return SavedWorkout(startedAt: startedAt, exercises: workout.map { ex in
             .init(name: ex.name, tip: ex.tip, note: ex.note,
-                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds) },
+                  sets: ex.sets.map { .init(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup, dropset: $0.dropset, failure: $0.failure, seconds: $0.seconds, entryID: $0.savedEntry?.syncID) },
                   originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }, alternatives: alternatives.isEmpty ? nil : alternatives,
            restEndsAt: workoutStatus.restEndsAt,
@@ -324,9 +324,12 @@ struct TrainingView: View {
               let data = UserDefaults.standard.data(forKey: "activeWorkout"),
               let saved = try? JSONDecoder().decode(SavedWorkout.self, from: data) else { return }
         startedAt = saved.startedAt
+        // De rijen die al in de database staan weer aan hun set koppelen. Zonder dat is
+        // een herstelde training niet meer te verzetten, te annuleren of af te vinken.
+        let byID = Dictionary(sets.map { ($0.syncID, $0) }, uniquingKeysWith: { first, _ in first })
         workout = saved.exercises.map { ex in
             DraftExercise(name: ex.name, tip: ex.tip,
-                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false, seconds: $0.seconds ?? 0) },
+                          sets: ex.sets.map { DraftSet(kg: $0.kg, reps: $0.reps, done: $0.done, previous: $0.previous, savedEntry: $0.entryID.flatMap { id in byID[id] }, warmup: $0.warmup ?? false, dropset: $0.dropset ?? false, failure: $0.failure ?? false, seconds: $0.seconds ?? 0) },
                           note: ex.note, originalName: ex.originalName, superset: ex.superset, restSeconds: ex.restSeconds)
         }
         alternatives = saved.alternatives ?? [:]
@@ -393,6 +396,10 @@ struct TrainingView: View {
                              targets: [String: [Int]] = [:], supersets: [String: String] = [:],
                              restByExercise: [String: Int] = [:]) {
         startedAt = .now
+        // Anders erft deze training de datum van het moment waarop de view gebouwd werd
+        // (app-start) of van een eerder geannuleerde teruggedateerde sessie, en verhuist
+        // `applyWorkoutDate` 'm bij het afronden naar een dag die je nooit gekozen hebt.
+        workoutDate = .now
         workoutNote = ""
         let history = makeHistory()
         workout = names.map { name in
@@ -1393,13 +1400,12 @@ struct TrainingView: View {
                             prToast = "🏆 Record — \(exercise)!"
                         }
                     } else {
-                        // Na een herstelde training is savedEntry weg — zoek 'm terug
-                        let e = set.wrappedValue.savedEntry ?? sets.first {
-                            $0.exercise == exercise && $0.date >= startedAt
-                                && $0.weightKg == set.wrappedValue.kg && $0.reps == set.wrappedValue.reps
-                                && $0.seconds == set.wrappedValue.seconds
-                        }
-                        if let e, !e.isDeleted { context.deleteSynced(e) }
+                        // Op kg/reps zoeken was hier de terugval voor een herstelde
+                        // training. Bij 3×10 @ 60 kg matcht dat op elke set, en `sets`
+                        // staat aflopend op datum: je haalde het vinkje van de eerste weg
+                        // en de rij van de derde verdween. De koppeling komt nu uit
+                        // `SavedWorkout`, dus deze gok is niet meer nodig.
+                        if let e = set.wrappedValue.savedEntry, !e.isDeleted { context.deleteSynced(e) }
                         set.wrappedValue.savedEntry = nil
                     }
                     updateActivity(exerciseID, currentKg: set.wrappedValue.kg, history)

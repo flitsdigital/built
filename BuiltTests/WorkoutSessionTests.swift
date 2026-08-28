@@ -73,3 +73,36 @@ struct WorkoutSessionTests {
         #expect(habits.name(for: UUID().uuidString) == "")
     }
 }
+
+/// De concepttoestand op schijf. Zonder `entryID` was een herstelde training z'n koppeling
+/// met de al opgeslagen rijen kwijt, en dat is waar de datums uit elkaar liepen: terugdateren
+/// sloeg die sets over, annuleren liet ze staan, en een vinkje weghalen verwijderde de
+/// verkeerde rij.
+@Suite("Herstelde training")
+struct SavedWorkoutTests {
+
+    private func snapshot(_ set: SavedWorkout.SavedSet) -> SavedWorkout {
+        SavedWorkout(startedAt: nlDate(2026, 8, 5, 9),
+                     exercises: [.init(name: "Bench Press", tip: nil, note: "", sets: [set])])
+    }
+
+    @Test("Het id van de opgeslagen rij overleeft een force-quit")
+    func entryIDRondtrip() throws {
+        let id = UUID()
+        let saved = snapshot(.init(kg: 60, reps: 8, done: true, entryID: id))
+        let data = try JSONEncoder().encode(saved)
+        let back = try JSONDecoder().decode(SavedWorkout.self, from: data)
+        #expect(back.exercises.first?.sets.first?.entryID == id)
+    }
+
+    @Test("Een concept van vóór deze kolom laadt nog steeds")
+    func oudConceptLaadt() throws {
+        let json = """
+        {"startedAt":781340400,"exercises":[{"name":"Bench Press","note":"",
+        "sets":[{"kg":60,"reps":8,"done":true}]}]}
+        """
+        let back = try JSONDecoder().decode(SavedWorkout.self, from: Data(json.utf8))
+        #expect(back.exercises.first?.sets.first?.entryID == nil)
+        #expect(back.exercises.first?.sets.first?.kg == 60)
+    }
+}
