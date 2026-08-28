@@ -1322,6 +1322,12 @@ struct TrainingView: View {
         return s
     }
 
+    /// De al opgeslagen rij van deze set, als die er is en nog bestaat.
+    private func saved(_ set: Binding<DraftSet>) -> SetEntry? {
+        guard let e = set.wrappedValue.savedEntry, !e.isDeleted else { return nil }
+        return e
+    }
+
     private func setRow(_ set: Binding<DraftSet>, number: Int, exercise: String, exerciseID: DraftExercise.ID,
                         bodyweight: Bool, cardio: Bool, history: HistoryIndex,
                         duplicate: @escaping () -> Void) -> some View {
@@ -1359,24 +1365,38 @@ struct TrainingView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 64, alignment: .leading)
                 .opacity(set.wrappedValue.done ? 0.55 : 1)
+            // De velden blijven bewerkbaar ná het afvinken. Ze stonden op `disabled`, en
+            // een typefout herstelde je dus door af te vinken (rij weg uit de database) en
+            // opnieuw aan te vinken (nieuwe rij, nieuwe tijdstempel). De bindings schrijven
+            // nu door naar de al opgeslagen rij.
             if cardio {
                 NumericField(value: Binding(get: { Double(set.wrappedValue.seconds / 60) },
-                                            set: { set.wrappedValue.seconds = Int(min($0.rounded(), 600)) * 60 }),
+                                            set: { v in
+                                                let secs = Int(min(v.rounded(), 600)) * 60
+                                                set.wrappedValue.seconds = secs
+                                                saved(set)?.seconds = secs
+                                            }),
                              decimal: false, placeholder: "min",
-                             focus: $focusedSet, id: set.wrappedValue.id,
-                             disabled: set.wrappedValue.done)
+                             focus: $focusedSet, id: set.wrappedValue.id)
                     .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
-                NumericField(value: set.kg, decimal: true, placeholder: bodyweight ? "±kg" : "kg",
-                             focus: $focusedSet, id: set.wrappedValue.id,
-                             disabled: set.wrappedValue.done, signed: bodyweight)
+                NumericField(value: Binding(get: { set.wrappedValue.kg },
+                                            set: { v in
+                                                set.wrappedValue.kg = v
+                                                saved(set)?.weightKg = v
+                                            }),
+                             decimal: true, placeholder: bodyweight ? "±kg" : "kg",
+                             focus: $focusedSet, id: set.wrappedValue.id, signed: bodyweight)
                     .numericFieldChrome(width: 56, dimmed: set.wrappedValue.done)
                 NumericField(value: Binding(get: { Double(set.wrappedValue.reps) },
-                                            set: { set.wrappedValue.reps = Int(min($0.rounded(), 9999)) }),
+                                            set: { v in
+                                                let reps = Int(min(v.rounded(), 9999))
+                                                set.wrappedValue.reps = reps
+                                                saved(set)?.reps = reps
+                                            }),
                              decimal: false, placeholder: "reps",
-                             focus: $focusedSet, id: nil,
-                             disabled: set.wrappedValue.done)
+                             focus: $focusedSet, id: nil)
                     .numericFieldChrome(width: 48, dimmed: set.wrappedValue.done)
             }
             Spacer()

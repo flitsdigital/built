@@ -148,6 +148,48 @@ struct DashboardView: View {
         (0..<7).compactMap { cal.date(byAdding: .day, value: -6 + $0, to: cal.startOfDay(for: .now)) }
     }
 
+    /// De twee schermen die van de tabbalk af zijn. Ze horen bij "vandaag" zoals een
+    /// achterdeur bij een huis: je gaat er niet elke dag doorheen, maar je moet 'm wel
+    /// kunnen vinden. Zes tabs was er één meer dan iOS aankan zonder te verdringen.
+    private var deeperCard: some View {
+        VStack(spacing: 0) {
+            NavigationLink {
+                InsightsView(profile: profile).tabBarClearance()
+            } label: {
+                deeperRow(icon: "sparkles", title: "Inzicht",
+                          subtitle: "Je week in cijfers, records en plateaus")
+            }
+            .buttonStyle(PressableStyle())
+            Divider()
+            NavigationLink {
+                LogbookView(profile: profile).tabBarClearance()
+            } label: {
+                deeperRow(icon: "book.fill", title: "Logboek", subtitle: "Terugbladeren per dag")
+            }
+            .buttonStyle(PressableStyle())
+        }
+        .builtCard()
+    }
+
+    private func deeperRow(icon: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(.green)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline).foregroundStyle(.primary)
+                Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.footnote.bold())
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -166,6 +208,7 @@ struct DashboardView: View {
                 if Sync.isConfigured, syncStatus.isStale { syncBanner }
                 entranced(1, weekCard(idx))
                 entranced(2, dayCards(idx))
+                entranced(3, deeperCard)
             }
             .padding(.horizontal)
             .padding(.bottom, 24)

@@ -709,7 +709,8 @@ struct NumericField: UIViewRepresentable {
     var placeholder: String
     var focus: FocusState<UUID?>.Binding
     var id: UUID?
-    var disabled: Bool
+    /// Standaard bewerkbaar: een afgevinkte set corrigeer je nu ter plekke.
+    var disabled: Bool = false
     /// Toont een ±-knop boven het toetsenbord. De decimalPad heeft geen minteken, en
     /// zonder die knop kun je assisted dips (−40 kg van je lichaamsgewicht) niet invoeren.
     var signed: Bool = false
