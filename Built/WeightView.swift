@@ -33,6 +33,14 @@ struct WeightView: View {
         weights.contains { !$0.scale.isEmpty }
     }
 
+    /// Vast, en over álle wegingen — niet alleen de zichtbare. Leidt Charts het domein zelf
+    /// af, dan hangt de kleur van een weegschaal af van wie er toevallig in beeld staat, en
+    /// wisselen de bolletjes van kleur zodra je van 1 maand naar 3 maanden gaat.
+    private var scaleDomain: [String] {
+        guard multiScale else { return ["Gewicht"] }
+        return Set(weights.map { $0.scale.isEmpty ? "Onbekend" : $0.scale }).sorted()
+    }
+
     private var movingAvg: [(date: Date, kg: Double)] {
         chartWeights.map { w in
             let window = weights.filter { $0.date > w.date.addingTimeInterval(-7 * 86_400) && $0.date <= w.date }
@@ -309,7 +317,7 @@ struct WeightView: View {
                                : Date.FormatStyle.dateTime.month(.abbreviated).year(.twoDigits))
             }
         }
-        .chartForegroundStyleScale(range: [Color.green, .orange, .purple, .cyan, .pink])
+        .chartForegroundStyleScale(domain: scaleDomain, range: [Color.green, .orange, .purple, .cyan, .pink])
         .chartLegend(.hidden)
         .chartOverlay { proxy in
             GeometryReader { geo in

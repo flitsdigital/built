@@ -49,6 +49,9 @@ create table if not exists public.exercises (
   -- spiersplit, en mag een oefening niet dubbel laten meetellen in het volume.
   secondary_muscles jsonb not null default '[]'::jsonb
 );
+-- Gearchiveerd = uit de kiezers en de bibliotheek, maar de rij blijft: anders raakt de
+-- spiergroep van alle historie eronder kwijt.
+alter table public.exercises add column if not exists archived boolean not null default false;
 alter table public.food_products add column if not exists serving_name text not null default '';
 -- 'g' of 'ml' per product, plus de laatst gelogde portie en de OFF-categorieën.
 alter table public.food_products add column if not exists unit        text   not null default 'g';
@@ -538,14 +541,15 @@ begin
     categories = excluded.categories, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.exercises as t (id, user_id, name, muscle, type, created_at, secondary_muscles, updated_at, deleted_at)
+  insert into public.exercises as t (id, user_id, name, muscle, type, created_at, secondary_muscles, archived, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.muscle, 'Overig'), coalesce(r.type, 'Overig'),
-         r.created_at, coalesce(r.secondary_muscles, '[]'::jsonb),
+         r.created_at, coalesce(r.secondary_muscles, '[]'::jsonb), coalesce(r.archived, false),
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.exercises, coalesce(payload->'exercises', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     name = excluded.name, muscle = excluded.muscle, type = excluded.type,
     created_at = excluded.created_at, secondary_muscles = excluded.secondary_muscles,
+    archived = excluded.archived,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 

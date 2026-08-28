@@ -190,6 +190,7 @@ enum Sync {
     }
     private struct ExerciseRow: Codable, Sendable, SyncRow {
         var id: UUID; var name: String; var muscle: String; var type: String; var created_at: Date
+        var archived: Bool?
         var secondary_muscles: [String]? = []
         var updated_at: String?; var deleted_at: String?
     }
@@ -347,7 +348,8 @@ enum Sync {
     }
     private static func row(_ e: Exercise, _ at: String?) -> ExerciseRow {
         ExerciseRow(id: e.syncID, name: e.name, muscle: e.muscle, type: e.type,
-                    created_at: e.createdAt, secondary_muscles: e.secondaryMuscles, updated_at: at)
+                    created_at: e.createdAt, archived: e.archived,
+                    secondary_muscles: e.secondaryMuscles, updated_at: at)
     }
     private static func row(_ e: Scale, _ at: String?) -> ScaleRow {
         ScaleRow(id: e.syncID, name: e.name, updated_at: at)
@@ -667,6 +669,8 @@ enum Sync {
     private static func apply(_ r: ExerciseRow, to m: Exercise) {
         m.name = r.name; m.muscle = r.muscle; m.type = r.type; m.createdAt = r.created_at
         m.secondaryMuscles = r.secondary_muscles ?? []
+        // Zie `apply(_ r: SetRow…)`: nil is "die kolom bestaat daar niet", niet "leeg".
+        if let a = r.archived { m.archived = a }
     }
     private static func apply(_ r: ScaleRow, to m: Scale) { m.name = r.name }
     private static func apply(_ r: CustomHabitRow, to m: CustomHabit) {

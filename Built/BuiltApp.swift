@@ -220,8 +220,6 @@ struct RootView: View {
                 tabPage(1) { NavigationStack { TrainingView(profile: profile, isVisible: tab == 1).tabBarClearance() } }
                 tabPage(2) { NavigationStack { FoodView(profile: profile, isVisible: tab == 2).tabBarClearance() } }
                 tabPage(3) { NavigationStack { WeightView(isVisible: tab == 3, profile: profile).tabBarClearance() } }
-                tabPage(4) { NavigationStack { InsightsView(profile: profile, isVisible: tab == 4).tabBarClearance() } }
-                tabPage(5) { NavigationStack { LogbookView(profile: profile, isVisible: tab == 5).tabBarClearance() } }
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
@@ -256,13 +254,14 @@ struct FloatingTabBar: View {
     @Binding var selection: Int
     @Namespace private var pill
 
+    // Vier. Inzicht en Logboek zaten er ook in, en dan waren het er zes — één meer dan
+    // waar iOS z'n tabbalk op ontworpen is, en de labels verdrongen elkaar. Allebei zijn
+    // ze nu een rij onderaan Vandaag: je kijkt er terug, niet dagelijks.
     private let items: [(icon: String, label: String)] = [
         ("flame.fill", "Vandaag"),
         ("dumbbell.fill", "Training"),
         ("fork.knife", "Eten"),
         ("chart.line.uptrend.xyaxis", "Gewicht"),
-        ("sparkles", "Inzicht"),
-        ("book.fill", "Logboek"),
     ]
 
     var body: some View {

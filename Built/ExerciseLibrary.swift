@@ -15,6 +15,10 @@ final class Exercise {
     /// bepaalt waar de oefening in de bibliotheek en de spiersplit terechtkomt — dat blijft
     /// één spier, anders telt een oefening meerdere keren mee in het volume.
     var secondaryMuscles: [String] = []
+    /// Uit de kiezers en de bibliotheek, maar de rij blijft bestaan. Verwijderen wiste 'm
+    /// echt, en omdat sets op naam koppelen viel al dat volume daarna onder "Overig" in
+    /// Volume per spiergroep — de historie was dus stilletjes van spiergroep veranderd.
+    var archived: Bool = false
 
     init(name: String, muscle: String = Exercise.muscles.last!, type: String = Exercise.types.last!,
          secondaryMuscles: [String] = []) {
@@ -231,6 +235,7 @@ struct ExercisePickerSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \Exercise.name) private var exercises: [Exercise]
+    @Query private var sets: [SetEntry]
     @State private var query = ""
     @State private var muscleFilter: String?
     @State private var creating = false
@@ -243,10 +248,58 @@ struct ExercisePickerSheet: View {
 
     private var filtered: [Exercise] {
         exercises.filter { ex in
-            !exclude.contains(ex.name)
+            !ex.archived && !exclude.contains(ex.name)
                 && (muscleFilter == nil || ex.muscle == muscleFilter)
                 && (query.isEmpty || ex.name.localizedCaseInsensitiveContains(query))
         }
+    }
+
+    /// Je acht meest gelogde oefeningen van het laatste kwartaal, bovenaan.
+    ///
+    /// De catalogus telt er ruim honderd en jij gebruikt er twintig; alfabetisch betekende
+    /// dat je bij elke training langs Crosstrainer scrolde om bij Leg Extension te komen.
+    /// Alleen als je niet zoekt en niet filtert — dan heb je zelf al gezegd wat je zoekt.
+    private var frequent: [Exercise] {
+        guard query.isEmpty, muscleFilter == nil else { return [] }
+        let cutoff = Date.now.addingTimeInterval(-90 * 86_400)
+        var counts: [String: Int] = [:]
+        for s in sets where s.date >= cutoff { counts[s.exercise, default: 0] += 1 }
+        return exercises
+            .filter { !$0.archived && !exclude.contains($0.name) && (counts[$0.name] ?? 0) > 0 }
+            .sorted { (counts[$0.name] ?? 0, $1.name) > (counts[$1.name] ?? 0, $0.name) }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    /// Eén rij in de kiezer. Staat apart omdat "Vaak gebruikt" en "Alle oefeningen"
+    /// dezelfde rij tonen.
+    private func pickerRow(_ ex: Exercise) -> some View {
+        let isPicked = selected.contains(ex.name)
+        return HStack(spacing: 8) {
+            Button {
+                toggle(ex.name)
+            } label: {
+                ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(isPicked ? [.isSelected] : [])
+            // De rechterkant is van de ⓘ: hier zoek je uit wélke oefening je kiest, en dan
+            // wil je erbij kunnen zonder eerst aan te vinken. Een knop en geen
+            // NavigationLink — die zet er in een List zelf een chevron achter, en dan staat
+            // de ⓘ ineens midden in de rij.
+            Button {
+                detail = ExerciseName(ex.name)
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Voortgang van \(ex.name)")
+        }
+        // De rijkleur draagt de selectie nu alleen; de bevestigbalk onderin noemt ze bij
+        // naam, dus kleur is niet het enige signaal.
+        .listRowBackground(isPicked ? Color.green.opacity(0.18) : nil)
     }
 
     var body: some View {
@@ -260,33 +313,16 @@ struct ExercisePickerSheet: View {
                             .foregroundStyle(.green)
                     }
                 }
-                ForEach(filtered) { ex in
-                    let isPicked = selected.contains(ex.name)
-                    HStack(spacing: 8) {
-                        Button {
-                            toggle(ex.name)
-                        } label: {
-                            ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(isPicked ? [.isSelected] : [])
-                        // De rechterkant is van de ⓘ: hier zoek je uit wélke oefening je
-                        // kiest, en dan wil je erbij kunnen zonder eerst aan te vinken.
-                        // Een knop en geen NavigationLink — die zet er in een List zelf een
-                        // chevron achter, en dan staat de ⓘ ineens midden in de rij.
-                        Button {
-                            detail = ExerciseName(ex.name)
-                        } label: {
-                            Image(systemName: "info.circle")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Voortgang van \(ex.name)")
+                let often = frequent
+                if !often.isEmpty {
+                    Section("Vaak gebruikt") {
+                        ForEach(often) { pickerRow($0) }
                     }
-                    // De rijkleur draagt de selectie nu alleen; de bevestigbalk onderin
-                    // noemt ze bij naam, dus kleur is niet het enige signaal.
-                    .listRowBackground(isPicked ? Color.green.opacity(0.18) : nil)
+                }
+                Section {
+                    ForEach(filtered) { pickerRow($0) }
+                } header: {
+                    if !often.isEmpty { Text("Alle oefeningen") }
                 }
                 if filtered.isEmpty && !query.isEmpty {
                     Button {
@@ -426,16 +462,20 @@ extension Exercise: SyncedRecord {
 struct ExerciseLibraryView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Exercise.name) private var exercises: [Exercise]
+    @Query private var sets: [SetEntry]
     @State private var query = ""
     @State private var muscleFilter: String?
     @State private var creating = false
 
     private var filtered: [Exercise] {
         exercises.filter { ex in
-            (muscleFilter == nil || ex.muscle == muscleFilter)
+            !ex.archived
+                && (muscleFilter == nil || ex.muscle == muscleFilter)
                 && (query.isEmpty || ex.name.localizedCaseInsensitiveContains(query))
         }
     }
+
+    private var archived: [Exercise] { exercises.filter(\.archived) }
 
     private var byMuscle: [(muscle: String, items: [Exercise])] {
         Exercise.muscles.compactMap { m in
@@ -463,12 +503,33 @@ struct ExerciseLibraryView: View {
                             ExerciseRow(name: ex.name, muscle: nil, type: ex.type)
                         }
                     }
+                    // Geen `onDelete`: verwijderen wiste de rij, en omdat sets op naam
+                    // koppelen viel al dat volume daarna onder "Overig".
                     .onDelete { offsets in
-                        for i in offsets { context.deleteSynced(group.items[i]) }
+                        for i in offsets { group.items[i].archived = true }
                     }
                 }
             }
+            if !archived.isEmpty {
+                Section {
+                    ForEach(archived) { ex in
+                        HStack {
+                            ExerciseRow(name: ex.name, muscle: ex.muscle, type: ex.type)
+                            Spacer()
+                            Button("Terug") { ex.archived = false }
+                                .font(.footnote.bold())
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                } header: {
+                    Text("Gearchiveerd")
+                } footer: {
+                    Text("Uit de kiezers, maar je historie telt gewoon mee bij de juiste spiergroep.")
+                }
+            }
         }
+        .tabBarClearance()
         .searchable(text: $query, prompt: "Zoek oefening")
         .navigationTitle("Oefeningen")
         .navigationBarTitleDisplayMode(.inline)
@@ -529,6 +590,7 @@ struct ExerciseEditor: View {
                 Text("Alleen ter informatie: de spiergroep hierboven bepaalt waar de oefening in de bibliotheek en de spiersplit landt.")
             }
         }
+        .tabBarClearance()
         .navigationTitle(name.isEmpty ? exercise.name : name)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { if original.isEmpty { name = exercise.name; original = exercise.name } }

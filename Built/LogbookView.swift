@@ -147,7 +147,8 @@ struct LogbookView: View {
             .padding(.bottom, 24)
         }
         .background(Color(.systemGroupedBackground))
-        .toolbar(.hidden, for: .navigationBar)
+        // De navigatiebalk blijft staan: dit was een tabwortel, en is nu een scherm dat je
+        // vanaf Vandaag opent. Zonder balk is er geen terugknop.
     }
 
     private func dayRow(_ day: Date, _ idx: DayIndex) -> some View {

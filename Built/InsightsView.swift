@@ -322,7 +322,8 @@ struct InsightsView: View {
             .padding(.bottom, 24)
         }
         .background(Color(.systemGroupedBackground))
-        .toolbar(.hidden, for: .navigationBar)
+        // De navigatiebalk blijft staan: dit was een tabwortel, en is nu een scherm dat je
+        // vanaf Vandaag opent. Zonder balk is er geen terugknop.
         .sheet(isPresented: $showReview) { WeeklyReviewSheet(profile: profile) }
         .navigationDestination(item: $selectedDayBox) { box in
             DayDetailView(day: box.day, profile: profile)
@@ -826,6 +827,9 @@ struct ExerciseDetailView: View {
     @Query private var allExercises: [Exercise]
     @AppStorage("exerciseChartMetric") private var metric = ChartMetric.topWeight
     @AppStorage("exerciseChartRange") private var range = ChartRange.year
+    /// De sessie waar de grafiek op staat. `nil` = de laatste; dat is waar je begint te
+    /// kijken, en waar je na een periodewissel weer op uitkomt.
+    @State private var pickedDay: Date?
 
     /// Wat de grafiek uitzet. Topgewicht zegt iets anders dan 1RM: zware triples laten je
     /// topgewicht stijgen terwijl je 1RM vlak blijft, en andersom.
@@ -884,13 +888,56 @@ struct ExerciseDetailView: View {
             .sorted { $0.0 < $1.0 }
     }
 
-    /// Beste gewicht per aantal reps — de tabel waar je in de sportschool op afgaat.
-    /// Alleen reps waar ook echt op gewerkt is; boven de 12 wordt het uithoudingswerk.
-    private var repMaxes: [(reps: Int, kg: Double)] {
+    /// De as om de data heen, met een marge van een vijfde. `.automatic(includesZero: false)`
+    /// liet een derde van het vlak leeg: bij 32–68 kg begon de as op 20 en liep 'ie tot 80.
+    private var chartDomain: ClosedRange<Double> {
+        let vals = chartPoints.map(\.value)
+        guard let lo = vals.min(), let hi = vals.max() else { return 0...1 }
+        let pad = max((hi - lo) * 0.18, 2)
+        return (lo - pad)...(hi + pad)
+    }
+
+    /// De sessies waarin een record viel — het 🏅 in de grafiek.
+    private var prDays: Set<Date> {
+        let badges = prBadges
+        return Set(sets.filter { badges[$0.syncID] != nil }.map { cal.startOfDay(for: $0.date) })
+    }
+
+    /// De sessie die de grafiek uitlicht, en die eronder uitgeschreven staat.
+    private var focusDay: Date? {
+        let points = chartPoints
+        guard let last = points.last?.day else { return nil }
+        guard let picked = pickedDay else { return last }
+        // Na een periodewissel kan de gekozen dag buiten beeld vallen.
+        return points.contains { $0.day == picked } ? picked : last
+    }
+
+    /// De sessie het dichtst bij waar je tikt. Charts geeft een willekeurige datum terug,
+    /// geen punt — dus snappen we zelf.
+    private func nearestDay(to date: Date) -> Date? {
+        chartPoints.min { abs($0.day.timeIntervalSince(date)) < abs($1.day.timeIntervalSince(date)) }?.day
+    }
+
+    /// Beste gewicht per aantal reps, met wat je 1RM-schatting daar zegt.
+    ///
+    /// Alleen het gemeten record was misleidend: deed je 8 reps één keer op een lichte dag,
+    /// dan stond er 32 kg onder een 7-reps-record van 68. Als richtpunt vlak voor je gaat
+    /// tillen is dat waardeloos — de rij hoort af te lopen. De schatting (Epley omgekeerd,
+    /// op je beste 1RM) loopt dat wel, en staat erbij zodra hij noemenswaardig hoger ligt
+    /// dan wat je daar ooit deed.
+    private func potential(_ reps: Int) -> Double? {
+        guard let best = sets.map({ epley($0.weightKg, $0.reps) }).max(), best > 0 else { return nil }
+        return best / (1 + Double(reps) / 30)
+    }
+
+    private var repMaxes: [(reps: Int, kg: Double, potential: Double?)] {
         Dictionary(grouping: sets.filter { (1...12).contains($0.reps) }, by: \.reps)
-            .compactMap { reps, group in
+            .compactMap { reps, group -> (reps: Int, kg: Double, potential: Double?)? in
                 guard let best = group.map(\.weightKg).max(), best > 0 else { return nil }
-                return (reps, best)
+                // 2,5 kg is de kleinste sprong die je op een stang maakt; daaronder is het
+                // ruis en zou de tweede regel alleen maar afleiden.
+                let p = potential(reps).flatMap { $0 >= best + 2.5 ? $0 : nil }
+                return (reps, best, p)
             }
             .sorted { $0.reps < $1.reps }
     }
@@ -979,6 +1026,99 @@ struct ExerciseDetailView: View {
         .accessibilityValue(value.map { "\($0.kgText) kilo" } ?? "geen")
     }
 
+    /// De grafiek van "Verloop".
+    ///
+    /// Rechte lijnen tussen de sessies: `catmullRom` verzon een versnelling die er tussen
+    /// twee trainingen niet was, en schoot bij een sprong van 32 naar 50 kg door boven de
+    /// hoogste meting uit. Een 🏅 staat op de sessies waar een record viel, en de sessie
+    /// waar je op tikt licht op met z'n waarde eronder.
+    private func progressChart(_ points: [(day: Date, value: Double)]) -> some View {
+        let domain = chartDomain
+        let prs = prDays
+        let focus = focusDay
+        return Chart {
+            ForEach(points, id: \.day) { item in
+                AreaMark(x: .value("Dag", item.day),
+                         yStart: .value("Onder", domain.lowerBound),
+                         yEnd: .value(metric.unit, item.value))
+                    .foregroundStyle(.linearGradient(colors: [.green.opacity(0.22), .green.opacity(0.02)],
+                                                     startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value("Dag", item.day), y: .value(metric.unit, item.value))
+                    .foregroundStyle(.green)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            }
+            ForEach(points, id: \.day) { item in
+                PointMark(x: .value("Dag", item.day), y: .value(metric.unit, item.value))
+                    .foregroundStyle(.green)
+                    .symbolSize(item.day == focus ? 110 : 45)
+                    .annotation(position: .top, spacing: 2) {
+                        if prs.contains(item.day) { Text("🏅").font(.caption2) }
+                    }
+                    .annotation(position: .bottomLeading, spacing: 4) {
+                        if item.day == focus {
+                            Text("\(item.value.kgText) kg")
+                                .font(.caption2.bold().monospacedDigit())
+                                .foregroundStyle(.green)
+                        }
+                    }
+            }
+        }
+        .chartYScale(domain: domain)
+        .chartXAxis {
+            // Drie labels, niet vier: de vierde stond tegen de rand en werd afgekapt ("24…").
+            AxisMarks(values: .automatic(desiredCount: 3)) {
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                guard let plotFrame = proxy.plotFrame else { return }
+                                let origin = geo[plotFrame].origin
+                                if let date: Date = proxy.value(atX: value.location.x - origin.x) {
+                                    pickedDay = nearestDay(to: date)
+                                }
+                            }
+                    )
+            }
+        }
+        .frame(height: 200)
+        .padding(.vertical, 8)
+    }
+
+    /// De uitgelichte sessie, uitgeschreven onder de grafiek. Een punt in een lijn zegt
+    /// "60 kg"; dit zegt met welke sets je daar kwam.
+    private func focusRow(_ day: Date) -> some View {
+        let daySets = sets.filter { dayKey($0.date) == dayKey(day) }
+        let badges = prBadges
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(day.formatted(.dateTime.weekday(.wide).day().month()))
+                .font(.subheadline.bold())
+            ScrollView(.horizontal) {
+                HStack(spacing: 6) {
+                    ForEach(daySets, id: \.syncID) { set in
+                        let pr = badges[set.syncID] != nil
+                        Text("\(set.weightKg.kgText)×\(set.reps)")
+                            .font(.footnote.monospacedDigit())
+                            .foregroundStyle(pr ? Color.green : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(pr ? Color.builtTint(.green) : Color(.tertiarySystemFill),
+                                        in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+        .padding(.vertical, 2)
+    }
+
     var body: some View {
         List {
             Section {
@@ -1005,15 +1145,8 @@ struct ExerciseDetailView: View {
                     .listRowSeparator(.hidden)
                     let points = chartPoints
                     if points.count >= 2 {
-                        Chart(points, id: \.day) { item in
-                            LineMark(x: .value("Dag", item.day), y: .value(metric.unit, item.value))
-                                .interpolationMethod(.catmullRom)
-                            PointMark(x: .value("Dag", item.day), y: .value(metric.unit, item.value))
-                        }
-                        .chartYScale(domain: .automatic(includesZero: false))
-                        .foregroundStyle(.green)
-                        .frame(height: 200)
-                        .padding(.vertical, 8)
+                        progressChart(points)
+                        if let day = focusDay { focusRow(day) }
                     } else {
                         Text("Te weinig sessies in deze periode.")
                             .font(.footnote)
@@ -1028,6 +1161,8 @@ struct ExerciseDetailView: View {
                     .listRowSeparator(.hidden)
                 } header: {
                     Text("Verloop")
+                } footer: {
+                    Text("🏅 is een sessie waarin een record viel. Tik op een punt voor de sets van die training.")
                 }
             } else if !sets.isEmpty {
                 // Eén sessie: een lijn door één punt zegt niets, de sets binnen die sessie
@@ -1055,14 +1190,22 @@ struct ExerciseDetailView: View {
             if maxes.count >= 2 {
                 Section {
                     ForEach(maxes, id: \.reps) { item in
-                        LabeledContent("\(item.reps) \(item.reps == 1 ? "rep" : "reps")",
-                                       value: "\(item.kg.kgText) kg")
-                            .monospacedDigit()
+                        LabeledContent {
+                            Text("\(item.kg.kgText) kg")
+                        } label: {
+                            Text("\(item.reps) \(item.reps == 1 ? "rep" : "reps")")
+                            if let p = item.potential {
+                                Text("je 1RM zegt ≈ \(p.kgText) kg")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .monospacedDigit()
                     }
                 } header: {
                     Text("Beste per aantal reps")
                 } footer: {
-                    Text("Je zwaarste set voor elk aantal herhalingen. Handig als richtpunt vlak voor je gaat tillen.")
+                    Text("Je zwaarste set voor elk aantal herhalingen. Staat er een schatting onder, dan ben je daar nog nooit zwaar gegaan — dát is je richtpunt.")
                 }
             }
 
