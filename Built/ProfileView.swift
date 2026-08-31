@@ -44,7 +44,7 @@ struct ProfileView: View {
     /// deze rij scheef tussen de andere.
     private var goalSummary: String {
         let kcal = profile.kcalTarget == 0 ? profile.autoKcal(weights) : profile.kcalTarget
-        return "\(kcal.formatted()) kcal"
+        return "\(profile.trainingsPerWeek)×/week · \(kcal.formatted()) kcal"
     }
 
     private var accountSummary: String {
@@ -79,12 +79,8 @@ struct ProfileView: View {
             }
 
             Section {
-                row("Doel & voeding", "target", value: goalSummary) {
+                row("Doel & trainen", "target", value: goalSummary) {
                     GoalSettingsView(profile: profile)
-                }
-                row("Trainen", "figure.strengthtraining.traditional",
-                    value: "\(profile.trainingsPerWeek)×/week") {
-                    TrainingSettingsView(profile: profile)
                 }
                 row("Habits", "checklist", value: "\(activeHabits) actief") {
                     HabitsSettingsView(profile: profile)
@@ -144,6 +140,7 @@ struct ProfileView: View {
 struct GoalSettingsView: View {
     @Bindable var profile: Profile
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
+    @AppStorage("restSeconds") private var restSeconds = 120
     @State private var confirmNewPhase = false
 
     private var autoKcal: Int { profile.autoKcal(weights) }
@@ -156,40 +153,19 @@ struct GoalSettingsView: View {
                 }
                 // Aanpasbaar, want het komt uit de onboarding en die vult niet iedereen
                 // meteen goed in. Het voedt de voortgangsbalk, het tempo en de projectie.
-                LabeledContent("Startgewicht") {
-                    HStack(spacing: 4) {
-                        TextField("70", value: $profile.startWeight, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 64)
-                        Text("kg").foregroundStyle(.secondary)
-                    }
+                BuiltNumberRow(label: "Startgewicht", unit: "kg", width: 64, decimal: true) {
+                    TextField("70", value: $profile.startWeight, format: .number)
                 }
-                LabeledContent("Doelgewicht") {
-                    HStack(spacing: 4) {
-                        TextField("75", value: $profile.goalWeight, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 64)
-                        Text("kg").foregroundStyle(.secondary)
-                    }
+                BuiltNumberRow(label: "Doelgewicht", unit: "kg", width: 64, decimal: true) {
+                    TextField("75", value: $profile.goalWeight, format: .number)
                 }
                 DatePicker("Deadline", selection: $profile.goalDate, in: Date.now..., displayedComponents: .date)
                 Stepper("Training: \(profile.trainingsPerWeek)×/week", value: $profile.trainingsPerWeek, in: 1...7)
-                LabeledContent("Lengte") {
-                    HStack(spacing: 4) {
-                        TextField("180", value: $profile.heightCm, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 64)
-                        Text("cm").foregroundStyle(.secondary)
-                    }
+                BuiltNumberRow(label: "Lengte", unit: "cm", width: 64) {
+                    TextField("180", value: $profile.heightCm, format: .number)
                 }
-                LabeledContent("Leeftijd") {
+                BuiltNumberRow(label: "Leeftijd", width: 64) {
                     TextField("25", value: $profile.age, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 64)
                 }
             } header: {
                 Text("Jouw doel")
@@ -198,17 +174,11 @@ struct GoalSettingsView: View {
             Section {
                 LabeledContent("Eiwitdoel", value: "\(profile.proteinTarget) g/dag")
                 LabeledContent("Tempo", value: "\(profile.weeklyRate >= 0 ? "+" : "")\(profile.weeklyRate.formatted(.number.precision(.fractionLength(2)))) kg/week")
-                LabeledContent("Calorie-doel") {
-                    HStack(spacing: 4) {
-                        TextField("\(autoKcal)", value: Binding(
-                            get: { profile.kcalTarget == 0 ? nil : profile.kcalTarget },
-                            set: { profile.kcalTarget = $0 ?? 0 }
-                        ), format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 70)
-                        Text("kcal").foregroundStyle(.secondary)
-                    }
+                BuiltNumberRow(label: "Calorie-doel", unit: "kcal") {
+                    TextField("\(autoKcal)", value: Binding(
+                        get: { profile.kcalTarget == 0 ? nil : profile.kcalTarget },
+                        set: { profile.kcalTarget = $0 ?? 0 }
+                    ), format: .number)
                 }
             } header: {
                 Text("Berekend uit je doel")
@@ -222,13 +192,29 @@ struct GoalSettingsView: View {
             }
 
             Section {
+                Picker(selection: $restSeconds) {
+                    Text("Uit").tag(0)
+                    Text("1:00").tag(60)
+                    Text("1:30").tag(90)
+                    Text("2:00").tag(120)
+                    Text("3:00").tag(180)
+                } label: {
+                    Label("Rust-timer", systemImage: "timer")
+                }
+            } header: {
+                Text("Trainen")
+            } footer: {
+                Text("De rust-timer start automatisch na elke afgevinkte set. Geen vaste trainingsdagen: zolang je je weekdoel nog kunt halen is elke dag een rustdag die als gehaald telt.")
+            }
+
+            Section {
                 Button("Nieuwe fase starten") { confirmNewPhase = true }
             } footer: {
                 Text("Herijkt je startpunt naar je huidige gewicht en vandaag — handig bij een nieuwe cut of bulk. Je historie blijft staan.")
             }
         }
         .tabBarClearance()
-        .navigationTitle("Doel & voeding")
+        .navigationTitle("Doel & trainen")
         .navigationBarTitleDisplayMode(.inline)
         .scrollDismissesKeyboard(.interactively)
         .confirmationDialog("Nieuwe fase starten?", isPresented: $confirmNewPhase, titleVisibility: .visible) {
@@ -240,43 +226,6 @@ struct GoalSettingsView: View {
         } message: {
             Text("Je startgewicht wordt je huidige gewicht en de startdatum wordt vandaag. Projecties beginnen opnieuw; je metingen en trainingen blijven staan.")
         }
-    }
-}
-
-// MARK: - Trainen
-
-/// Weekdoel en rust-timer: alles wat over de week zelf gaat.
-struct TrainingSettingsView: View {
-    @Bindable var profile: Profile
-    @AppStorage("restSeconds") private var restSeconds = 120
-
-    var body: some View {
-        List {
-            Section {
-                Stepper("Training: \(profile.trainingsPerWeek)×/week", value: $profile.trainingsPerWeek, in: 1...7)
-            } header: {
-                Text("Weekdoel")
-            } footer: {
-                Text("Geen vaste dagen: zolang je je doel deze week nog kunt halen is elke dag een rustdag die als gehaald telt. Pas als er net zoveel dagen over zijn als trainingen, moet je.")
-            }
-
-            Section {
-                Picker(selection: $restSeconds) {
-                    Text("Uit").tag(0)
-                    Text("1:00").tag(60)
-                    Text("1:30").tag(90)
-                    Text("2:00").tag(120)
-                    Text("3:00").tag(180)
-                } label: {
-                    Label("Rust-timer", systemImage: "timer")
-                }
-            } footer: {
-                Text("De rust-timer start automatisch na elke afgevinkte set.")
-            }
-        }
-        .tabBarClearance()
-        .navigationTitle("Trainen")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -355,7 +304,7 @@ struct HabitsSettingsView: View {
         } message: {
             Text("Komt in je dagelijkse checklist en weekoverzicht. Telt niet mee voor de Groei Score.")
         }
-        .alert("Habit hernoemen", isPresented: Binding(get: { renameHabit != nil }, set: { if !$0 { renameHabit = nil } })) {
+        .alert("Habit hernoemen", isPresented: .isPresent($renameHabit)) {
             TextField("Naam", text: $renameText)
             Button("Opslaan") {
                 if let h = renameHabit { renameCustomHabit(h, to: renameText) }
@@ -364,9 +313,7 @@ struct HabitsSettingsView: View {
             Button("Annuleer", role: .cancel) { renameHabit = nil }
         }
         .confirmationDialog("Habit én alle vinkjes ervan verwijderen?",
-                            isPresented: Binding(get: { habitToDelete != nil },
-                                                 set: { if !$0 { habitToDelete = nil } }),
-                            titleVisibility: .visible) {
+                            isPresented: .isPresent($habitToDelete), titleVisibility: .visible) {
             Button("Verwijder \"\(habitToDelete?.name ?? "")\"", role: .destructive) {
                 if let habitToDelete { context.deleteSynced(habitToDelete) }
                 habitToDelete = nil
@@ -424,9 +371,7 @@ struct ScalesSettingsView: View {
             Button("Annuleer", role: .cancel) { scaleName = "" }
         }
         .confirmationDialog("Weegschaal verwijderen? Bestaande metingen blijven staan.",
-                            isPresented: Binding(get: { scaleToDelete != nil },
-                                                 set: { if !$0 { scaleToDelete = nil } }),
-                            titleVisibility: .visible) {
+                            isPresented: .isPresent($scaleToDelete), titleVisibility: .visible) {
             Button("Verwijder \"\(scaleToDelete?.name ?? "")\"", role: .destructive) {
                 if let scaleToDelete { context.deleteSynced(scaleToDelete) }
                 scaleToDelete = nil

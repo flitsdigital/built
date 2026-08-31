@@ -475,9 +475,8 @@ struct WeightLogSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Opslaan") {
-                        let entryDate = Calendar.current.isDateInToday(date)
-                            ? Date.now
-                            : Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: date) ?? date
+                        // 9:00 voor een terug-gelogde weging: die doe je 's ochtends.
+                        let entryDate = timestamp(on: date, hour: 9)
                         if let entry {
                             entry.kg = kg ?? entry.kg
                             entry.scale = selectedScale

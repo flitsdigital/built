@@ -62,8 +62,6 @@ final class Exercise {
 
         if existing.isEmpty {
             for (name, muscle, type) in seed { seedRow(name, muscle, type) }
-            // Cardio hoort bij de standaardcatalogus.
-            for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
         }
         // Cardio kwam later — eenmalig bijplaatsen bij installs van vóór die versie.
         //
@@ -462,7 +460,6 @@ extension Exercise: SyncedRecord {
 struct ExerciseLibraryView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \Exercise.name) private var exercises: [Exercise]
-    @Query private var sets: [SetEntry]
     @State private var query = ""
     @State private var muscleFilter: String?
     @State private var creating = false

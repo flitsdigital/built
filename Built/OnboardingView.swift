@@ -165,6 +165,21 @@ struct OnboardingView: View {
             .padding(.horizontal, 20)
     }
 
+    /// Label links, kg-veld rechts. Stond twee keer identiek — stap 2 en stap 3.
+    private func weightRow(_ label: String, _ value: Binding<Double>) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            TextField("kg", value: value, format: .number)
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 80)
+            Text("kg").foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
     private func primaryButton(_ label: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)
@@ -353,17 +368,7 @@ struct OnboardingView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 Divider().padding(.leading, 16)
-                HStack {
-                    Text("Huidig gewicht")
-                    Spacer()
-                    TextField("kg", value: $weight, format: .number)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                    Text("kg").foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
+                weightRow("Huidig gewicht", $weight)
             }
             if !weightValid {
                 hint("Vul een gewicht tussen \(weightRangeText) in.")
@@ -379,17 +384,7 @@ struct OnboardingView: View {
         VStack(spacing: 24) {
             title("Jouw doel", "Waar werken we naartoe?")
             inputCard {
-                HStack {
-                    Text("Doelgewicht")
-                    Spacer()
-                    TextField("kg", value: $goalWeight, format: .number)
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                    Text("kg").foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
+                weightRow("Doelgewicht", $goalWeight)
                 Divider().padding(.leading, 16)
                 DatePicker("Deadline", selection: $goalDate, in: Date.now..., displayedComponents: .date)
                     .padding(.horizontal, 16)

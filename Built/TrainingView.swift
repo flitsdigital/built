@@ -677,9 +677,7 @@ struct TrainingView: View {
         .animation(.snappy(duration: 0.3), value: prToast)
         .sensoryFeedback(.success, trigger: prToast) { _, new in new != nil }
         .confirmationDialog("Training verwijderen?",
-                            isPresented: Binding(get: { sessionToDelete != nil },
-                                                 set: { if !$0 { sessionToDelete = nil } }),
-                            titleVisibility: .visible) {
+                            isPresented: .isPresent($sessionToDelete), titleVisibility: .visible) {
             Button("Verwijder \(sessionToDelete?.sets.count ?? 0) sets", role: .destructive) {
                 for s in sessionToDelete?.sets ?? [] { context.deleteSynced(s) }
                 sessionToDelete = nil
@@ -687,9 +685,7 @@ struct TrainingView: View {
             Button("Annuleer", role: .cancel) { sessionToDelete = nil }
         }
         .confirmationDialog("Oefening verwijderen?",
-                            isPresented: Binding(get: { exerciseToRemove != nil },
-                                                 set: { if !$0 { exerciseToRemove = nil } }),
-                            titleVisibility: .visible) {
+                            isPresented: .isPresent($exerciseToRemove), titleVisibility: .visible) {
             Button("Verwijder oefening en sets", role: .destructive) {
                 if let id = exerciseToRemove { removeExercise(id) }
                 exerciseToRemove = nil
@@ -798,20 +794,21 @@ struct TrainingView: View {
 
     // MARK: - Routine-identiteit
 
+    /// De waarde die het vaakst voorkomt onder de oefeningen van deze routine.
+    private func dominant(_ routine: Routine, _ lookup: [String: String]) -> String? {
+        var tally: [String: Int] = [:]
+        for name in routine.exercises { tally[lookup[name] ?? "Overig", default: 0] += 1 }
+        return tally.max { $0.value < $1.value }?.key
+    }
+
     /// Dominante spiergroep bepaalt de kleur — zo herken je Push van Legs zonder te lezen.
     private func routineColor(_ routine: Routine, _ history: HistoryIndex) -> Color {
-        var tally: [String: Int] = [:]
-        for name in routine.exercises { tally[history.muscleOf[name] ?? "Overig", default: 0] += 1 }
-        guard let top = tally.max(by: { $0.value < $1.value })?.key else { return .green }
-        return .muscle(top)
+        dominant(routine, history.muscleOf).map(Color.muscle) ?? .green
     }
 
     private func routineIcon(_ routine: Routine, _ history: HistoryIndex) -> String {
         guard !routine.exercises.isEmpty else { return "square.and.pencil" }
-        var tally: [String: Int] = [:]
-        for name in routine.exercises { tally[history.typeOf[name] ?? "Overig", default: 0] += 1 }
-        let top = tally.max { $0.value < $1.value }?.key ?? "Overig"
-        return Exercise.typeIcon[top] ?? "dumbbell"
+        return Exercise.typeIcon[dominant(routine, history.typeOf) ?? "Overig"] ?? "dumbbell"
     }
 
     private func routineCard(_ routine: Routine, _ history: HistoryIndex) -> some View {

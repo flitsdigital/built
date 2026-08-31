@@ -13,3 +13,6 @@ build/
 
 # Supabase CLI — lokale state (projectkoppeling, versiecache)
 supabase/.temp/
+
+# Agent-worktrees — wegwerpkopieën van de repo
+.claude/worktrees/
