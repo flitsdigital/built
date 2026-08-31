@@ -20,6 +20,11 @@ struct DashboardView: View {
     @State private var showWeightSheet = false
     @State private var showSleepSheet = false
     @State private var showCheckIn = false
+#if DEBUG
+    /// ponytail: `simctl launch … -demoCheckIn` opent de drawer meteen, zodat je 'm kunt
+    /// bekijken zonder eerst door het dashboard te scrollen.
+    private let demoCheckIn = ProcessInfo.processInfo.arguments.contains("-demoCheckIn")
+#endif
     @State private var showWeeklyReview = false
     @AppStorage("lastReviewWeek") private var lastReviewWeek = 0
     @State private var appeared = false
@@ -259,6 +264,9 @@ struct DashboardView: View {
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: selectedDay) }
         .sheet(isPresented: $showSleepSheet) { SleepSheet(day: selectedDay) }
         .sheet(isPresented: $showCheckIn) { CheckInSheet(day: selectedDay) }
+#if DEBUG
+        .onAppear { if demoCheckIn { showCheckIn = true } }
+#endif
     }
 
     // MARK: - Kaarten
@@ -608,7 +616,7 @@ struct DashboardView: View {
                                 .foregroundStyle(.primary)
                             StreakBadge(days: habitStreak { idx.habits($0)?.checkedIn == true })
                         }
-                        Text(h?.checkedIn == true ? "Tik om aan te passen" : "5 korte vragen · ±20 seconden")
+                        Text(h?.checkedIn == true ? "Tik om aan te passen" : "\(DayHabits.checkIns.count) korte vragen · ±20 seconden")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
