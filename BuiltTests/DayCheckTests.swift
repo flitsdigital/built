@@ -328,3 +328,64 @@ struct DayCheckTests {
         #expect(DayCheck.streak(index: DayIndex(), profile: profile) == 0)
     }
 }
+
+/// De vrije tekst van de check-in leeft in `journal`, het veld dat er al was. Die keuze
+/// staat of valt met de vertaalslag ertussen: één notitie eruit halen en er één in
+/// terugzetten, zonder dat er een tweede naast komt of een lege blijft staan.
+@Suite("Check-in-notitie")
+struct CheckInNoteTests {
+
+    @Test("Leeg als er niets staat")
+    func leeg() {
+        #expect(DayHabits().checkInNote.isEmpty)
+    }
+
+    @Test("Tekst wordt één notitie")
+    func schrijven() {
+        let day = DayHabits()
+        day.checkInNote = "Knie zeurde bij squats"
+        #expect(day.journal.count == 1)
+        #expect(day.checkInNote == "Knie zeurde bij squats")
+    }
+
+    /// Anders staat er na drie keer bijwerken een dagboek van drie regels waarvan er twee
+    /// achterhaald zijn.
+    @Test("Bijwerken vervangt dezelfde notitie")
+    func bijwerken() {
+        let day = DayHabits()
+        day.checkInNote = "Eerste"
+        let id = day.journal[0].id
+        day.checkInNote = "Tweede"
+        #expect(day.journal.count == 1)
+        #expect(day.journal[0].id == id)
+        #expect(day.checkInNote == "Tweede")
+    }
+
+    /// Een dag zonder tekst hoort geen lege rij in je historie te zijn.
+    @Test("Leegmaken haalt de notitie weg")
+    func wissen() {
+        let day = DayHabits()
+        day.checkInNote = "Iets"
+        day.checkInNote = "   \n "
+        #expect(day.journal.isEmpty)
+        #expect(day.checkInNote.isEmpty)
+    }
+
+    @Test("Spaties eromheen tellen niet mee")
+    func trimmen() {
+        let day = DayHabits()
+        day.checkInNote = "  Goed geslapen \n"
+        #expect(day.checkInNote == "Goed geslapen")
+    }
+
+    /// De setter draait bij elke render van het tekstveld; zonder deze bewaking is elke
+    /// render een wijziging, en dus een sync-push.
+    @Test("Dezelfde tekst opnieuw zetten verandert niets")
+    func geenLozeSchrijfactie() {
+        let day = DayHabits()
+        day.checkInNote = "Zelfde"
+        let voor = day.journal[0]
+        day.checkInNote = "Zelfde"
+        #expect(day.journal == [voor])
+    }
+}

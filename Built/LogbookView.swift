@@ -324,6 +324,11 @@ struct DayDetailView: View {
             Section {
                 // Slaapkwaliteit valt af: die heeft hieronder z'n eigen rij in Slaap.
                 ForEach(DayHabits.checkIns.dropLast()) { checkInPicker($0) }
+                // Wat je in de check-in typte staat hier, en is hier te wijzigen — anders
+                // schrijf je een dag toe aan een veld dat je nooit meer terugziet.
+                TextField("Wil je nog wat kwijt?", text: bind(\.checkInNote, default: ""),
+                          axis: .vertical)
+                    .lineLimit(1...6)
             } header: {
                 Text("Check-in")
             } footer: {

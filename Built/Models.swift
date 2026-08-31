@@ -765,6 +765,33 @@ final class DayHabits {
 
     /// Dag-check-in ingevuld? Eén van de vier is genoeg — anders voelt het als huiswerk.
     var checkedIn: Bool { energy > 0 || mood > 0 || soreness > 0 || stress > 0 }
+
+    /// De vrije tekst aan het eind van de check-in.
+    ///
+    /// Ligt in `journal`, het veld dat er al was en al meesynchroniseert — een eigen kolom
+    /// ernaast zou dezelfde soort tekst op twee plekken zetten. De check-in houdt er één
+    /// per dag; de array blijft een array, want meerdere getimede notities per dag is waar
+    /// `journal` voor bedoeld is.
+    ///
+    /// Leeg maken haalt de notitie weg in plaats van een lege achter te laten: een dag
+    /// zonder tekst hoort geen rij in je historie te zijn.
+    var checkInNote: String {
+        get { journal.first?.text ?? "" }
+        set {
+            let text = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            var notes = journal
+            if text.isEmpty {
+                guard !notes.isEmpty else { return }
+                notes.removeFirst()
+            } else if notes.isEmpty {
+                notes = [JournalNote(text: text)]
+            } else {
+                guard notes[0].text != text else { return } // anders is elke render een wijziging
+                notes[0].text = text
+            }
+            journal = notes
+        }
+    }
 }
 
 // MARK: - Dag-check-in

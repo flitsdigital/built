@@ -12,6 +12,10 @@ struct CheckInSheet: View {
     @Query private var allHabits: [DayHabits]
     @State private var step = 0
     @State private var goingBack = false
+    /// Los van de store: per toetsaanslag schrijven maakt van elke letter een
+    /// sync-wijziging. Landt bij het doorschuiven en bij het sluiten.
+    @State private var note = ""
+    @FocusState private var noteFocused: Bool
     // Emoji schalen niet mee met Dynamic Type; @ScaledMetric doet dat alsnog, anders
     // krijgt wie grote letters nodig heeft juist hier de kleinste doelen.
     @ScaledMetric(relativeTo: .largeTitle) private var tileWide: CGFloat = 76
@@ -26,9 +30,21 @@ struct CheckInSheet: View {
     private var questions: [CheckIn] { DayHabits.checkIns }
 
     private var record: DayHabits? { allHabits.first { dayKey($0.date) == dayKey(day) } }
-    private var onSummary: Bool { step >= questions.count }
+    private var onSummary: Bool { step > noteStep }
 
     private func value(_ q: CheckIn) -> Int { record?[keyPath: q.key] ?? 0 }
+
+    /// De vrije tekst is de laatste stap; daarna pas de afsluiter.
+    private var noteStep: Int { questions.count }
+    private var stepCount: Int { questions.count + 1 }
+
+    /// Alleen schrijven als er iets veranderd is: anders maakt het openen van de check-in
+    /// al een `DayHabits`-rij aan voor een dag waar je verder niets invulde.
+    private func saveNote() {
+        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text != (record?.checkInNote ?? "") else { return }
+        context.habits(on: day).checkInNote = text
+    }
 
     private var streak: Int {
         // Eén keer indexeren: habitStreak liep hier per dag opnieuw door alle dagen.
@@ -57,7 +73,8 @@ struct CheckInSheet: View {
         VStack(spacing: 0) {
             headerBar
             Group {
-                if onSummary { summary } else { questionStep(questions[step]) }
+                if onSummary { summary } else if step == noteStep { noteStepView }
+                else { questionStep(questions[step]) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .transition(.asymmetric(
@@ -69,6 +86,10 @@ struct CheckInSheet: View {
         .presentationDragIndicator(.hidden)
         .sensoryFeedback(.selection, trigger: step)
         .interactiveDismissDisabled(false)
+        .onAppear { note = record?.checkInNote ?? "" }
+        // Wegvegen is hier een geldige manier om te stoppen, dus mag het niet wissen wat
+        // je net typte.
+        .onDisappear(perform: saveNote)
     }
 
     // MARK: - Kop: voortgang + terug/sluiten
@@ -88,7 +109,7 @@ struct CheckInSheet: View {
                 .disabled(step == 0)
                 .accessibilityLabel("Vorige vraag")
                 Spacer()
-                Text(onSummary ? "KLAAR" : "STAP \(step + 1) VAN \(questions.count)")
+                Text(onSummary ? "KLAAR" : "STAP \(step + 1) VAN \(stepCount)")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.tertiary)
                     .tracking(0.8)
@@ -106,7 +127,7 @@ struct CheckInSheet: View {
                 .accessibilityLabel("Sluiten")
             }
             HStack(spacing: 4) {
-                ForEach(questions.indices, id: \.self) { i in
+                ForEach(0..<stepCount, id: \.self) { i in
                     Capsule()
                         .fill(i <= step ? Color.green : Color(.quaternarySystemFill))
                         .frame(height: 4)
@@ -184,6 +205,68 @@ struct CheckInSheet: View {
             .foregroundStyle(.tertiary)
             .padding(.bottom, 18)
         }
+    }
+
+    // MARK: - Vrije tekst
+
+    /// Vijf emoji-schalen vangen hoe een dag voelde, niet wat er gebeurde. Eén veld waarin
+    /// je dat kwijt kunt, en dat je mag overslaan.
+    private var noteStepView: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 8)
+            VStack(spacing: 6) {
+                Text("Wil je nog wat kwijt?")
+                    .font(.title2.bold())
+                    .multilineTextAlignment(.center)
+                Text("Wat je hierboven niet in een emoji kwijt kon.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 16)
+
+            TextField("Vandaag was…", text: $note, axis: .vertical)
+                .lineLimit(3...6)
+                .focused($noteFocused)
+                .font(.subheadline)
+                .padding(12)
+                .background(Color(.tertiarySystemFill),
+                            in: RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous))
+                .padding(.horizontal, 20)
+
+            Spacer(minLength: 12)
+
+            // Leeg veld = overslaan, en dat is dezelfde tertiaire knop als op elke andere
+            // stap. Een groene primaire knop die "Overslaan" zegt bijt met wat groen in
+            // deze app betekent: gedaan, goed, actief.
+            if note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button("Overslaan") { advance() }
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
+                    .padding(.bottom, 18)
+            } else {
+                Button {
+                    advance()
+                } label: {
+                    Text("Bewaren")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .builtBottomAction()
+            }
+        }
+        .animation(.snappy(duration: 0.2), value: note.isEmpty)
+    }
+
+    private func advance() {
+        noteFocused = false
+        saveNote()
+        goingBack = false
+        withAnimation(.snappy(duration: 0.3)) { step += 1 }
     }
 
     // MARK: - Afsluiter
