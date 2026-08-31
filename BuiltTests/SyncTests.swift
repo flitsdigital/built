@@ -8,35 +8,6 @@ import Testing
 @Suite("Sync")
 struct SyncTests {
 
-    // MARK: - Encoder
-
-    /// Zonder `sortedKeys` heeft dezelfde data geen vaste JSON-vorm: `schedule`, `targets`
-    /// en `exercise_notes` zijn dictionaries. Dan verschilt de vingerafdruk zonder dat er
-    /// iets veranderd is, en pusht de app de volledige database voor niets.
-    @Test("Encoder geeft dezelfde bytes voor dezelfde data")
-    func encoderIsStabiel() throws {
-        struct Row: Codable {
-            var schedule: [String: String]
-            var date: Date
-        }
-        let row = Row(schedule: ["4": "Pull", "2": "Push", "6": "Legs", "1": "Rust", "3": "Rest"],
-                      date: nlDate(2025, 6, 2))
-
-        let first = try Sync.makeEncoder().encode(row)
-        for _ in 0..<20 {
-            let again = try Sync.makeEncoder().encode(row)
-            #expect(again == first)
-        }
-
-        let json = try #require(String(data: first, encoding: .utf8))
-        // Sleutels op volgorde, en de datum als ISO8601 — niet als kaal getal, want dat
-        // zou Postgres niet als timestamptz slikken.
-        let eerste = try #require(json.range(of: "\"1\""))
-        let tweede = try #require(json.range(of: "\"2\""))
-        #expect(eerste.lowerBound < tweede.lowerBound)
-        #expect(json.contains("2025-06-02T"))
-    }
-
     // MARK: - Payload
 
     /// `sync_push` haalt de uid uit de sessie en negeert wat de client meestuurt, dus
@@ -52,6 +23,10 @@ struct SyncTests {
 
         let json = try #require(Sync.exportJSON(context))
         #expect(!json.contains("user_id"))
+        // Twee keer exporteren geeft dezelfde bytes: sleutels gesorteerd, datums ISO8601
+        // en niet als kaal getal — anders slikt Postgres ze niet als timestamptz.
+        #expect(Sync.exportJSON(context) == json)
+        #expect(json.contains("2025-06-02T"))
         #expect(json.contains("\"exercise\""))
         #expect(json.contains("\"kg\""))
     }

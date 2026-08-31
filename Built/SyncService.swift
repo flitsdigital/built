@@ -5,21 +5,10 @@ import Observation
 import AuthenticationServices
 import UIKit
 
-/// ISO8601 mét fracties — precies wat PostgREST zelf ook stuurt.
-///
-/// `ISO8601DateFormatter` is thread-safe voor formatteren maar niet als `Sendable`
-/// gemarkeerd, en de encoder draait op een achtergrond-task. Eén gedeelde instantie achter
-/// `@unchecked Sendable` is goedkoper dan een formatter per datum: dat zijn er duizenden
-/// per push.
-private final class ISODate: @unchecked Sendable {
-    static let shared = ISODate()
-    private let formatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-    func string(from date: Date) -> String { formatter.string(from: date) }
-}
+/// ISO8601 mét fracties — precies wat PostgREST zelf ook stuurt. `FormatStyle` is een
+/// value type en dus `Sendable`, wat hier telt: de payload wordt op een achtergrond-task
+/// geëncodeerd.
+private let isoDate = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
 /// Presentatie-anker voor de Google OAuth-websessie.
 @MainActor
@@ -399,7 +388,7 @@ enum Sync {
     private static func collectDelta(_ context: ModelContext) -> Payload {
         var p = Payload()
         for (identifier, stamp) in changes {
-            let at = ISODate.shared.string(from: stamp)
+            let at = stamp.formatted(isoDate)
             let model = context.model(for: identifier)
             guard !model.isDeleted else { continue }
             switch model {
@@ -683,10 +672,18 @@ enum Sync {
     // MARK: - Export en wissen
 
     /// Volledige data als JSON — back-up/portabiliteit los van de server.
+    ///
+    /// `sortedKeys` zodat twee exports van dezelfde data ook echt gelijk zijn: `schedule`,
+    /// `targets` en `exercise_notes` zijn dictionaries, en die hebben zonder vaste
+    /// sleutelvolgorde geen vaste vorm. ISO8601 met fracties is wat PostgREST zelf stuurt.
     static func exportJSON(_ context: ModelContext) -> String? {
         guard let p = try? collect(context) else { return nil }
-        let encoder = makeEncoder()
+        let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .custom { date, target in
+            var container = target.singleValueContainer()
+            try container.encode(date.formatted(isoDate))
+        }
         guard let data = try? encoder.encode(p), let s = String(data: data, encoding: .utf8) else { return nil }
         return s
     }
@@ -880,7 +877,7 @@ enum Sync {
     /// Aangeroepen door `ModelContext.deleteSynced`.
     static func recordDeletion(table: String, syncID: UUID) {
         deletions.append(DeletionRow(table: table, id: syncID,
-                                     deleted_at: ISODate.shared.string(from: .now)))
+                                     deleted_at: Date.now.formatted(isoDate)))
         isClean = false
         markDirty()
     }
@@ -952,22 +949,6 @@ enum Sync {
         // De klok begint bij de éérste openstaande wijziging, niet bij de laatste: het
         // dashboard moet melden hoe lang er al werk klemt, niet hoe recent je iets deed.
         if SyncStatus.shared.pendingSince == nil { SyncStatus.shared.pendingSince = .now }
-    }
-
-    /// Encoder voor de export.
-    ///
-    /// `sortedKeys` is geen cosmetica: `schedule`, `targets` en `exercise_notes` zijn
-    /// dictionaries, en zonder vaste sleutelvolgorde levert dezelfde data twee keer een
-    /// andere JSON op — en dus een andere vingerafdruk en een push zonder wijziging.
-    /// ISO8601 met fracties is wat PostgREST zelf ook stuurt.
-    nonisolated static func makeEncoder() -> JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .custom { date, target in
-            var container = target.singleValueContainer()
-            try container.encode(ISODate.shared.string(from: date))
-        }
-        return encoder
     }
 
     /// Interval van de achtergrond-lus.

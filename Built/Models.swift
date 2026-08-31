@@ -308,6 +308,26 @@ final class PhotoEntry {
     var fileURL: URL { Self.directory.appendingPathComponent(fileName) }
 }
 
+/// Tijdstempel voor een nieuwe rij op `day`: vandaag is nú, een andere dag krijgt een
+/// vast uur. Middernacht zou net buiten de dag kunnen vallen bij een DST-sprong, en een
+/// terug-gelogde meting hoort midden op z'n dag te staan. Stond in vijf schermen los.
+func timestamp(on day: Date, hour: Int = 12) -> Date {
+    let cal = Calendar.current
+    guard !cal.isDateInToday(day) else { return .now }
+    return cal.date(bySettingHour: hour, minute: 0, second: 0, of: day) ?? day
+}
+
+/// Uren tussen bed- en wektijd; over middernacht heen telt door.
+func sleepDuration(from bed: Date, to wake: Date) -> Double {
+    let h = wake.timeIntervalSince(bed) / 3600
+    return h < 0 ? h + 24 : h
+}
+
+/// Macro per 100 g/ml omgerekend naar de gelogde hoeveelheid.
+func scaled(_ per100: Double, to amount: Int) -> Int {
+    Int((per100 * Double(amount) / 100).rounded())
+}
+
 /// Rusttijd als "1:30". 0 of minder = uit.
 func restLabel(_ seconds: Int) -> String {
     seconds <= 0 ? "uit" : "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
@@ -740,9 +760,7 @@ final class DayHabits {
 
     var sleepHours: Double? {
         guard let b = bedTime, let w = wakeTime else { return nil }
-        var h = w.timeIntervalSince(b) / 3600
-        if h < 0 { h += 24 }
-        return h
+        return sleepDuration(from: b, to: w)
     }
 
     /// Dag-check-in ingevuld? Eén van de vier is genoeg — anders voelt het als huiswerk.
@@ -796,10 +814,7 @@ extension ModelContext {
         let key = dayKey(day)
         let existing = (try? fetch(FetchDescriptor<DayHabits>())) ?? []
         if let h = existing.first(where: { dayKey($0.date) == key }) { return h }
-        let cal = Calendar.current
-        let h = DayHabits(date: cal.isDateInToday(day)
-                          ? .now
-                          : cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day)
+        let h = DayHabits(date: timestamp(on: day))
         insert(h)
         return h
     }
@@ -889,7 +904,7 @@ struct DayIndex {
 }
 
 /// Aaneengesloten dagen tot vandaag waarop `done` geldt; vandaag mag nog open staan.
-/// ponytail: zelfde vorm als DayCheck.streak, maar voor één losse habit.
+/// Eén reeks-definitie voor de hele app: `DayCheck.streak` is deze lus over "perfecte dag".
 func habitStreak(_ done: (Date) -> Bool) -> Int {
     let cal = Calendar.current
     var count = 0
@@ -1028,15 +1043,7 @@ enum DayCheck {
     }
 
     static func streak(index: DayIndex, profile: Profile, customHabits: [String] = []) -> Int {
-        let cal = Calendar.current
-        var count = 0
-        for n in 0..<365 {
-            guard let day = cal.date(byAdding: .day, value: -n, to: cal.startOfDay(for: .now)) else { break }
-            if perfect(day, index: index, profile: profile, customHabits: customHabits) { count += 1 }
-            else if n == 0 { continue } // vandaag mag nog open staan
-            else { break }
-        }
-        return count
+        habitStreak { perfect($0, index: index, profile: profile, customHabits: customHabits) }
     }
 }
 

@@ -149,6 +149,80 @@ extension View {
     func builtBottomAction() -> some View { modifier(BuiltBottomAction()) }
 }
 
+// MARK: - Getalrij
+
+/// Label links, invoerveld rechts, eenheid erachter. Stond in vijf schermen los
+/// nagebouwd, met vier verschillende breedtes en twee toetsenborden.
+///
+/// Het veld komt van de aanroeper: de bindings zijn `Int`, `Double` en `Double?`, en
+/// daar één generieke `TextField` van maken kost meer dan het oplevert.
+struct BuiltNumberRow<Field: View>: View {
+    let label: String
+    var unit: String = ""
+    var width: CGFloat = 70
+    var decimal = false
+    @ViewBuilder var field: () -> Field
+
+    var body: some View {
+        LabeledContent(label) {
+            HStack(spacing: 4) {
+                field()
+                    .keyboardType(decimal ? .decimalPad : .numberPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: width)
+                if !unit.isEmpty {
+                    Text(unit).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Heatmap-blokje
+
+/// Eén dag in een heatmap: gevuld naar rato, met een rand als het vandaag is.
+/// De dag-heatmap, de jaar-heatmap en het habits-raster tekenden dit alle drie zelf.
+struct HeatCell: View {
+    var fill: Color
+    var isToday: Bool
+    var size: CGFloat?
+    var height: CGFloat?
+    var action: () -> Void
+    /// Vinkje bij "alles gehaald" — vorm naast kleur, voor wie kleuren niet onderscheidt.
+    var complete = false
+
+    var body: some View {
+        Button(action: action) {
+            RoundedRectangle(cornerRadius: BuiltRadius.micro)
+                .fill(fill)
+                .frame(width: size, height: size ?? height)
+                .overlay {
+                    if complete {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .black))
+                            .foregroundStyle(.white)
+                    }
+                    if isToday {
+                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
+                            .strokeBorder(.green, lineWidth: 1.5)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Optionele staat als presentatie-binding
+
+extension Binding {
+    /// `sheet`/`confirmationDialog` willen een `Bool`, maar de staat is "welk item?".
+    /// Stond zes keer als `Binding(get: { x != nil }, set: { if !$0 { x = nil } })`.
+    static func isPresent<T>(_ value: Binding<T?>) -> Binding<Bool> where Value == Bool {
+        Binding<Bool>(get: { value.wrappedValue != nil },
+                      set: { if !$0 { value.wrappedValue = nil } })
+    }
+}
+
 // MARK: - Kaart
 
 /// Eén kaart-stijl voor de hele app.
@@ -385,6 +459,26 @@ struct MacroRings: View {
 
             MacroRings(protein: 82, proteinTarget: 120, carbs: 210, fat: 64)
                 .builtCard()
+
+            HStack(spacing: 5) {
+                HeatCell(fill: .green, isToday: false, size: 22) {}
+                HeatCell(fill: Color.muscleTint(0.4), isToday: false, size: 22) {}
+                HeatCell(fill: Color(.quaternarySystemFill), isToday: true, size: 22) {}
+                HeatCell(fill: .green, isToday: false, size: 22, complete: true) {}
+                Spacer()
+            }
+            .builtCard()
+
+            Form {
+                BuiltNumberRow(label: "Doelgewicht", unit: "kg", width: 64, decimal: true) {
+                    TextField("75", value: .constant(78.0), format: .number)
+                }
+                BuiltNumberRow(label: "Kcal") {
+                    TextField("2400", value: .constant(2400), format: .number)
+                }
+            }
+            .frame(height: 120)
+            .scrollDisabled(true)
         }
         .padding()
     }

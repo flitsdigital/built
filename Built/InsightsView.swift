@@ -336,20 +336,8 @@ struct InsightsView: View {
     // scherm van tien secties anders niet te lezen is.
 
     private func weekBlock(_ idx: DayIndex) -> some View {
-        let week = week(idx)
-        return VStack(spacing: 12) {
-            HStack {
-                StatTile(value: "\(week.trainingDays)/\(profile.trainingsPerWeek)", label: "trainingen", size: .large,
-                         tint: week.trainingDays > profile.trainingsPerWeek ? .green : nil)
-                Divider()
-                StatTile(value: "\(week.proteinDays)/7", label: "eiwit-dagen", size: .large)
-            }
-            Divider()
-            HStack {
-                StatTile(value: week.trendText, label: "trend/week", size: .large)
-                Divider()
-                StatTile(value: "\(week.perfectDays)/7", label: "perfecte dagen", size: .large)
-            }
+        VStack(spacing: 12) {
+            WeekStatsGrid(week: week(idx), target: profile.trainingsPerWeek)
             Button {
                 showReview = true
             } label: {
@@ -553,20 +541,10 @@ struct InsightsView: View {
                 HStack(spacing: 5) {
                     ForEach(0..<7, id: \.self) { col in
                         let day = days[row * 7 + col]
-                        Button {
+                        HeatCell(fill: perfectDay(day, idx) ? .green : Color(.quaternarySystemFill),
+                                 isToday: cal.isDateInToday(day), height: 26) {
                             selectedDayBox = DayBox(day: day)
-                        } label: {
-                            RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                .fill(perfectDay(day, idx) ? Color.green : Color(.quaternarySystemFill))
-                                .frame(height: 26)
-                                .overlay {
-                                    if cal.isDateInToday(day) {
-                                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                            .strokeBorder(.green, lineWidth: 1.5)
-                                    }
-                                }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -595,27 +573,12 @@ struct InsightsView: View {
                                 } else {
                                     let key = dayKey(day)
                                     let v = fills[key] ?? 0
-                                    Button {
+                                    // `complete`: vorm naast kleur, want bij kleurenblindheid
+                                    // is "alles gehaald" anders niet te onderscheiden.
+                                    HeatCell(fill: Color.muscleTint(v), isToday: key == todayKey,
+                                             size: 13, complete: v >= 0.999) {
                                         selectedDayBox = DayBox(day: day)
-                                    } label: {
-                                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                            .fill(Color.muscleTint(v))
-                                            .frame(width: 13, height: 13)
-                                            .overlay {
-                                                // Vorm naast kleur: bij kleurenblindheid is
-                                                // "alles gehaald" anders niet te onderscheiden.
-                                                if v >= 0.999 {
-                                                    Image(systemName: "checkmark")
-                                                        .font(.system(size: 8, weight: .black))
-                                                        .foregroundStyle(.white)
-                                                }
-                                                if key == todayKey {
-                                                    RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                                        .strokeBorder(.green, lineWidth: 1.5)
-                                                }
-                                            }
                                     }
-                                    .buttonStyle(.plain)
                                     .accessibilityLabel(day.formatted(date: .abbreviated, time: .omitted))
                                     .accessibilityValue("\(Int(v * 100))% van je habits")
                                 }
@@ -679,20 +642,10 @@ struct InsightsView: View {
                         .foregroundStyle(.secondary)
                         .gridColumnAlignment(.leading)
                     ForEach(days, id: \.self) { d in
-                        Button {
+                        HeatCell(fill: doneByDay[dayKey(d)]?.contains(name) == true ? .green : Color(.quaternarySystemFill),
+                                 isToday: cal.isDateInToday(d), size: 22) {
                             selectedDayBox = DayBox(day: d)
-                        } label: {
-                            RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                .fill(doneByDay[dayKey(d)]?.contains(name) == true ? Color.green : Color(.quaternarySystemFill))
-                                .frame(width: 22, height: 22)
-                                .overlay {
-                                    if cal.isDateInToday(d) {
-                                        RoundedRectangle(cornerRadius: BuiltRadius.micro)
-                                            .strokeBorder(.green.opacity(0.7), lineWidth: 1.5)
-                                    }
-                                }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -739,6 +692,30 @@ struct InsightsView: View {
     }
 }
 
+/// De vier weekgetallen. Inzicht en de zondagreview toonden ze allebei — met dezelfde
+/// `WeekStats`, maar in twee lay-outs die uit elkaar konden lopen.
+struct WeekStatsGrid: View {
+    let week: WeekStats
+    let target: Int
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                StatTile(value: "\(week.trainingDays)/\(target)", label: "trainingen", size: .large,
+                         tint: week.trainingDays > target ? .green : nil)
+                Divider()
+                StatTile(value: "\(week.proteinDays)/7", label: "eiwit-dagen", size: .large)
+            }
+            Divider()
+            HStack {
+                StatTile(value: week.trendText, label: "trend/week", size: .large)
+                Divider()
+                StatTile(value: "\(week.perfectDays)/7", label: "perfecte dagen", size: .large)
+            }
+        }
+    }
+}
+
 // Zondag-ritueel (PRD Feature 6): de week als moment, niet als lijst.
 struct WeeklyReviewSheet: View {
     let profile: Profile
@@ -779,14 +756,10 @@ struct WeeklyReviewSheet: View {
                 .symbolEffect(.bounce, value: bounced)
             Text("Week \(profile.daysIn / 7 + 1) Review")
                 .font(.title2.bold())
-            HStack {
-                tile("\(week.trainingDays)/\(profile.trainingsPerWeek)", "trainingen")
-                tile("\(week.proteinDays)/7", "eiwit-dagen")
-            }
-            HStack {
-                tile(week.trendText, "trend/week")
-                tile("\(week.perfectDays)/7", "perfecte dagen")
-            }
+            WeekStatsGrid(week: week, target: profile.trainingsPerWeek)
+                .padding(.vertical, 6)
+                .background(Color(.secondarySystemGroupedBackground),
+                            in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
             if let bestLift {
                 Text("🏆 Beste lift: \(bestLift.name) — e1RM \(bestLift.e1rm.kgText) kg")
                     .font(.subheadline.bold())
@@ -812,13 +785,6 @@ struct WeeklyReviewSheet: View {
         .onAppear { bounced = true }
     }
 
-    /// Zelfde tegel als overal, met een eigen vlak eronder — deze sheet staat niet in
-    /// een kaart maar los op de achtergrond.
-    private func tile(_ value: String, _ label: String) -> some View {
-        StatTile(value: value, label: label)
-            .padding(.vertical, 10)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: BuiltRadius.medium))
-    }
 }
 
 struct ExerciseDetailView: View {
@@ -881,7 +847,12 @@ struct ExerciseDetailView: View {
 
     /// De gekozen metriek per sessie, binnen de gekozen periode.
     private var chartPoints: [(day: Date, value: Double)] {
-        let cutoff = range.days.flatMap { cal.date(byAdding: .day, value: -$0, to: .now) }
+        points(metric: metric, days: range.days)
+    }
+
+    /// Beste waarde per sessiedag, oplopend. `days` = nil is de hele historie.
+    private func points(metric: ChartMetric, days: Int?) -> [(day: Date, value: Double)] {
+        let cutoff = days.flatMap { cal.date(byAdding: .day, value: -$0, to: .now) }
         let inRange = cutoff.map { c in sets.filter { $0.date >= c } } ?? sets
         return Dictionary(grouping: inRange) { cal.startOfDay(for: $0.date) }
             .map { ($0.key, $0.value.map(metric.value).max() ?? 0) }
@@ -963,11 +934,9 @@ struct ExerciseDetailView: View {
         return out
     }
 
-    /// Geschat 1RM (beste) per sessie.
-    private var e1rmSessions: [(day: Date, kg: Double)] {
-        Dictionary(grouping: sets) { cal.startOfDay(for: $0.date) }
-            .map { ($0.key, $0.value.map { epley($0.weightKg, $0.reps) }.max() ?? 0) }
-            .sorted { $0.0 < $1.0 }
+    /// Geschat 1RM (beste) per sessie, over de hele historie.
+    private var e1rmSessions: [(day: Date, value: Double)] {
+        points(metric: .e1rm, days: nil)
     }
 
     /// Lineaire trend op e1RM → kg/dag en de geprojecteerde waarde over 4 weken.
@@ -975,7 +944,7 @@ struct ExerciseDetailView: View {
         let pts = e1rmSessions
         guard pts.count >= 3, let first = pts.first?.day else { return nil }
         let xs = pts.map { $0.day.timeIntervalSince(first) / 86_400 } // dagen
-        let ys = pts.map(\.kg)
+        let ys = pts.map(\.value)
         let n = Double(xs.count)
         let sx = xs.reduce(0, +), sy = ys.reduce(0, +)
         let sxy = zip(xs, ys).map(*).reduce(0, +)
@@ -1215,7 +1184,7 @@ struct ExerciseDetailView: View {
                     LabeledContent("Over 4 weken", value: "≈ \(p.in4Weeks.kgText) kg")
                     Chart {
                         ForEach(e1rmSessions, id: \.day) { item in
-                            PointMark(x: .value("Dag", item.day), y: .value("1RM", item.kg))
+                            PointMark(x: .value("Dag", item.day), y: .value("1RM", item.value))
                                 .foregroundStyle(.green.opacity(0.5))
                         }
                         if let last = e1rmSessions.last,

@@ -152,10 +152,7 @@ struct RootView: View {
         .onTapGesture { // knoppen en menu winnen van deze tap
             withAnimation(.snappy(duration: 0.3)) { tab = 1 }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
-        .padding(.horizontal, 24)
+        .floatingBar()
     }
 
     /// "Training bezig" als mini-player die terugbrengt naar de training (Ladder-patroon).
@@ -192,12 +189,9 @@ struct RootView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous).strokeBorder(.quaternary, lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
         }
         .buttonStyle(PressableStyle(scale: 0.985))
-        .padding(.horizontal, 24)
+        .floatingBar()
     }
 
     @ViewBuilder private var content: some View {
@@ -309,6 +303,16 @@ struct FloatingTabBar: View {
 }
 
 extension View {
+    /// De zwevende mini-player onderaan: rust-timer en "Training bezig" delen materiaal,
+    /// rand, schaduw en marge — twee kopieën liepen anders uit elkaar.
+    func floatingBar() -> some View {
+        background(.regularMaterial, in: RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: BuiltRadius.floating, style: .continuous)
+                .strokeBorder(.quaternary, lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.1), radius: 10, y: 4)
+            .padding(.horizontal, 24)
+    }
+
     /// Houdt onderaan ruimte vrij voor de zwevende tab bar; content scrollt er wel onderdoor.
     func tabBarClearance() -> some View {
         safeAreaInset(edge: .bottom) { Color.clear.frame(height: 64) }

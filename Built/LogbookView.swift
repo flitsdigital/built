@@ -237,7 +237,7 @@ struct DayDetailView: View {
 
     private var daySessions: [WorkoutSession] { daySets.sessions() }
 
-    private var noon: Date { cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day }
+    private var stamp: Date { timestamp(on: day) }
 
     private func record() -> DayHabits { context.habits(on: day) }
 
@@ -251,7 +251,7 @@ struct DayDetailView: View {
             get: { habitLogs.contains { $0.name == name && dayKey($0.date) == key } },
             set: { on in
                 if on {
-                    context.insert(HabitLog(name: name, date: noon))
+                    context.insert(HabitLog(name: name, date: stamp))
                 } else if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
                     context.deleteSynced(log)
                 }
@@ -490,13 +490,13 @@ struct DayDetailView: View {
             }
         }
         .sheet(isPresented: $showProteinSheet) {
-            ProteinEntrySheet(entryDate: noon)
+            ProteinEntrySheet(entryDate: stamp)
         }
         .sheet(item: $editingEntry) { entry in
             ProteinEntrySheet(entry: entry)
         }
         .navigationDestination(item: $newWorkout) { id in
-            SessionDetailView(session: WorkoutSession(id: id, date: cal.isDateInToday(day) ? .now : noon, sets: []))
+            SessionDetailView(session: WorkoutSession(id: id, date: stamp, sets: []))
         }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: day) }
         .sheet(item: $editWeight) { WeightLogSheet(entry: $0) }

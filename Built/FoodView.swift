@@ -579,7 +579,6 @@ struct FoodLogSheet: View {
     @State private var searching = false
     @State private var searchFailed = false
     @State private var retryToken = 0
-    @State private var pending: PendingFood?   // alleen nog voor een onbekende barcode
     /// Product waarvan de pagina openstaat. nil = terug in de lijst.
     @State private var detail: PendingFood?
     /// Zojuist gescand product; krijgt dezelfde portie-editor als een zoekrij.
@@ -592,6 +591,9 @@ struct FoodLogSheet: View {
     @State private var lookingUp = false
     // Eigen item (per 100 g/ml, net als elk ander product)
     @State private var quickLabel = ""
+    /// Gevuld als je een barcode scande die OpenFoodFacts niet kent: wat je hier invult
+    /// blijft aan die code hangen.
+    @State private var quickBarcode = ""
     @State private var quickProtein: Double?
     @State private var quickKcal: Double?
     @State private var quickCarbs: Double?
@@ -613,7 +615,6 @@ struct FoodLogSheet: View {
         var servingGrams: Double = 0
         var servingName = ""
         var packageGrams: Double = 0
-        var editable = false
         var unit: FoodUnit = .gram
         var categories: [String] = []
 
@@ -642,18 +643,14 @@ struct FoodLogSheet: View {
 
         /// Handmatig ingevuld: een eigen item of een onbekende barcode.
         init(name: String, barcode: String = "", protein100: Double, kcal100: Double,
-             carbs100: Double = 0, fat100: Double = 0, editable: Bool = false) {
+             carbs100: Double = 0, fat100: Double = 0) {
             self.name = name; self.barcode = barcode
             self.protein100 = protein100; self.kcal100 = kcal100
             self.carbs100 = carbs100; self.fat100 = fat100
-            self.editable = editable
         }
     }
 
-    private var entryDate: Date {
-        let cal = Calendar.current
-        return cal.isDateInToday(day) ? .now : cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
-    }
+    private var entryDate: Date { timestamp(on: day) }
 
     var body: some View {
         NavigationStack {
@@ -687,11 +684,6 @@ struct FoodLogSheet: View {
             // hele flow doorlopen.
             .safeAreaInset(edge: .bottom) {
                 if !added.isEmpty { addedTray }
-            }
-            .sheet(item: $pending) { food in
-                FoodPortionSheet(food: food, meal: meal, entryDate: entryDate) { label in
-                    withAnimation(.snappy(duration: 0.25)) { added.append(label) }
-                }
             }
             .navigationDestination(item: $detail) { food in
                 FoodDetailView(food: food, lastAmount: lastAmount(for: food)) { amount, unit in
@@ -908,10 +900,9 @@ struct FoodLogSheet: View {
         product.lastAmount = Double(amount) // volgende keer meteen de juiste portie
         if !food.categories.isEmpty { product.categories = food.categories.joined(separator: ",") }
 
-        func scaled(_ per100: Double) -> Int { Int((per100 * Double(amount) / 100).rounded()) }
-        context.insert(ProteinEntry(date: entryDate, grams: scaled(food.protein100), label: food.name,
-                                    kcal: scaled(food.kcal100), carbs: scaled(food.carbs100),
-                                    fat: scaled(food.fat100), meal: meal,
+        context.insert(ProteinEntry(date: entryDate, grams: scaled(food.protein100, to: amount), label: food.name,
+                                    kcal: scaled(food.kcal100, to: amount), carbs: scaled(food.carbs100, to: amount),
+                                    fat: scaled(food.fat100, to: amount), meal: meal,
                                     amount: Double(amount), unit: unit))
         withAnimation(.snappy(duration: 0.25)) { added.append(food.name) }
     }
@@ -1035,7 +1026,7 @@ struct FoodLogSheet: View {
     }
 
     private func handleBarcode(_ code: String) {
-        guard !lookingUp, pending == nil, scanned == nil else { return }
+        guard !lookingUp, scanned == nil else { return }
         scanError = nil
         // Eigen producten winnen: eerder gescand = direct raak, ook offline
         if let known = products.first(where: { $0.barcode == code }) {
@@ -1049,8 +1040,11 @@ struct FoodLogSheet: View {
             if let found {
                 scanned = PendingFood(found)
             } else {
-                // Niet in de database → één keer zelf invullen, blijft aan de barcode hangen
-                pending = PendingFood(name: "", barcode: code, protein100: 0, kcal100: 0, editable: true)
+                // Niet in de database → één keer zelf invullen bij Eigen, en dat blijft
+                // aan de barcode hangen. Een eigen sheet ernaast was hetzelfde formulier
+                // met een laag eromheen.
+                quickBarcode = code
+                mode = 2
             }
         }
     }
@@ -1062,7 +1056,7 @@ struct FoodLogSheet: View {
     // staat het item de volgende keer gewoon bij Jouw producten.
 
     private var quickFood: PendingFood {
-        PendingFood(name: quickLabel.trimmingCharacters(in: .whitespaces),
+        PendingFood(name: quickLabel.trimmingCharacters(in: .whitespaces), barcode: quickBarcode,
                     protein100: quickProtein ?? 0, kcal100: quickKcal ?? 0,
                     carbs100: quickCarbs ?? 0, fat100: quickFat ?? 0)
     }
@@ -1075,8 +1069,12 @@ struct FoodLogSheet: View {
                 macroField("Kcal", $quickKcal, "250")
                 macroField("Koolhydraten", $quickCarbs, "0")
                 macroField("Vet", $quickFat, "0")
+            } header: {
+                if !quickBarcode.isEmpty { Text("Barcode \(quickBarcode)") }
             } footer: {
-                Text("Per 100 g/ml, net als op de verpakking. Hieronder kies je hoeveel je ervan hebt gegeten.")
+                Text(quickBarcode.isEmpty
+                     ? "Per 100 g/ml, net als op de verpakking. Hieronder kies je hoeveel je ervan hebt gegeten."
+                     : "Deze barcode kent OpenFoodFacts niet. Vul 'm hier één keer in — per 100 g/ml, net als op de verpakking — dan blijft het eraan hangen.")
             }
             if !quickFood.name.isEmpty, quickFood.protein100 + quickFood.kcal100 > 0 {
                 Section("Portie") {
@@ -1084,6 +1082,7 @@ struct FoodLogSheet: View {
                                   amount: $portionAmount, unit: $portionUnit) { amount, unit in
                         logFood(quickFood, amount: amount, unit: unit)
                         quickLabel = ""; quickProtein = nil; quickKcal = nil; quickCarbs = nil; quickFat = nil
+                        quickBarcode = ""; manualBarcode = ""
                     }
                 }
             }
@@ -1092,9 +1091,8 @@ struct FoodLogSheet: View {
     }
 
     private func macroField(_ label: String, _ value: Binding<Double?>, _ placeholder: String) -> some View {
-        LabeledContent(label) {
+        BuiltNumberRow(label: label, decimal: true) {
             TextField(placeholder, value: value, format: .number)
-                .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 70)
         }
     }
 
@@ -1157,7 +1155,7 @@ struct PortionEditor: View {
     var onLog: (Int, FoodUnit) -> Void
 
     private var step: Int { unit == .milliliter ? 50 : 10 }
-    private func scaled(_ per100: Double) -> Int { Int((per100 * Double(amount) / 100).rounded()) }
+    private func scaled(_ per100: Double) -> Int { Built.scaled(per100, to: amount) }
 
     private var portions: [FoodPortion] {
         var out = FoodPortions.suggested(unit: unit, categories: food.categories, name: food.name)
@@ -1287,7 +1285,7 @@ struct FoodDetailView: View {
     @State private var takingPhoto = false
     @State private var photoError: String?
 
-    private func scaled(_ per100: Double) -> Int { Int((per100 * Double(amount) / 100).rounded()) }
+    private func scaled(_ per100: Double) -> Int { Built.scaled(per100, to: amount) }
 
     var body: some View {
         List {
@@ -1444,80 +1442,6 @@ struct FoodDetailView: View {
             Text("\(value.kgText) \(unit)").monospacedDigit()
         }
         .font(.subheadline)
-    }
-}
-
-// MARK: - Nieuw product (barcode onbekend)
-
-struct FoodPortionSheet: View {
-    @State var food: FoodLogSheet.PendingFood
-    var meal: String
-    var entryDate: Date
-    var onLogged: (String) -> Void
-    @Environment(\.modelContext) private var context
-    @Environment(\.dismiss) private var dismiss
-    @Query private var products: [FoodProduct]
-    @State private var portionAmount = 100
-    @State private var portionUnit: FoodUnit = .gram
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    TextField("Naam", text: $food.name)
-                    macroField("Eiwit", $food.protein100)
-                    macroField("Kcal", $food.kcal100)
-                    macroField("Koolhydraten", $food.carbs100)
-                    macroField("Vet", $food.fat100)
-                } header: {
-                    Text("Barcode \(food.barcode)")
-                } footer: {
-                    Text("Per 100 \(food.unit.label). Blijft aan deze barcode hangen, dus dit hoef je maar één keer te doen.")
-                }
-                if !food.name.trimmingCharacters(in: .whitespaces).isEmpty, food.protein100 + food.kcal100 > 0 {
-                    Section("Portie") {
-                        PortionEditor(food: food, lastAmount: 0,
-                                      amount: $portionAmount, unit: $portionUnit) { amount, unit in
-                            log(amount: amount, unit: unit)
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Nieuw product")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annuleer") { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private func macroField(_ label: String, _ value: Binding<Double>) -> some View {
-        LabeledContent(label) {
-            TextField("0", value: value, format: .number)
-                .keyboardType(.decimalPad)
-                .multilineTextAlignment(.trailing)
-                .frame(width: 70)
-        }
-    }
-
-    private func log(amount: Int, unit: FoodUnit) {
-        let product = FoodProduct(name: food.name, brand: food.brand, barcode: food.barcode,
-                                  protein100: food.protein100, kcal100: food.kcal100,
-                                  carbs100: food.carbs100, fat100: food.fat100)
-        product.unit = unit.rawValue
-        product.lastAmount = Double(amount)
-        context.insert(product)
-
-        func scaled(_ per100: Double) -> Int { Int((per100 * Double(amount) / 100).rounded()) }
-        context.insert(ProteinEntry(date: entryDate, grams: scaled(food.protein100), label: food.name,
-                                    kcal: scaled(food.kcal100), carbs: scaled(food.carbs100),
-                                    fat: scaled(food.fat100), meal: meal,
-                                    amount: Double(amount), unit: unit))
-        dismiss()
-        onLogged(food.name)
     }
 }
 

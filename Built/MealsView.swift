@@ -30,7 +30,7 @@ struct ProteinEntrySheet: View {
     /// Zonder (oudere invoer) blijft het handmatig — dan is er niets om op te schalen.
     private var per100: (protein: Double, kcal: Double, carbs: Double, fat: Double)? { entry?.per100 }
 
-    private func scale(_ v: Double) -> Int { Int((v * Double(amount) / 100).rounded()) }
+    private func scale(_ v: Double) -> Int { scaled(v, to: amount) }
 
     var body: some View {
         NavigationStack {
@@ -71,26 +71,10 @@ struct ProteinEntrySheet: View {
                         Text("Hoeveelheid")
                     }
                 } else {
-                    LabeledContent("Eiwit (g)") {
-                        TextField("g", value: $grams, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Kcal") {
-                        TextField("kcal", value: $kcal, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Koolhydraten (g)") {
-                        TextField("g", value: $carbs, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Vet (g)") {
-                        TextField("g", value: $fat, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    BuiltNumberRow(label: "Eiwit (g)") { TextField("g", value: $grams, format: .number) }
+                    BuiltNumberRow(label: "Kcal") { TextField("kcal", value: $kcal, format: .number) }
+                    BuiltNumberRow(label: "Koolhydraten (g)") { TextField("g", value: $carbs, format: .number) }
+                    BuiltNumberRow(label: "Vet (g)") { TextField("g", value: $fat, format: .number) }
                 }
                 Picker("Maaltijd", selection: $meal) {
                     ForEach(mealSlots, id: \.self) { m in
@@ -242,16 +226,8 @@ struct MealEditorView: View {
 
             if meal.ingredients.isEmpty {
                 Section {
-                    LabeledContent("Eiwit (g)") {
-                        TextField("g", value: $meal.protein, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    LabeledContent("Kcal") {
-                        TextField("kcal", value: $meal.kcal, format: .number)
-                            .keyboardType(.numberPad)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    BuiltNumberRow(label: "Eiwit (g)") { TextField("g", value: $meal.protein, format: .number) }
+                    BuiltNumberRow(label: "Kcal") { TextField("kcal", value: $meal.kcal, format: .number) }
                 } header: {
                     Text("Voedingswaarde")
                 } footer: {

@@ -131,11 +131,6 @@ struct DashboardView: View {
             }
     }
 
-    /// Tijdstempel voor een nieuw record op de geselecteerde dag (nu voor vandaag, anders 12:00).
-    private func stamp(_ day: Date) -> Date {
-        cal.isDateInToday(day) ? .now : (cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day)
-    }
-
     private var greeting: String {
         switch cal.component(.hour, from: .now) {
         case 6..<12: "Goedemorgen"
@@ -646,7 +641,7 @@ struct DashboardView: View {
         if let log = habitLogs.first(where: { $0.name == name && dayKey($0.date) == key }) {
             context.deleteSynced(log)
         } else {
-            context.insert(HabitLog(name: name, date: stamp(selectedDay)))
+            context.insert(HabitLog(name: name, date: timestamp(on: selectedDay)))
         }
     }
 
@@ -744,13 +739,9 @@ struct SleepSheet: View {
     private var cal: Calendar { .current }
     private var today: DayHabits? { habits.first { dayKey($0.date) == dayKey(day) } }
 
-    /// Zelfde rekensom als `DayHabits.sleepHours`, maar over de velden in dit formulier
-    /// — die staan nog nergens opgeslagen zolang je aan de pickers draait.
-    private var hours: Double {
-        var h = wake.timeIntervalSince(bed) / 3600
-        if h < 0 { h += 24 }
-        return h
-    }
+    /// Over de velden in dit formulier: die staan nog nergens opgeslagen zolang je aan
+    /// de pickers draait, dus `DayHabits.sleepHours` kan er nog niet bij.
+    private var hours: Double { sleepDuration(from: bed, to: wake) }
 
     var body: some View {
         NavigationStack {

@@ -436,17 +436,16 @@ struct SessionDetailView: View {
                 .frame(width: 40, alignment: .leading)
             if exercises.isCardio(name) {
                 NumericField(value: minutes(set), decimal: false, placeholder: "min",
-                             focus: $focused, id: nil, disabled: false)
+                             focus: $focused, id: nil)
                     .numericFieldChrome(width: 64)
                 Text("min").font(.footnote).foregroundStyle(.secondary)
             } else {
                 NumericField(value: kg(set), decimal: true, placeholder: exercises.isBodyweight(name) ? "±kg" : "kg",
-                             focus: $focused, id: nil, disabled: false,
-                             signed: exercises.isBodyweight(name))
+                             focus: $focused, id: nil, signed: exercises.isBodyweight(name))
                     .numericFieldChrome(width: 64)
                 Text(exercises.isBodyweight(name) ? "±kg" : "kg").font(.footnote).foregroundStyle(.secondary)
                 NumericField(value: reps(set), decimal: false, placeholder: "reps",
-                             focus: $focused, id: nil, disabled: false)
+                             focus: $focused, id: nil)
                     .numericFieldChrome(width: 52)
                 Text("reps").font(.footnote).foregroundStyle(.secondary)
             }
@@ -709,8 +708,6 @@ struct NumericField: UIViewRepresentable {
     var placeholder: String
     var focus: FocusState<UUID?>.Binding
     var id: UUID?
-    /// Standaard bewerkbaar: een afgevinkte set corrigeer je nu ter plekke.
-    var disabled: Bool = false
     /// Toont een ±-knop boven het toetsenbord. De decimalPad heeft geen minteken, en
     /// zonder die knop kun je assisted dips (−40 kg van je lichaamsgewicht) niet invoeren.
     var signed: Bool = false
@@ -747,13 +744,12 @@ struct NumericField: UIViewRepresentable {
 
     func updateUIView(_ tf: UITextField, context: Context) {
         context.coordinator.parent = self
-        tf.isEnabled = !disabled
         // Alleen overschrijven als de gebruiker hier niet typt → geen cursor-sprong
         if !tf.isFirstResponder {
             let formatted = context.coordinator.string(from: value)
             if tf.text != formatted { tf.text = formatted }
         }
-        if let id, focus.wrappedValue == id, !tf.isFirstResponder, !disabled {
+        if let id, focus.wrappedValue == id, !tf.isFirstResponder {
             DispatchQueue.main.async { tf.becomeFirstResponder() }
         }
     }
