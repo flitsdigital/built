@@ -1088,6 +1088,35 @@ struct ExerciseDetailView: View {
         .padding(.vertical, 2)
     }
 
+    /// De spieren als capsules onder het plaatje. Primair groen, meewerkend grijs — twee
+    /// regels "Primair: Rug" en "Meewerkend: Biceps, Onderarmen" waren instellingen-tekst
+    /// voor iets wat je in één blik wilt zien.
+    ///
+    /// Zelf ingevuld wint van de dataset: in de editor kun je dit aanpassen, en dan is dat
+    /// een keuze en geen leegte.
+    private func muscleChips(_ record: Exercise, _ guide: ExerciseGuide?) -> some View {
+        let secondary = record.secondaryMuscles.isEmpty
+            ? guide?.secondary ?? [] : record.secondaryMuscles
+        return ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                chip(record.muscle, tint: .green)
+                ForEach(secondary, id: \.self) { chip($0, tint: nil) }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private func chip(_ text: String, tint: Color?) -> some View {
+        Text(text)
+            .font(.caption.bold())
+            .foregroundStyle(tint ?? .secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(tint.map { Color.builtTint($0) } ?? Color(.tertiarySystemFill), in: Capsule())
+    }
+
     var body: some View {
         List {
             Section {
@@ -1098,46 +1127,45 @@ struct ExerciseDetailView: View {
             }
 
             let guide = ExerciseCatalog.guides[exercise]
-            if let guide {
+            let record = allExercises.first { $0.name == exercise }
+            if guide != nil || record != nil {
                 Section {
-                    ExerciseAnimation(guide: guide)
-                        // Lijntekening op wit; ook in het donker, want omkeren maakt er een
-                        // röntgenfoto van.
-                        .background(.white, in: RoundedRectangle(cornerRadius: BuiltRadius.card,
-                                                                 style: .continuous))
-                        .frame(maxWidth: .infinity)
-                        .listRowBackground(Color.clear)
-                }
-            }
-            if let record = allExercises.first(where: { $0.name == exercise }) {
-                Section("Spieren") {
-                    LabeledContent("Primair", value: record.muscle)
-                    // Zelf ingevuld wint van de dataset: in de editor kun je dit aanpassen,
-                    // en dan is dat een keuze en geen leegte.
-                    let secondary = record.secondaryMuscles.isEmpty
-                        ? guide?.secondary ?? [] : record.secondaryMuscles
-                    if !secondary.isEmpty {
-                        LabeledContent("Meewerkend", value: secondary.joined(separator: ", "))
+                    // Eén kaart, geen drie losse blokken: het plaatje, de spieren en de
+                    // uitvoering gaan over hetzelfde en horen bij elkaar te staan.
+                    VStack(spacing: 0) {
+                        if let guide {
+                            // Geen eigen padding: de tekening heeft in de bron al ruime
+                            // marges, en die er nog eens omheen zetten maakt er een postzegel
+                            // in een leeg vlak van.
+                            ExerciseAnimation(guide: guide)
+                                .frame(maxWidth: .infinity)
+                                // Lijntekening op wit; ook in het donker, want omkeren maakt
+                                // er een röntgenfoto van. Randloos, zodat het de bovenkant
+                                // van de kaart ís in plaats van erop te liggen.
+                                .background(.white)
+                        }
+                        if let record {
+                            muscleChips(record, guide)
+                        }
                     }
-                }
-            }
-            if let guide, !guide.steps.isEmpty {
-                Section {
-                    // Dichtgeklapt: je opent deze pagina voor je cijfers, niet voor de uitleg.
-                    DisclosureGroup("Uitvoering") {
-                        ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Text("\(index + 1)")
-                                    .font(.caption.bold().monospacedDigit())
-                                    .foregroundStyle(.green)
-                                    .frame(width: 16, alignment: .trailing)
-                                Text(step)
+                    .listRowInsets(EdgeInsets())
+                    if let guide, !guide.steps.isEmpty {
+                        // Dichtgeklapt: je opent deze pagina voor je cijfers, niet voor de uitleg.
+                        DisclosureGroup("Uitvoering") {
+                            ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Text("\(index + 1)")
+                                        .font(.caption.bold().monospacedDigit())
+                                        .foregroundStyle(.green)
+                                        .frame(width: 16, alignment: .trailing)
+                                    Text(step)
+                                }
+                                .font(.subheadline)
                             }
-                            .font(.subheadline)
                         }
                     }
                 } footer: {
-                    Text("Beeld en uitleg uit de exercises-dataset. Beeld © Gym visual.")
+                    if guide != nil { Text("Beeld © Gym visual") }
                 }
             }
             if days.count >= 2 {

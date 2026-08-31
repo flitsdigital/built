@@ -50,7 +50,7 @@ struct ExerciseAnimation: View {
         }
         .scaledToFit()
         // 180×180 is waar de bron ophoudt; groter trekken maakt het alleen zachter.
-        .frame(width: 180, height: 180)
+        .frame(width: 220, height: 220)
         .task { if frames.isEmpty { frames = Self.load(guide.media) } }
         // Een oefening is geen decoratie, maar de beweging valt niet in woorden te vangen.
         .accessibilityHidden(true)
