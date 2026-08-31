@@ -18,6 +18,11 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - Built
+      # Mapreferentie: de bestanden gaan als map mee de bundle in, dus zoekt de app ze op
+      # met subdirectory "ExerciseMedia". Niet in git — zie .gitignore.
+      - path: ExerciseMedia
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: Supabase
         product: Supabase

@@ -1097,12 +1097,47 @@ struct ExerciseDetailView: View {
                 Text("Geschat 1RM via de Epley-formule: gewicht × (1 + reps ÷ 30).")
             }
 
+            let guide = ExerciseCatalog.guides[exercise]
+            if let guide {
+                Section {
+                    ExerciseAnimation(guide: guide)
+                        // Lijntekening op wit; ook in het donker, want omkeren maakt er een
+                        // röntgenfoto van.
+                        .background(.white, in: RoundedRectangle(cornerRadius: BuiltRadius.card,
+                                                                 style: .continuous))
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                }
+            }
             if let record = allExercises.first(where: { $0.name == exercise }) {
                 Section("Spieren") {
                     LabeledContent("Primair", value: record.muscle)
-                    if !record.secondaryMuscles.isEmpty {
-                        LabeledContent("Meewerkend", value: record.secondaryMuscles.joined(separator: ", "))
+                    // Zelf ingevuld wint van de dataset: in de editor kun je dit aanpassen,
+                    // en dan is dat een keuze en geen leegte.
+                    let secondary = record.secondaryMuscles.isEmpty
+                        ? guide?.secondary ?? [] : record.secondaryMuscles
+                    if !secondary.isEmpty {
+                        LabeledContent("Meewerkend", value: secondary.joined(separator: ", "))
                     }
+                }
+            }
+            if let guide, !guide.steps.isEmpty {
+                Section {
+                    // Dichtgeklapt: je opent deze pagina voor je cijfers, niet voor de uitleg.
+                    DisclosureGroup("Uitvoering") {
+                        ForEach(Array(guide.steps.enumerated()), id: \.offset) { index, step in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text("\(index + 1)")
+                                    .font(.caption.bold().monospacedDigit())
+                                    .foregroundStyle(.green)
+                                    .frame(width: 16, alignment: .trailing)
+                                Text(step)
+                            }
+                            .font(.subheadline)
+                        }
+                    }
+                } footer: {
+                    Text("Beeld en uitleg uit de exercises-dataset. Beeld © Gym visual.")
                 }
             }
             if days.count >= 2 {

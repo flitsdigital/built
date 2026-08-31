@@ -16,3 +16,11 @@ supabase/.temp/
 
 # Agent-worktrees — wegwerpkopieën van de repo
 .claude/worktrees/
+
+# Oefeningplaatjes — eigendom van Gym visual (gymvisual.com), hier alleen voor eigen
+# gebruik. Deze repo is publiek, dus ze horen er niet in. Ophalen met:
+#   python3 scripts/exercises.py <pad naar exercises-dataset>
+ExerciseMedia/
+!ExerciseMedia/.gitkeep
+
+__pycache__/
