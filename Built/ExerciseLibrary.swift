@@ -30,6 +30,10 @@ final class Exercise {
         self.secondaryMuscles = secondaryMuscles
     }
 
+    /// Hoogste versie van `ExerciseCatalog.seed` die dit toestel gezaaid heeft. Ophogen
+    /// zodra er oefeningen bijkomen, anders zien bestaande installs ze nooit.
+    static let catalogVersion = 2
+
     static let muscles = ["Borst", "Rug", "Schouders", "Biceps", "Triceps",
                           "Benen", "Hamstrings", "Bilspieren", "Kuiten", "Core", "Onderrug", "Cardio", "Overig"]
     static let types = ["Barbell", "Dumbbell", "Machine", "Kabel", "Bodyweight", "Kettlebell", "Band", "Cardio", "Overig"]
@@ -61,18 +65,19 @@ final class Exercise {
         }
 
         if existing.isEmpty {
-            for (name, muscle, type) in seed { seedRow(name, muscle, type) }
-        }
-        // Cardio kwam later — eenmalig bijplaatsen bij installs van vóór die versie.
-        //
-        // De vlag lijkt overbodig naast de `where`, maar is het niet: zonder vlag draait
-        // dit elke start, en dan komt een cardio-oefening die je zélf weggooide er telkens
-        // weer bij — mét dezelfde afgeleide id als de tombstone die je verwijdering
-        // achterliet. De rest van de catalogus zaait alleen bij een lege lijst en heeft
-        // dat probleem niet.
-        if !UserDefaults.standard.bool(forKey: "seededCardio") {
-            UserDefaults.standard.set(true, forKey: "seededCardio")
-            for name in cardioSeed where !known.contains(name) { seedRow(name, "Cardio", "Cardio") }
+            for row in ExerciseCatalog.seed { seedRow(row.name, row.muscle, row.type) }
+            UserDefaults.standard.set(catalogVersion, forKey: "catalogVersion")
+        } else if UserDefaults.standard.integer(forKey: "catalogVersion") < catalogVersion {
+            // Uitbreidingen van de catalogus bijplaatsen bij een install van vóór die versie.
+            //
+            // Het nummer lijkt overbodig naast de `where`, maar is het niet: zonder nummer
+            // draait dit elke start, en dan komt een oefening die je zélf weggooide er
+            // telkens weer bij — mét dezelfde afgeleide id als de tombstone die je
+            // verwijdering achterliet.
+            UserDefaults.standard.set(catalogVersion, forKey: "catalogVersion")
+            for row in ExerciseCatalog.seed where !known.contains(row.name) {
+                seedRow(row.name, row.muscle, row.type)
+            }
         }
 
         // Vrije-tekst-oefeningen uit historie en routines opnemen als "Overig"
@@ -112,42 +117,6 @@ final class Exercise {
         }
     }
 
-    private static let cardioSeed = ["Loopband", "Hardlopen", "Fietsen", "Hometrainer",
-                                     "Roeimachine", "Crosstrainer", "Stairmaster", "Wandelen"]
-
-    private static let seed: [(String, String, String)] = [
-        ("Bench Press", "Borst", "Barbell"),
-        ("Incline Dumbbell Press", "Borst", "Dumbbell"),
-        ("Dumbbell Press", "Borst", "Dumbbell"),
-        ("Chest Fly", "Borst", "Kabel"),
-        ("Push Up", "Borst", "Bodyweight"),
-        ("Shoulder Press", "Schouders", "Barbell"),
-        ("Overhead Press", "Schouders", "Barbell"),
-        ("Lateral Raises", "Schouders", "Dumbbell"),
-        ("Face Pulls", "Schouders", "Kabel"),
-        ("Triceps Pushdown", "Triceps", "Kabel"),
-        ("Triceps Extension", "Triceps", "Dumbbell"),
-        ("Dips", "Triceps", "Bodyweight"),
-        ("Deadlift", "Rug", "Barbell"),
-        ("Lat Pulldown", "Rug", "Machine"),
-        ("Barbell Row", "Rug", "Barbell"),
-        ("Pull Up", "Rug", "Bodyweight"),
-        ("Seated Row", "Rug", "Kabel"),
-        ("Biceps Curl", "Biceps", "Dumbbell"),
-        ("Barbell Curl", "Biceps", "Barbell"),
-        ("Hammer Curl", "Biceps", "Dumbbell"),
-        ("Squat", "Benen", "Barbell"),
-        ("Leg Press", "Benen", "Machine"),
-        ("Leg Extension", "Benen", "Machine"),
-        ("Lunges", "Benen", "Dumbbell"),
-        ("Romanian Deadlift", "Hamstrings", "Barbell"),
-        ("Leg Curl", "Hamstrings", "Machine"),
-        ("Hip Thrust", "Bilspieren", "Barbell"),
-        ("Calf Raises", "Kuiten", "Machine"),
-        ("Plank", "Core", "Bodyweight"),
-        ("Crunch", "Core", "Bodyweight"),
-        ("Hanging Leg Raise", "Core", "Bodyweight"),
-    ]
 }
 
 /// Iets dat het type van een oefening kent. De trainingsschermen bouwen er een dict van
