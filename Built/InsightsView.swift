@@ -215,7 +215,7 @@ struct InsightsView: View {
 
     private func makeLiftStats() -> LiftStats {
         var out = LiftStats()
-        let byExercise = Dictionary(grouping: sets, by: \.exercise)
+        let byExercise = Dictionary(grouping: sets.work, by: \.exercise)
         for (name, group) in byExercise {
             let byDay = Dictionary(grouping: group) { dayKey($0.date) }.sorted { $0.key < $1.key }
             out.tops[name] = byDay.map { _, day in
@@ -229,7 +229,7 @@ struct InsightsView: View {
     }
 
     private var weeklyVolume: [(week: Date, volume: Double)] {
-        let groups = Dictionary(grouping: sets) {
+        let groups = Dictionary(grouping: sets.work) {
             cal.dateInterval(of: .weekOfYear, for: $0.date)?.start ?? cal.startOfDay(for: $0.date)
         }
         var result: [(week: Date, volume: Double)] = []
@@ -269,7 +269,7 @@ struct InsightsView: View {
         let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
         let since = cal.startOfDay(for: .now).addingTimeInterval(-27 * 86_400)
         var totals: [String: Double] = [:]
-        for s in sets where s.date >= since {
+        for s in sets.work where s.date >= since {
             let m = muscleOf[s.exercise] ?? "Overig"
             totals[m, default: 0] += s.weightKg * Double(s.reps)
         }
@@ -730,7 +730,7 @@ struct WeeklyReviewSheet: View {
     private var cal: Calendar { .current }
 
     private var weekSets: [SetEntry] {
-        sets.filter { $0.date > cal.startOfDay(for: .now).addingTimeInterval(-6 * 86_400) }
+        sets.work.filter { $0.date > cal.startOfDay(for: .now).addingTimeInterval(-6 * 86_400) }
     }
 
     private var bestLift: (name: String, e1rm: Double)? {
@@ -839,7 +839,10 @@ struct ExerciseDetailView: View {
     }
 
     private var cal: Calendar { .current }
-    private var sets: [SetEntry] { allSets.filter { $0.exercise == exercise } }
+    /// Werksets: dit scherm gaat over hoe sterk je op deze oefening bent, en daar horen
+    /// je opwarmsets niet in de grafiek of de records thuis. Terugzien doe je ze in de
+    /// training zelf.
+    private var sets: [SetEntry] { allSets.work.filter { $0.exercise == exercise } }
 
     private var days: [Date] {
         Set(sets.map { cal.startOfDay(for: $0.date) }).sorted(by: >)

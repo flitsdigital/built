@@ -106,3 +106,31 @@ struct SavedWorkoutTests {
         #expect(back.exercises.first?.sets.first?.kg == 60)
     }
 }
+
+/// Warming-up-sets worden bewaard (#105), maar mogen nergens meetellen: één vergeten
+/// filter en je weekvolume klopt niet meer.
+@Suite("Warming-up")
+struct WarmupTests {
+    @Test("`.work` laat de warming-up buiten de telling")
+    @MainActor func warmupTeltNietMee() {
+        let sets = [
+            SetEntry(exercise: "Squat", weightKg: 40, reps: 10, warmup: true),
+            SetEntry(exercise: "Squat", weightKg: 60, reps: 8, warmup: true),
+            SetEntry(exercise: "Squat", weightKg: 100, reps: 5),
+            SetEntry(exercise: "Squat", weightKg: 100, reps: 5),
+        ]
+        #expect(sets.count == 4)
+        #expect(sets.work.count == 2)
+        let volume: Double = sets.work.reduce(0) { $0 + $1.weightKg * Double($1.reps) }
+        #expect(volume == 1000)
+        // De opwarmset weegt lichter dan de werkset, dus een gemist filter valt op in het
+        // volume — maar níét in het topgewicht. Vandaar ook hier expliciet.
+        #expect(sets.work.map(\.weightKg).max() == 100)
+    }
+
+    @Test("De notatie markeert een warming-up")
+    func warmupInNotatie() {
+        #expect(setNotation(kg: 40, reps: 10, bodyweight: false, warmup: true) == "W40×10")
+        #expect(setNotation(kg: 40, reps: 10, bodyweight: false) == "40×10")
+    }
+}

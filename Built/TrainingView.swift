@@ -140,12 +140,12 @@ struct TrainingView: View {
         let start = session.sets.first?.date ?? session.date
         // Per oefening één keer het oude record bepalen i.p.v. per set opnieuw scannen.
         var bestBefore: [String: Double] = [:]
-        for s in session.sets {
+        for s in session.sets.work {
             let best: Double
             if let cached = bestBefore[s.exercise] {
                 best = cached
             } else {
-                best = (history.byExercise[s.exercise] ?? [])
+                best = (history.byExercise[s.exercise] ?? []).work
                     .filter { $0.date < start }
                     .map { epley($0.weightKg, $0.reps) }.max() ?? 0
                 bestBefore[s.exercise] = best
@@ -162,7 +162,13 @@ struct TrainingView: View {
     // MARK: - Doelgerichte voorstellen (dubbele progressie)
 
     private func draft(for name: String, target: [Int]? = nil, _ history: HistoryIndex) -> DraftExercise {
-        let last = lastSession(for: name, history)
+        let session = lastSession(for: name, history)
+        let last = session.work
+        // Je stelt je warming-up zelf samen, dus komt 'ie terug zoals je 'm vorige keer
+        // deed — niet als een ramp die de app verzint (#105).
+        let warmups = session.filter(\.warmup).map {
+            DraftSet(kg: $0.weightKg, reps: $0.reps, warmup: true, seconds: $0.seconds)
+        }
         let bw = history.isBodyweight(name)
         let goalSets = target.map { max($0.first ?? 3, 1) }
         let goalReps = target.flatMap { $0.count > 1 ? $0[1] : nil }
@@ -172,7 +178,7 @@ struct TrainingView: View {
             let tip = last.isEmpty ? "Log je minuten — kg en reps blijven leeg."
                                    : "Vorige keer \(last.map { $0.seconds / 60 }.max() ?? 0) min."
             return DraftExercise(name: name, tip: tip,
-                                 sets: [DraftSet(kg: 0, reps: 0, seconds: minutes * 60)])
+                                 sets: warmups + [DraftSet(kg: 0, reps: 0, seconds: minutes * 60)])
         }
         guard !last.isEmpty else {
             let n = goalSets ?? 3
@@ -180,7 +186,7 @@ struct TrainingView: View {
             let tip = bw ? "Eerste keer — log je reps (extra gewicht is optioneel)."
                          : "Eerste keer — kies een gewicht dat je \(reps) reps aankan."
             return DraftExercise(name: name, tip: tip,
-                                 sets: (0..<n).map { _ in DraftSet(kg: bw ? 0 : 20, reps: reps) })
+                                 sets: warmups + (0..<n).map { _ in DraftSet(kg: bw ? 0 : 20, reps: reps) })
         }
         let top = last.map(\.weightKg).max() ?? (bw ? 0 : 20)
         let allEnough = last.allSatisfy { $0.reps >= (goalReps ?? 8) }
@@ -192,7 +198,7 @@ struct TrainingView: View {
                : "Zelfde gewicht, probeer 1 rep meer per set.")
         // Aantal sets uit het target (of het aantal van vorige keer), reps uit het target
         let count = goalSets ?? last.count
-        return DraftExercise(name: name, tip: tip, sets: (0..<count).map { i in
+        return DraftExercise(name: name, tip: tip, sets: warmups + (0..<count).map { i in
             let prev = i < last.count ? last[i] : last.last
             let kg = bw ? top : (allEnough ? top + 2.5 : top)
             let reps = goalReps ?? (bw ? min((prev?.reps ?? 8) + 1, 30)
@@ -229,7 +235,7 @@ struct TrainingView: View {
     /// winst in de laatste 30 dagen, en zwijgt verder. De plateaudrempel komt uit
     /// `isPlateaued`, dezelfde die Inzicht gebruikt.
     private func progressNote(_ name: String, _ history: HistoryIndex) -> (text: String, warning: Bool)? {
-        let past = (history.byExercise[name] ?? []).filter { $0.date < startedAt }
+        let past = (history.byExercise[name] ?? []).work.filter { $0.date < startedAt }
         guard !past.isEmpty else { return nil }
         let perSession = Dictionary(grouping: past) { $0.sessionKey }
             .map { (date: $0.value.first?.date ?? .distantPast, kg: $0.value.map { epley($0.weightKg, $0.reps) }.max() ?? 0) }
@@ -247,7 +253,7 @@ struct TrainingView: View {
         let last = lastSession(for: name, history)
         guard !last.isEmpty else { return nil }
         let bw = history.isBodyweight(name)
-        return last.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+        return last.work.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
     }
 
     private func setRest(_ id: UUID, _ seconds: Int?) {
@@ -275,7 +281,7 @@ struct TrainingView: View {
 
     /// Beste geschat 1RM voor deze oefening vóór de huidige sessie.
     private func bestBefore(_ name: String, _ history: HistoryIndex) -> Double? {
-        (history.byExercise[name] ?? []).filter { $0.date < startedAt }
+        (history.byExercise[name] ?? []).work.filter { $0.date < startedAt }
             .map { epley($0.weightKg, $0.reps) }.max()
     }
 
@@ -489,7 +495,7 @@ struct TrainingView: View {
             s.id != workoutID.uuidString && s.sets.contains { names.contains($0.exercise) }
         }
         let previousVolume = previous.map { s in
-            Int(s.sets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: history.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+            Int(s.sets.work.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight, bodyweightExercise: history.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         }
         summary = WorkoutSummary(
             minutes: max(Int(Date.now.timeIntervalSince(startedAt) / 60), 1),
@@ -875,7 +881,7 @@ struct TrainingView: View {
 
     private func historyCard(_ session: WorkoutSession, _ history: HistoryIndex) -> some View {
         let day = cal.startOfDay(for: session.date)
-        let vol = Int(session.sets.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
+        let vol = Int(session.sets.work.map { $0.weightKg * Double($0.reps) }.reduce(0, +))
         let name = habits.first { dayKey($0.date) == dayKey(session.date) }?.name(for: session.id) ?? ""
         return NavigationLink {
             SessionDetailView(session: session)
@@ -899,7 +905,7 @@ struct TrainingView: View {
                 }
                 ForEach(session.sets.byExercise(), id: \.name) { group in
                     let bw = history.isBodyweight(group.name)
-                    Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
+                    Text("\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds, warmup: $0.warmup) }.joined(separator: "  "))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1099,7 +1105,7 @@ struct TrainingView: View {
 
     private func activityTip(for name: String, currentKg: Double, _ history: HistoryIndex) -> String? {
         let last = lastSession(for: name, history)
-        guard let best = last.max(by: { epley($0.weightKg, $0.reps) < epley($1.weightKg, $1.reps) }) else { return nil }
+        guard let best = last.work.max(by: { epley($0.weightKg, $0.reps) < epley($1.weightKg, $1.reps) }) else { return nil }
         let prevText = "Vorige keer: \(best.weightKg.kgText) kg × \(best.reps)"
         let prevE1RM = epley(best.weightKg, best.reps)
         if currentKg > best.weightKg {
@@ -1401,13 +1407,12 @@ struct TrainingView: View {
                 withAnimation(.snappy(duration: 0.25)) {
                     set.wrappedValue.done.toggle()
                     if set.wrappedValue.done {
-                        if !set.wrappedValue.warmup {
-                            let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
-                                             dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
-                                             seconds: set.wrappedValue.seconds, workoutID: workoutID)
-                            context.insert(e)
-                            set.wrappedValue.savedEntry = e
-                        }
+                        let e = SetEntry(exercise: exercise, weightKg: set.wrappedValue.kg, reps: set.wrappedValue.reps,
+                                         dropset: set.wrappedValue.dropset, failure: set.wrappedValue.failure,
+                                         warmup: set.wrappedValue.warmup,
+                                         seconds: set.wrappedValue.seconds, workoutID: workoutID)
+                        context.insert(e)
+                        set.wrappedValue.savedEntry = e
                         // Warming-up, cardio en tussen-superset-sets: geen (of minimale) rust
                         if !set.wrappedValue.warmup, !cardio, shouldRest(after: exercise) {
                             WorkoutStatus.shared.startRest(seconds: restFor(exercise))

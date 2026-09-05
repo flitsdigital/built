@@ -136,6 +136,7 @@ enum Sync {
     private struct SetRow: Codable, Sendable, SyncRow {
         var id: UUID; var date: Date; var exercise: String; var weight_kg: Double; var reps: Int
         var dropset: Bool? = false; var failure: Bool? = false
+        var warmup: Bool? = false
         var seconds: Int? = 0
         var workout_id: UUID? = nil
         var updated_at: String?; var deleted_at: String?
@@ -308,7 +309,7 @@ enum Sync {
     }
     private static func row(_ e: SetEntry, _ at: String?) -> SetRow {
         SetRow(id: e.syncID, date: e.date, exercise: e.exercise, weight_kg: e.weightKg, reps: e.reps,
-               dropset: e.dropset, failure: e.failure, seconds: e.seconds,
+               dropset: e.dropset, failure: e.failure, warmup: e.warmup, seconds: e.seconds,
                workout_id: e.workoutID == .zero ? nil : e.workoutID, updated_at: at)
     }
     private static func row(_ e: DayHabits, _ at: String?) -> HabitsRow {
@@ -618,6 +619,9 @@ enum Sync {
     private static func apply(_ r: SetRow, to m: SetEntry) {
         m.date = r.date; m.exercise = r.exercise; m.weightKg = r.weight_kg; m.reps = r.reps
         m.dropset = r.dropset ?? false; m.failure = r.failure ?? false; m.seconds = r.seconds ?? 0
+        // Zelfde reden als `workout_id` hieronder: draait migration 0022 nog niet, dan
+        // komt de kolom als nil terug en zou `?? false` de warming-up-vlag lokaal wissen.
+        if let w = r.warmup { m.warmup = w }
         // Alleen overschrijven als de server iets zégt. Draait de migration nog niet, dan
         // bestaat de kolom daar niet, komt het veld als nil terug, en zou een `?? .zero`
         // het sessie-id bij elke pull lokaal wissen — en vallen twee trainingen van
