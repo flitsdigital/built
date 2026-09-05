@@ -242,6 +242,31 @@ struct InsightsView: View {
         return result.suffix(volumeWeeks).map { $0 }
     }
 
+    /// Waar het volume van één week vandaan komt: de trainingen die het maakten en de
+    /// spiergroepen die het dragen. Zonder dit is een hoge staaf alleen een hoge staaf.
+    private func weekBreakdown(_ week: Date) -> (workouts: [(name: String, date: Date, kg: Double)],
+                                                 muscles: [(muscle: String, kg: Double)]) {
+        guard let span = cal.dateInterval(of: .weekOfYear, for: week) else { return ([], []) }
+        let inWeek = sets.work.filter { span.contains($0.date) }
+        let muscleOf = Dictionary(exercises.map { ($0.name, $0.muscle) }, uniquingKeysWith: { a, _ in a })
+
+        var muscles: [String: Double] = [:]
+        for s in inWeek { muscles[muscleOf[s.exercise] ?? "Overig", default: 0] += s.weightKg * Double(s.reps) }
+
+        let workouts = inWeek.sessions().map { session -> (name: String, date: Date, kg: Double) in
+            let kg = session.sets.reduce(0.0) { $0 + $1.weightKg * Double($1.reps) }
+            let named = habits.first { dayKey($0.date) == dayKey(session.date) }?.name(for: session.id) ?? ""
+            // Zonder naam vier keer "Training" onder elkaar zegt niets. De zwaarste
+            // spiergroep van die sessie wél: dáár ging je volume heen.
+            var perMuscle: [String: Double] = [:]
+            for s in session.sets { perMuscle[muscleOf[s.exercise] ?? "Overig", default: 0] += s.weightKg * Double(s.reps) }
+            let fallback = perMuscle.max { $0.value < $1.value }?.key ?? "Training"
+            return (named.isEmpty ? fallback : named, session.date, kg)
+        }
+        return (workouts.sorted { $0.kg > $1.kg },
+                muscles.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 })
+    }
+
     private func delta(_ tops: [(day: Date, kg: Double)]) -> Int? {
         guard tops.count >= 2, let first = tops.first?.kg, let last = tops.last?.kg, first > 0 else { return nil }
         return Int(((last - first) / first * 100).rounded())
@@ -285,6 +310,8 @@ struct InsightsView: View {
 
     @State private var showReview = false
     @State private var volumeWeeks = 8
+    /// De week die onder de grafiek uitgeschreven staat. `nil` = de laatste.
+    @State private var pickedWeek: Date?
     @State private var selectedDayBox: DayBox?
     @State private var selectedMuscle: String?
 
@@ -474,9 +501,55 @@ struct InsightsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 volumeChart
+                if let week = focusWeek { weekBreakdownRows(week) }
             }
         }
         .builtCard()
+    }
+
+    /// De week die uitgelicht staat: wat je aantikte, anders de laatste. Na een
+    /// periodewissel kan je keuze buiten beeld vallen — dan weer de laatste.
+    private var focusWeek: Date? {
+        let weeks = weeklyVolume.map(\.week)
+        guard let last = weeks.last else { return nil }
+        guard let picked = pickedWeek else { return last }
+        return weeks.contains(picked) ? picked : last
+    }
+
+    /// Waar de staaf vandaan komt: eerst de trainingen (daar heb je iets aan — "de
+    /// zaterdag was zwaar"), dan de spiergroepen die het volume dragen.
+    @ViewBuilder private func weekBreakdownRows(_ week: Date) -> some View {
+        let (workouts, muscles) = weekBreakdown(week)
+        let total = muscles.reduce(0) { $0 + $1.kg }
+        Divider()
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Week van \(week.formatted(.dateTime.day().month())) · \(Int(total)) kg")
+                .font(.subheadline.bold())
+            if workouts.isEmpty {
+                Text("Geen trainingen in deze week.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                ForEach(workouts, id: \.date) { w in
+                    HStack {
+                        Text(w.name).font(.footnote)
+                        Text(w.date.formatted(.dateTime.weekday(.abbreviated).day()))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(Int(w.kg)) kg").font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+                // Drie zegt genoeg: welke spiergroep het meeste drukt, en wat erachter zit.
+                let top = muscles.prefix(3)
+                if !top.isEmpty, total > 0 {
+                    Text(top.map { "\($0.muscle) \(Int($0.kg / total * 100))%" }.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.smooth(duration: 0.2), value: week)
     }
 
     @ViewBuilder private func plateauBlock(_ plateaus: [(name: String, sessions: Int, kg: Double)]) -> some View {
@@ -601,7 +674,8 @@ struct InsightsView: View {
                     x: .value("Week", item.week, unit: .weekOfYear),
                     y: .value("Volume", item.volume)
                 )
-                .foregroundStyle(.green.gradient)
+                .foregroundStyle(item.week == focusWeek ? AnyShapeStyle(Color.green.gradient)
+                                                        : AnyShapeStyle(Color.green.opacity(0.35)))
                 .cornerRadius(4)
             }
             RuleMark(y: .value("Gemiddeld", avg))
@@ -612,6 +686,26 @@ struct InsightsView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+        }
+        // Charts geeft de x-waarde terug waar je tikt, niet de staaf — dus snappen we
+        // zelf naar de dichtstbijzijnde week, net als in de oefeninggrafiek.
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                guard let plotFrame = proxy.plotFrame else { return }
+                                let origin = geo[plotFrame].origin
+                                if let date: Date = proxy.value(atX: value.location.x - origin.x) {
+                                    pickedWeek = weeklyVolume.map(\.week)
+                                        .min { abs($0.timeIntervalSince(date)) < abs($1.timeIntervalSince(date)) }
+                                }
+                            }
+                    )
+            }
         }
         .frame(height: 170)
         .padding(.vertical, 8)
