@@ -90,6 +90,7 @@ create table if not exists public.set_entries (
   reps int not null
 );
 alter table public.set_entries add column if not exists dropset boolean not null default false;
+alter table public.set_entries add column if not exists warmup boolean not null default false;
 alter table public.set_entries add column if not exists failure boolean not null default false;
 alter table public.set_entries add column if not exists seconds int not null default 0;
 -- Bij welke training deze set hoort. Null = van vóór deze kolom; de app valt daar terug
@@ -469,15 +470,15 @@ begin
     unit = excluded.unit, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, seconds, workout_id, updated_at, deleted_at)
+  insert into public.set_entries as t (id, user_id, date, exercise, weight_kg, reps, dropset, failure, warmup, seconds, workout_id, updated_at, deleted_at)
   select r.id, uid, r.date, r.exercise, r.weight_kg, r.reps, coalesce(r.dropset, false),
-         coalesce(r.failure, false), coalesce(r.seconds, 0), r.workout_id,
+         coalesce(r.failure, false), coalesce(r.warmup, false), coalesce(r.seconds, 0), r.workout_id,
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.set_entries, coalesce(payload->'sets', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
     date = excluded.date, exercise = excluded.exercise, weight_kg = excluded.weight_kg,
     reps = excluded.reps, dropset = excluded.dropset, failure = excluded.failure,
-    seconds = excluded.seconds, workout_id = excluded.workout_id,
+    warmup = excluded.warmup, seconds = excluded.seconds, workout_id = excluded.workout_id,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 

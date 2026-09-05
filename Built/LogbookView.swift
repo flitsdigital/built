@@ -418,7 +418,7 @@ struct DayDetailView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(group.name).font(.headline)
-                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  "))
+                                Text(group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds, warmup: $0.warmup) }.joined(separator: "  "))
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }

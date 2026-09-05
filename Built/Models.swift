@@ -351,12 +351,14 @@ func isPlateaued(_ e1rmPerSession: [Double]) -> Bool {
 
 /// Set-notatie voor overzichten. Cardio toont de duur ("25 min"); bodyweight zonder
 /// extra gewicht alleen reps (bijv. "×8"); met extra gewicht "+5×8"; met ondersteuning
-/// (assisted dip/pull-up) "-40×8"; anders "40×8".
-func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0) -> String {
-    if seconds > 0 { return "\(seconds / 60) min" }
-    guard bodyweight else { return "\(kg.kgText)×\(reps)" }
-    if kg == 0 { return "×\(reps)" }
-    return "\(kg > 0 ? "+" : "")\(kg.kgText)×\(reps)"
+/// (assisted dip/pull-up) "-40×8"; anders "40×8". Een warming-up krijgt een W ervoor,
+/// anders leest "20×10" in een rij werksets als een slechte set.
+func setNotation(kg: Double, reps: Int, bodyweight: Bool, seconds: Int = 0, warmup: Bool = false) -> String {
+    let prefix = warmup ? "W" : ""
+    if seconds > 0 { return "\(prefix)\(seconds / 60) min" }
+    guard bodyweight else { return "\(prefix)\(kg.kgText)×\(reps)" }
+    if kg == 0 { return "\(prefix)×\(reps)" }
+    return "\(prefix)\(kg > 0 ? "+" : "")\(kg.kgText)×\(reps)"
 }
 
 /// Platte tekst van een afgeronde training om te delen — werkt in elke app.
@@ -622,6 +624,9 @@ final class SetEntry {
     var reps: Int
     var dropset: Bool = false
     var failure: Bool = false
+    /// Opwarmset. Wordt wél bewaard (je stelt je eigen ramp samen en wilt 'm terugzien),
+    /// maar telt nergens mee: volume, records, PR's en de body-map draaien op `.work`.
+    var warmup: Bool = false
     /// Duur voor cardio-oefeningen in seconden; 0 = gewone krachtset.
     var seconds: Int = 0
     /// Bij welke sessie deze set hoort. Zonder dit ís een training gewoon "alles wat je
@@ -629,7 +634,7 @@ final class SetEntry {
     /// `.zero` = van vóór deze kolom; die vallen terug op de dag.
     var workoutID: UUID = UUID.zero
     init(date: Date = .now, exercise: String, weightKg: Double, reps: Int,
-         dropset: Bool = false, failure: Bool = false, seconds: Int = 0,
+         dropset: Bool = false, failure: Bool = false, warmup: Bool = false, seconds: Int = 0,
          workoutID: UUID = .zero) {
         self.syncID = UUID()
         self.date = date
@@ -638,6 +643,7 @@ final class SetEntry {
         self.reps = reps
         self.dropset = dropset
         self.failure = failure
+        self.warmup = warmup
         self.seconds = seconds
         self.workoutID = workoutID
     }
@@ -652,6 +658,11 @@ struct WorkoutSession: Identifiable {
 }
 
 extension Array where Element == SetEntry {
+    /// De sets die meetellen: alles behalve de warming-up. Elke berekening van volume,
+    /// records, e1RM of spierbelasting hoort hierop te draaien — filteren op de call-site
+    /// is dertig plekken die je er één van kunt vergeten.
+    var work: [SetEntry] { filter { !$0.warmup } }
+
     /// Splitst sets in sessies. Sets van vóór `workoutID` hebben er geen, en vallen samen
     /// per dag — precies zoals de app ze toen ook toonde.
     func sessions() -> [WorkoutSession] {
@@ -911,7 +922,9 @@ struct DayIndex {
             proteinKcal[k, default: 0] += p.kcal
         }
         for w in weights { weightByDay[dayKey(w.date)] = w.kg }
-        for s in sets {
+        // `.work`: een opwarmset is geen trainingsvolume, en een dag met alleen een
+        // warming-up is geen trainingsdag.
+        for s in sets.work {
             let k = dayKey(s.date)
             trainedDays.insert(k)
             dayVolume[k, default: 0] += s.weightKg * Double(s.reps)

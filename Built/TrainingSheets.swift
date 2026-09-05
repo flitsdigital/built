@@ -243,7 +243,7 @@ struct SessionDetailView: View {
     }
 
     private var volume: Int {
-        Int(daySets.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
+        Int(daySets.work.map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: day), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
     }
 
     private var durationText: String {
@@ -266,7 +266,7 @@ struct SessionDetailView: View {
 
     private var volumeDelta: Int? {
         guard let prev = previousSession else { return nil }
-        let pv = Int(prev.sets
+        let pv = Int(prev.sets.work
             .map { liftLoad(kg: $0.weightKg, bodyweight: bodyWeight(on: prev.date), bodyweightExercise: exercises.isBodyweight($0.exercise)) * Double($0.reps) }.reduce(0, +))
         return pv > 0 ? volume - pv : nil
     }
@@ -277,8 +277,8 @@ struct SessionDetailView: View {
     private var prs: [(exercise: String, new: Double, old: Double)] {
         let start = daySets.first?.date ?? cal.startOfDay(for: day)
         return byExercise.compactMap { group in
-            let best = group.sets.map { epley($0.weightKg, $0.reps) }.max() ?? 0
-            let before = allSets.filter { $0.exercise == group.name && $0.date < start }
+            let best = group.sets.work.map { epley($0.weightKg, $0.reps) }.max() ?? 0
+            let before = allSets.work.filter { $0.exercise == group.name && $0.date < start }
                 .map { epley($0.weightKg, $0.reps) }.max() ?? 0
             return best > before + 0.1 && before > 0 ? (group.name, best, before) : nil
         }
@@ -296,10 +296,10 @@ struct SessionDetailView: View {
 
     private var shareText: String {
         workoutShareText(title: "Training van \(day.formatted(.dateTime.weekday(.wide).day().month()))",
-                         duration: durationText, volume: volume, sets: daySets.count,
+                         duration: durationText, volume: volume, sets: daySets.work.count,
                          lines: byExercise.map { group in
                              let bw = exercises.isBodyweight(group.name)
-                             return "\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds) }.joined(separator: "  ")
+                             return "\(group.name): " + group.sets.map { setNotation(kg: $0.weightKg, reps: $0.reps, bodyweight: bw, seconds: $0.seconds, warmup: $0.warmup) }.joined(separator: "  ")
                          },
                          prs: prs)
     }
@@ -411,7 +411,7 @@ struct SessionDetailView: View {
                 .accessibilityLabel("Acties voor \(group.name)")
             }
             ForEach(Array(group.sets.enumerated()), id: \.element.persistentModelID) { i, set in
-                setRow(i, set, group.name)
+                setRow(i, set, group.name, number: setNumber(group.sets, i))
             }
             Button {
                 if let last = group.sets.last {
@@ -428,11 +428,18 @@ struct SessionDetailView: View {
         .builtCard()
     }
 
-    private func setRow(_ i: Int, _ set: SetEntry, _ name: String) -> some View {
+    /// Volgnummer onder de werksets. Een warming-up krijgt een W en telt niet mee, net
+    /// als tijdens de training zelf — anders staat set 1 opeens op 3.
+    private func setNumber(_ sets: [SetEntry], _ i: Int) -> String {
+        sets[i].warmup ? "W" : "\(sets[..<i].filter { !$0.warmup }.count + 1)"
+    }
+
+    private func setRow(_ i: Int, _ set: SetEntry, _ name: String, number: String) -> some View {
         HStack(spacing: 12) {
-            Text("\(i + 1)\(set.dropset ? " D" : "")\(set.failure ? " F" : "")")
+            Text("\(number)\(set.dropset ? " D" : "")\(set.failure ? " F" : "")")
                 .font(.subheadline.monospacedDigit().bold())
-                .foregroundStyle(set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                .foregroundStyle(set.warmup ? AnyShapeStyle(.orange)
+                                 : (set.dropset || set.failure ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary)))
                 .frame(width: 40, alignment: .leading)
             if exercises.isCardio(name) {
                 NumericField(value: minutes(set), decimal: false, placeholder: "min",

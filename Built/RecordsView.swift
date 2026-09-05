@@ -23,7 +23,7 @@ struct RecordsView: View {
         let typeOf = Dictionary(exercises.map { ($0.name, $0.type) }, uniquingKeysWith: { a, _ in a })
         var out: [Record] = []
         // ponytail: cardio kent geen 1RM/gewicht — hoort niet op de PR-muur
-        for (name, group) in Dictionary(grouping: sets, by: \.exercise) where typeOf[name] != "Cardio" {
+        for (name, group) in Dictionary(grouping: sets.work, by: \.exercise) where typeOf[name] != "Cardio" {
             let e1rm = group.map { epley($0.weightKg, $0.reps) }.max() ?? 0
             let topWeight = group.map(\.weightKg).max() ?? 0
             let byDay = Dictionary(grouping: group) { dayKey($0.date) }
