@@ -841,10 +841,20 @@ struct FoodLogSheet: View {
     }
 
     private var ownMatches: [FoodProduct] {
-        let base = query.isEmpty
-            ? products
-            : products.filter { $0.name.localizedCaseInsensitiveContains(query) || $0.brand.localizedCaseInsensitiveContains(query) }
-        return Array(base.sorted { ($0.favorite ? 0 : 1, $1.lastUsed) < (($1.favorite ? 0 : 1), $0.lastUsed) }.prefix(10))
+        guard !query.isEmpty else {
+            return Array(products.sorted { ($0.favorite ? 0 : 1, $1.lastUsed) < (($1.favorite ? 0 : 1), $0.lastUsed) }.prefix(10))
+        }
+        // Op score sorteren, niet op laatst gebruikt. Anders duwen tien recente producten
+        // die het woord ergens bevatten het product waar je naam mee begint uit de lijst.
+        let scored = products.compactMap { p -> (product: FoodProduct, score: Int)? in
+            let score = max(foodMatchScore(p.name, query: query), foodMatchScore(p.brand, query: query))
+            return score > 0 ? (p, score) : nil
+        }
+        return Array(scored.sorted { a, b in
+            if a.score != b.score { return a.score > b.score }
+            if a.product.favorite != b.product.favorite { return a.product.favorite }
+            return a.product.lastUsed > b.product.lastUsed
+        }.prefix(10).map(\.product))
     }
 
     /// Rij die doorklikt naar de productpagina. De portie-editor klapte hier vroeger
