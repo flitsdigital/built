@@ -688,6 +688,7 @@ struct FoodLogSheet: View {
             .navigationDestination(item: $detail) { food in
                 FoodDetailView(food: food, lastAmount: lastAmount(for: food)) { amount, unit in
                     logFood(food, amount: amount, unit: unit)
+                    if mode == 2 { clearQuick() }
                     detail = nil
                 }
             }
@@ -993,7 +994,11 @@ struct FoodLogSheet: View {
             }
             if let scanned {
                 Section("Gevonden") {
-                    productRow(scanned, favorite: false, lastAmount: lastAmount(for: scanned))
+                    // Tikbaar naar de productpagina: daar zit de foto. Juist een gescand
+                    // product dat OFF niet kent heeft er geen, en dat is precies waar je er
+                    // zelf een bij wilt zetten. De portie-editor blijft eronder staan, zodat
+                    // de snelle weg geen tik langer wordt.
+                    detailRow(scanned, favorite: false, lastAmount: lastAmount(for: scanned))
                     PortionEditor(food: scanned, lastAmount: lastAmount(for: scanned),
                                   amount: $portionAmount, unit: $portionUnit) { amount, unit in
                         logFood(scanned, amount: amount, unit: unit)
@@ -1071,6 +1076,15 @@ struct FoodLogSheet: View {
                     carbs100: quickCarbs ?? 0, fat100: quickFat ?? 0)
     }
 
+    private var quickComplete: Bool {
+        !quickFood.name.isEmpty && quickFood.protein100 + quickFood.kcal100 > 0
+    }
+
+    private func clearQuick() {
+        quickLabel = ""; quickProtein = nil; quickKcal = nil; quickCarbs = nil; quickFat = nil
+        quickBarcode = ""; manualBarcode = ""
+    }
+
     private var quickTab: some View {
         List {
             Section {
@@ -1083,17 +1097,27 @@ struct FoodLogSheet: View {
                 if !quickBarcode.isEmpty { Text("Barcode \(quickBarcode)") }
             } footer: {
                 Text(quickBarcode.isEmpty
-                     ? "Per 100 g/ml, net als op de verpakking. Hieronder kies je hoeveel je ervan hebt gegeten."
+                     ? "Per 100 g/ml, net als op de verpakking. Op de volgende stap kies je de portie en zet je er een foto bij."
                      : "Deze barcode kent OpenFoodFacts niet. Vul 'm hier één keer in — per 100 g/ml, net als op de verpakking — dan blijft het eraan hangen.")
             }
-            if !quickFood.name.isEmpty, quickFood.protein100 + quickFood.kcal100 > 0 {
-                Section("Portie") {
-                    PortionEditor(food: quickFood, lastAmount: 0,
-                                  amount: $portionAmount, unit: $portionUnit) { amount, unit in
-                        logFood(quickFood, amount: amount, unit: unit)
-                        quickLabel = ""; quickProtein = nil; quickKcal = nil; quickCarbs = nil; quickFat = nil
-                        quickBarcode = ""; manualBarcode = ""
+            Section {
+                // Naar dezelfde productpagina als een gescand of gezocht product: daar zitten
+                // de macrotegels, de portie-editor én de eigen foto al. Een eigen portie-editor
+                // hier betekende dat je eigen item het enige product zonder foto bleef.
+                Button {
+                    detail = quickFood
+                } label: {
+                    HStack {
+                        Label("Portie en foto", systemImage: "arrow.right.circle.fill")
+                            .font(.subheadline.bold())
+                        Spacer()
                     }
+                    .contentShape(Rectangle())
+                }
+                .disabled(!quickComplete)
+            } footer: {
+                if !quickComplete {
+                    Text("Vul minstens een naam en eiwit of kcal in.")
                 }
             }
         }
