@@ -131,6 +131,7 @@ enum Sync {
         var unit: String? = "g"
         var last_amount: Double? = 0
         var categories: String? = ""
+        var portions: [FoodPortion]? = []
         var updated_at: String?; var deleted_at: String?
     }
     private struct SetRow: Codable, Sendable, SyncRow {
@@ -334,7 +335,8 @@ enum Sync {
                 protein100: e.protein100, kcal100: e.kcal100, carbs100: e.carbs100, fat100: e.fat100,
                 favorite: e.favorite, image_url: e.imageURL, serving_grams: e.servingGrams,
                 serving_name: e.servingName, created_at: e.createdAt, unit: e.unit,
-                last_amount: e.lastAmount, categories: e.categories, updated_at: at)
+                last_amount: e.lastAmount, categories: e.categories, portions: e.portions,
+                updated_at: at)
     }
     private static func row(_ e: Exercise, _ at: String?) -> ExerciseRow {
         ExerciseRow(id: e.syncID, name: e.name, muscle: e.muscle, type: e.type,
@@ -658,6 +660,9 @@ enum Sync {
         m.servingGrams = r.serving_grams; m.servingName = r.serving_name
         m.createdAt = r.created_at; m.unit = r.unit ?? FoodUnit.gram.rawValue
         m.lastAmount = r.last_amount ?? 0; m.categories = r.categories ?? ""
+        // `if let`, niet `?? []`: draait migration 0023 nog niet, dan komt de kolom als nil
+        // terug en zou elke pull je eigen porties lokaal wissen. Zie STATUS.md.
+        if let portions = r.portions { m.portions = portions }
     }
     private static func apply(_ r: ExerciseRow, to m: Exercise) {
         m.name = r.name; m.muscle = r.muscle; m.type = r.type; m.createdAt = r.created_at

@@ -495,7 +495,7 @@ enum FoodUnit: String, Codable, CaseIterable {
 }
 
 /// Eén aanklikbare portie: "1 glas" → 250 ml.
-struct FoodPortion: Identifiable, Hashable {
+struct FoodPortion: Codable, Identifiable, Hashable {
     var label: String
     var amount: Double
     var id: String { label }
@@ -550,6 +550,10 @@ final class FoodProduct {
     /// Eigen eenheid: "1 ei" = servingName "ei", servingGrams 60. 0 = alleen gram.
     var servingGrams: Double = 0
     var servingName: String = ""
+    /// Porties die je zelf bij dit product hebt bewaard. De vaste 50/100/250 zijn een
+    /// gok op basis van de categorie; dit is wat jíj er werkelijk van neemt — één bol,
+    /// één schep, één bakje. Staan vooraan in de rij, want ze slaan altijd.
+    var portions: [FoodPortion] = []
     var createdAt: Date = Date.now
     var lastUsed: Date = Date.now
     /// "g" of "ml" — onthouden, zodat melk niet elke keer opnieuw in grammen begint.

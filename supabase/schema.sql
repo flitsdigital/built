@@ -91,6 +91,7 @@ create table if not exists public.set_entries (
 );
 alter table public.set_entries add column if not exists dropset boolean not null default false;
 alter table public.set_entries add column if not exists warmup boolean not null default false;
+alter table public.food_products add column if not exists portions jsonb not null default '[]'::jsonb;
 alter table public.set_entries add column if not exists failure boolean not null default false;
 alter table public.set_entries add column if not exists seconds int not null default 0;
 -- Bij welke training deze set hoort. Null = van vóór deze kolom; de app valt daar terug
@@ -526,11 +527,12 @@ begin
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.food_products as t (id, user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, image_url, serving_grams, serving_name, created_at, unit, last_amount, categories, updated_at, deleted_at)
+  insert into public.food_products as t (id, user_id, name, brand, barcode, protein100, kcal100, carbs100, fat100, favorite, image_url, serving_grams, serving_name, created_at, unit, last_amount, categories, portions, updated_at, deleted_at)
   select r.id, uid, r.name, coalesce(r.brand, ''), coalesce(r.barcode, ''), r.protein100, r.kcal100,
          coalesce(r.carbs100, 0), coalesce(r.fat100, 0), coalesce(r.favorite, false),
          coalesce(r.image_url, ''), coalesce(r.serving_grams, 0), coalesce(r.serving_name, ''),
          r.created_at, coalesce(r.unit, 'g'), coalesce(r.last_amount, 0), coalesce(r.categories, ''),
+         coalesce(r.portions, '[]'::jsonb),
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.food_products, coalesce(payload->'foods', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
@@ -539,7 +541,8 @@ begin
     fat100 = excluded.fat100, favorite = excluded.favorite, image_url = excluded.image_url,
     serving_grams = excluded.serving_grams, serving_name = excluded.serving_name,
     created_at = excluded.created_at, unit = excluded.unit, last_amount = excluded.last_amount,
-    categories = excluded.categories, updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+    categories = excluded.categories, portions = excluded.portions,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
   insert into public.exercises as t (id, user_id, name, muscle, type, created_at, secondary_muscles, archived, updated_at, deleted_at)

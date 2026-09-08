@@ -711,6 +711,8 @@ struct FoodLogSheet: View {
         var packageGrams: Double = 0
         var unit: FoodUnit = .gram
         var categories: [String] = []
+        /// Porties die je zelf bij dit product bewaarde.
+        var ownPortions: [FoodPortion] = []
 
         var localPhoto: URL? { ProductPhoto.existing(barcode: barcode, name: name) }
 
@@ -722,6 +724,7 @@ struct FoodLogSheet: View {
             imageURL = p.imageURL
             servingGrams = p.servingGrams; servingName = p.servingName
             unit = p.foodUnit; categories = p.categoryList
+            ownPortions = p.portions
         }
 
         /// Uit een zoekresultaat of scan. Geen `servingName`: die kent OFF niet, maar
@@ -780,7 +783,9 @@ struct FoodLogSheet: View {
                 if !added.isEmpty { addedTray }
             }
             .navigationDestination(item: $detail) { food in
-                FoodDetailView(food: food, lastAmount: lastAmount(for: food)) { amount, unit in
+                FoodDetailView(food: food, lastAmount: lastAmount(for: food),
+                               onSavePortion: { savePortion(food, $0) },
+                               onDeletePortion: { deletePortion(food, $0) }) { amount, unit in
                     logFood(food, amount: amount, unit: unit)
                     if mode == 2 { clearQuick() }
                     detail = nil
@@ -944,18 +949,34 @@ struct FoodLogSheet: View {
 
     /// Bewaart/werkt het product bij en logt de portie. Gedeeld door de uitklaprij en
     /// de scanner, zodat "wat er precies wordt opgeslagen" op één plek staat.
-    private func logFood(_ food: PendingFood, amount: Int, unit: FoodUnit) {
-        let product: FoodProduct
+    /// De opgeslagen rij van dit product; wordt aangemaakt als hij er nog niet is. Ook een
+    /// portie bewaren maakt 'm aan — anders kun je pas porties instellen nadat je een keer
+    /// gelogd hebt, en dat is precies andersom.
+    private func storedProduct(for food: PendingFood) -> FoodProduct {
         if let existing = products.first(where: { (!food.barcode.isEmpty && $0.barcode == food.barcode)
                 || (food.barcode.isEmpty && $0.name == food.name) }) {
-            product = existing
-        } else {
-            product = FoodProduct(name: food.name, brand: food.brand, barcode: food.barcode,
+            return existing
+        }
+        let product = FoodProduct(name: food.name, brand: food.brand, barcode: food.barcode,
                                   protein100: food.protein100, kcal100: food.kcal100,
                                   carbs100: food.carbs100, fat100: food.fat100)
-            product.imageURL = food.imageURL
-            context.insert(product)
-        }
+        product.imageURL = food.imageURL
+        context.insert(product)
+        return product
+    }
+
+    private func savePortion(_ food: PendingFood, _ portion: FoodPortion) {
+        let product = storedProduct(for: food)
+        product.portions.removeAll { $0.label == portion.label }
+        product.portions.append(portion)
+    }
+
+    private func deletePortion(_ food: PendingFood, _ portion: FoodPortion) {
+        storedProduct(for: food).portions.removeAll { $0.label == portion.label }
+    }
+
+    private func logFood(_ food: PendingFood, amount: Int, unit: FoodUnit) {
+        let product = storedProduct(for: food)
         if food.servingGrams > 0 {
             product.servingGrams = food.servingGrams
             product.servingName = food.servingName
@@ -1054,11 +1075,14 @@ struct FoodLogSheet: View {
                     // de snelle weg geen tik langer wordt.
                     detailRow(scanned, favorite: false, lastAmount: lastAmount(for: scanned))
                     PortionEditor(food: scanned, lastAmount: lastAmount(for: scanned),
-                                  amount: $portionAmount, unit: $portionUnit) { amount, unit in
-                        logFood(scanned, amount: amount, unit: unit)
-                        self.scanned = nil
-                        manualBarcode = ""
-                    }
+                                  amount: $portionAmount, unit: $portionUnit,
+                                  onLog: { amount, unit in
+                                      logFood(scanned, amount: amount, unit: unit)
+                                      self.scanned = nil
+                                      manualBarcode = ""
+                                  },
+                                  onSavePortion: { savePortion(scanned, $0) },
+                                  onDeletePortion: { deletePortion(scanned, $0) })
                     .id(scanned.barcode)
                 }
             }
@@ -1241,9 +1265,18 @@ struct PortionEditor: View {
     @Binding var amount: Int
     @Binding var unit: FoodUnit
     var onLog: (Int, FoodUnit) -> Void
+    /// Eigen portie bewaren of weghalen. nil = deze plek kan het product niet bewerken.
+    var onSavePortion: ((FoodPortion) -> Void)?
+    var onDeletePortion: ((FoodPortion) -> Void)?
+
+    @State private var naming = false
+    @State private var newLabel = ""
 
     private var step: Int { unit == .milliliter ? 50 : 10 }
     private func scaled(_ per100: Double) -> Int { Built.scaled(per100, to: amount) }
+
+    /// Wat je zelf bewaarde staat vooraan: de rest is een gok op de categorie, dit niet.
+    private var ownPortions: [FoodPortion] { food.ownPortions.sorted { $0.amount < $1.amount } }
 
     private var portions: [FoodPortion] {
         var out = FoodPortions.suggested(unit: unit, categories: food.categories, name: food.name)
@@ -1254,7 +1287,9 @@ struct PortionEditor: View {
         if food.packageGrams > 0 {
             out.append(FoodPortion(label: "Heel pak", amount: food.packageGrams))
         }
-        return out
+        // Een vaste 250 g naast je eigen "1 bol · 260 g" is ruis.
+        let mine = Set(ownPortions.map { Int($0.amount.rounded()) })
+        return out.filter { !mine.contains(Int($0.amount.rounded())) }
     }
 
     var body: some View {
@@ -1285,21 +1320,22 @@ struct PortionEditor: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(portions) { p in
-                        let on = amount == Int(p.amount.rounded())
-                        Button {
-                            withAnimation(.snappy(duration: 0.2)) { amount = Int(p.amount.rounded()) }
-                        } label: {
-                            VStack(spacing: 1) {
-                                Text(p.label).font(.footnote.bold())
-                                Text("\(Int(p.amount)) \(unit.label)")
-                                    .font(.caption2).foregroundStyle(.secondary)
+                    ForEach(ownPortions) { p in
+                        chip(p, mine: true)
+                            .contextMenu {
+                                if let onDeletePortion {
+                                    Button("Verwijder \(p.label)", systemImage: "trash", role: .destructive) {
+                                        onDeletePortion(p)
+                                    }
+                                }
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 7)
-                            .background(on ? .builtTint(.green) : Color(.tertiarySystemFill), in: Capsule())
-                            .foregroundStyle(on ? AnyShapeStyle(.green) : AnyShapeStyle(.primary))
-                        }
-                        .buttonStyle(.plain)
+                    }
+                    if onSavePortion != nil, amount > 0,
+                       !ownPortions.contains(where: { Int($0.amount.rounded()) == amount }) {
+                        saveChip
+                    }
+                    ForEach(portions) { p in
+                        chip(p, mine: false)
                     }
                 }
                 .padding(.trailing, 24) // ruimte voor de fade
@@ -1340,6 +1376,55 @@ struct PortionEditor: View {
 
     /// Klein, rustig rondje. Bewust niet `.bordered`: dat rendert als een brede pil
     /// die het getal ernaast wegdrukt.
+    private func chip(_ p: FoodPortion, mine: Bool) -> some View {
+        let on = amount == Int(p.amount.rounded())
+        return Button {
+            withAnimation(.snappy(duration: 0.2)) { amount = Int(p.amount.rounded()) }
+        } label: {
+            VStack(spacing: 1) {
+                Text(p.label).font(.footnote.bold())
+                Text("\(Int(p.amount)) \(unit.label)")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(on ? .builtTint(.green) : Color(.tertiarySystemFill), in: Capsule())
+            .foregroundStyle(on ? AnyShapeStyle(.green) : AnyShapeStyle(.primary))
+            .overlay {
+                if mine {
+                    Capsule().strokeBorder(Color.green.opacity(on ? 0 : 0.35), lineWidth: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Het getal waar je nu op staat vastleggen onder een naam. Zo hoef je "260" nooit
+    /// meer te typen voor een bol die altijd 260 gram is.
+    private var saveChip: some View {
+        Button {
+            newLabel = ""
+            naming = true
+        } label: {
+            Label("Bewaar \(amount) \(unit.label)", systemImage: "plus")
+                .font(.footnote.bold())
+                .padding(.horizontal, 12).padding(.vertical, 11)
+                .background(Color(.tertiarySystemFill), in: Capsule())
+                .foregroundStyle(.green)
+        }
+        .buttonStyle(.plain)
+        .alert("Naam voor deze portie", isPresented: $naming) {
+            TextField("bijv. 1 bol", text: $newLabel)
+            Button("Bewaren") {
+                let label = newLabel.trimmingCharacters(in: .whitespaces)
+                guard !label.isEmpty else { return }
+                onSavePortion?(FoodPortion(label: label, amount: Double(amount)))
+            }
+            Button("Annuleer", role: .cancel) {}
+        } message: {
+            Text("\(amount) \(unit.label) staat daarna als knop bij dit product.")
+        }
+    }
+
     private func stepButton(_ symbol: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -1361,8 +1446,13 @@ struct PortionEditor: View {
 struct FoodDetailView: View {
     let food: FoodLogSheet.PendingFood
     let lastAmount: Double
+    var onSavePortion: ((FoodPortion) -> Void)?
+    var onDeletePortion: ((FoodPortion) -> Void)?
     var onLog: (Int, FoodUnit) -> Void
 
+    /// In state, want `food` is een kopie: zonder dit verschijnt een zojuist bewaarde
+    /// portie pas als je het scherm opnieuw opent.
+    @State private var ownPortions: [FoodPortion] = []
     @State private var amount = 100
     @State private var unit: FoodUnit = .gram
     @State private var showPhoto = false
@@ -1408,8 +1498,27 @@ struct FoodDetailView: View {
                 .listRowBackground(Color.clear)
             }
             Section("Hoeveel heb je gehad?") {
-                PortionEditor(food: food, lastAmount: lastAmount,
-                              amount: $amount, unit: $unit, onLog: onLog)
+                var shown = food
+                let _ = shown.ownPortions = ownPortions
+                PortionEditor(food: shown, lastAmount: lastAmount,
+                              amount: $amount, unit: $unit, onLog: onLog,
+                              onSavePortion: onSavePortion.map { save in
+                                  { portion in
+                                      withAnimation(.snappy(duration: 0.2)) {
+                                          ownPortions.removeAll { $0.label == portion.label }
+                                          ownPortions.append(portion)
+                                      }
+                                      save(portion)
+                                  }
+                              },
+                              onDeletePortion: onDeletePortion.map { remove in
+                                  { portion in
+                                      withAnimation(.snappy(duration: 0.2)) {
+                                          ownPortions.removeAll { $0.label == portion.label }
+                                      }
+                                      remove(portion)
+                                  }
+                              })
             }
             Section("Per 100 \(food.unit.label)") {
                 per100Row("Calorieën", food.kcal100, "kcal")
@@ -1421,7 +1530,7 @@ struct FoodDetailView: View {
         .navigationTitle(food.name)
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $showPhoto) { photoPreview }
-        .task { photo = food.localPhoto }
+        .task { photo = food.localPhoto; ownPortions = food.ownPortions }
         .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
         .fullScreenCover(isPresented: $takingPhoto) {
             CameraPicker { data in savePhoto(data) }
