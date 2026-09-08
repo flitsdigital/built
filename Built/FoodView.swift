@@ -316,6 +316,10 @@ struct FoodView: View {
     @State private var logMeal: String?
     @State private var editingEntry: ProteinEntry?
     @State private var showReport = false
+    /// Eén keer bepaald per keer dat je de tab opent. Live herwegen liet de tegels onder je
+    /// vinger verspringen zodra je er een aantikte.
+    @State private var tiles: [FrequentFood] = []
+    @State private var flashed: String?
 
     private var cal: Calendar { .current }
     private var isToday: Bool { cal.isDateInToday(day) }
@@ -333,6 +337,50 @@ struct FoodView: View {
 
     private func entries(for meal: String) -> [ProteinEntry] {
         dayEntries.filter { $0.mealKey == meal }
+    }
+
+    // MARK: - Vaste bak
+    //
+    // Je eet grotendeels hetzelfde, en dat deel hoort geen zoekopdracht te zijn. Eén tik op
+    // een tegel is gelogd; de maaltijd volgt uit het tijdstip. Zoeken, scannen en een eigen
+    // item blijven achter de plus per maaltijd, voor alles wat niet in dit rijtje staat.
+
+    struct FrequentFood: Identifiable, Hashable {
+        var id: String { label }
+        let label: String
+        let grams: Int
+        let kcal: Int
+    }
+
+    /// Wat je vaak rond dit uur logt, één regel per product. `suggestions()` sleutelt op
+    /// label + grammen, dus dezelfde melk kwam er anders vier keer in te staan met vier
+    /// porties; hier wint de portie die je het vaakst nam.
+    private func frequentFoods() -> [FrequentFood] {
+        let logged = Set(proteins.map(\.label))
+        var count: [String: [Int: Int]] = [:]   // label → portie → hoe vaak
+        var kcalOf: [String: [Int: Int]] = [:]
+        var order: [String] = []
+        for s in proteins.suggestions(limit: 60) where logged.contains(s.label) {
+            if count[s.label] == nil { order.append(s.label) }
+            count[s.label, default: [:]][s.grams, default: 0] += 1
+            kcalOf[s.label, default: [:]][s.grams] = s.kcal
+        }
+        return order.prefix(6).compactMap { label in
+            guard let grams = count[label]?.max(by: { $0.value < $1.value })?.key else { return nil }
+            return FrequentFood(label: label, grams: grams, kcal: kcalOf[label]?[grams] ?? 0)
+        }
+    }
+
+    private func logFrequent(_ food: FrequentFood) {
+        let stamp = timestamp(on: day)
+        context.insert(ProteinEntry(date: stamp, grams: food.grams, label: food.label,
+                                    kcal: food.kcal, meal: ProteinEntry.guessMeal(for: stamp)))
+        if let product = products.first(where: { $0.name == food.label }) { product.lastUsed = .now }
+        withAnimation(.snappy(duration: 0.18)) { flashed = food.label }
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            withAnimation(.snappy(duration: 0.25)) { if flashed == food.label { flashed = nil } }
+        }
     }
 
     // MARK: - Dag overnemen
@@ -385,6 +433,18 @@ struct FoodView: View {
             }
             .listRowSeparator(.hidden)
 
+            if !tiles.isEmpty {
+                Section("Wat je meestal rond dit uur eet") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                        ForEach(tiles) { food in
+                            tile(food)
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowBackground(Color.clear)
+                }
+            }
+
             ForEach(mealSlots, id: \.self) { meal in
                 mealSection(meal)
             }
@@ -424,6 +484,40 @@ struct FoodView: View {
             ProteinEntrySheet(entry: entry)
         }
         .sensoryFeedback(.increase, trigger: totalProtein) { old, new in new > old }
+        .task { if tiles.isEmpty { tiles = frequentFoods() } }
+    }
+
+    private func tile(_ food: FrequentFood) -> some View {
+        let hit = flashed == food.label
+        return Button {
+            logFrequent(food)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                let product = products.first { $0.name == food.label }
+                FoodThumb(url: product?.imageURL ?? "", size: 30, photo: product?.localPhoto)
+                Spacer(minLength: 0)
+                Text(food.label)
+                    .font(.caption.bold())
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text("\(food.grams) g\(food.kcal > 0 ? " · \(food.kcal) kcal" : "")")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+            .padding(10)
+            .background(hit ? Color.builtTint(.green) : Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: BuiltRadius.medium, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Image(systemName: hit ? "checkmark.circle.fill" : "plus.circle.fill")
+                    .foregroundStyle(.green)
+                    .padding(8)
+                    .accessibilityHidden(true)
+            }
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel("Log \(food.label), \(food.grams) gram eiwit")
     }
 
     private var dayHeader: some View {
@@ -688,6 +782,7 @@ struct FoodLogSheet: View {
             .navigationDestination(item: $detail) { food in
                 FoodDetailView(food: food, lastAmount: lastAmount(for: food)) { amount, unit in
                     logFood(food, amount: amount, unit: unit)
+                    if mode == 2 { clearQuick() }
                     detail = nil
                 }
             }
@@ -732,51 +827,11 @@ struct FoodLogSheet: View {
 
     // MARK: Zoeken
 
-    /// Wat je normaal gesproken rónd dit tijdstip eet. `suggestions()` weegt items die
-    /// je vaak op dit uur logt zwaarder — die functie bestond al maar werd nergens
-    /// gebruikt (hij hing aan een sheet die nooit werd getoond).
-    private var timeSuggestions: [(key: String, label: String, grams: Int, kcal: Int)] {
-        guard query.isEmpty else { return [] }
-        let known = Set(ownMatches.map(\.name))
-        return todaysEntries.suggestions(limit: 6).filter { !known.contains($0.label) }
-    }
-
     private var searchTab: some View {
         List {
             Section {
                 TextField("Zoek product (bijv. kwark)", text: $query)
                     .autocorrectionDisabled()
-            }
-            let suggestions = timeSuggestions
-            if !suggestions.isEmpty {
-                Section("Vaak rond dit tijdstip") {
-                    ForEach(suggestions, id: \.key) { s in
-                        Button {
-                            context.insert(ProteinEntry(date: entryDate, grams: s.grams, label: s.label,
-                                                        kcal: s.kcal, meal: meal))
-                            withAnimation(.snappy(duration: 0.25)) { added.append(s.label) }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .font(.footnote)
-                                    .foregroundStyle(.green)
-                                    .frame(width: 34, height: 34)
-                                    .background(.builtTint(.green), in: RoundedRectangle(cornerRadius: BuiltRadius.small, style: .continuous))
-                                    .accessibilityHidden(true)
-                                Text(s.label).foregroundStyle(.primary).lineLimit(1)
-                                Spacer()
-                                Text("\(s.grams) g\(s.kcal > 0 ? " · \(s.kcal) kcal" : "")")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: "plus.circle.fill")
-                                    .foregroundStyle(.green)
-                                    .accessibilityHidden(true)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
             }
             let own = ownMatches
             if !own.isEmpty {
@@ -841,10 +896,20 @@ struct FoodLogSheet: View {
     }
 
     private var ownMatches: [FoodProduct] {
-        let base = query.isEmpty
-            ? products
-            : products.filter { $0.name.localizedCaseInsensitiveContains(query) || $0.brand.localizedCaseInsensitiveContains(query) }
-        return Array(base.sorted { ($0.favorite ? 0 : 1, $1.lastUsed) < (($1.favorite ? 0 : 1), $0.lastUsed) }.prefix(10))
+        guard !query.isEmpty else {
+            return Array(products.sorted { ($0.favorite ? 0 : 1, $1.lastUsed) < (($1.favorite ? 0 : 1), $0.lastUsed) }.prefix(10))
+        }
+        // Op score sorteren, niet op laatst gebruikt. Anders duwen tien recente producten
+        // die het woord ergens bevatten het product waar je naam mee begint uit de lijst.
+        let scored = products.compactMap { p -> (product: FoodProduct, score: Int)? in
+            let score = max(foodMatchScore(p.name, query: query), foodMatchScore(p.brand, query: query))
+            return score > 0 ? (p, score) : nil
+        }
+        return Array(scored.sorted { a, b in
+            if a.score != b.score { return a.score > b.score }
+            if a.product.favorite != b.product.favorite { return a.product.favorite }
+            return a.product.lastUsed > b.product.lastUsed
+        }.prefix(10).map(\.product))
     }
 
     /// Rij die doorklikt naar de productpagina. De portie-editor klapte hier vroeger
@@ -983,7 +1048,11 @@ struct FoodLogSheet: View {
             }
             if let scanned {
                 Section("Gevonden") {
-                    productRow(scanned, favorite: false, lastAmount: lastAmount(for: scanned))
+                    // Tikbaar naar de productpagina: daar zit de foto. Juist een gescand
+                    // product dat OFF niet kent heeft er geen, en dat is precies waar je er
+                    // zelf een bij wilt zetten. De portie-editor blijft eronder staan, zodat
+                    // de snelle weg geen tik langer wordt.
+                    detailRow(scanned, favorite: false, lastAmount: lastAmount(for: scanned))
                     PortionEditor(food: scanned, lastAmount: lastAmount(for: scanned),
                                   amount: $portionAmount, unit: $portionUnit) { amount, unit in
                         logFood(scanned, amount: amount, unit: unit)
@@ -1061,6 +1130,15 @@ struct FoodLogSheet: View {
                     carbs100: quickCarbs ?? 0, fat100: quickFat ?? 0)
     }
 
+    private var quickComplete: Bool {
+        !quickFood.name.isEmpty && quickFood.protein100 + quickFood.kcal100 > 0
+    }
+
+    private func clearQuick() {
+        quickLabel = ""; quickProtein = nil; quickKcal = nil; quickCarbs = nil; quickFat = nil
+        quickBarcode = ""; manualBarcode = ""
+    }
+
     private var quickTab: some View {
         List {
             Section {
@@ -1073,17 +1151,27 @@ struct FoodLogSheet: View {
                 if !quickBarcode.isEmpty { Text("Barcode \(quickBarcode)") }
             } footer: {
                 Text(quickBarcode.isEmpty
-                     ? "Per 100 g/ml, net als op de verpakking. Hieronder kies je hoeveel je ervan hebt gegeten."
+                     ? "Per 100 g/ml, net als op de verpakking. Op de volgende stap kies je de portie en zet je er een foto bij."
                      : "Deze barcode kent OpenFoodFacts niet. Vul 'm hier één keer in — per 100 g/ml, net als op de verpakking — dan blijft het eraan hangen.")
             }
-            if !quickFood.name.isEmpty, quickFood.protein100 + quickFood.kcal100 > 0 {
-                Section("Portie") {
-                    PortionEditor(food: quickFood, lastAmount: 0,
-                                  amount: $portionAmount, unit: $portionUnit) { amount, unit in
-                        logFood(quickFood, amount: amount, unit: unit)
-                        quickLabel = ""; quickProtein = nil; quickKcal = nil; quickCarbs = nil; quickFat = nil
-                        quickBarcode = ""; manualBarcode = ""
+            Section {
+                // Naar dezelfde productpagina als een gescand of gezocht product: daar zitten
+                // de macrotegels, de portie-editor én de eigen foto al. Een eigen portie-editor
+                // hier betekende dat je eigen item het enige product zonder foto bleef.
+                Button {
+                    detail = quickFood
+                } label: {
+                    HStack {
+                        Label("Portie en foto", systemImage: "arrow.right.circle.fill")
+                            .font(.subheadline.bold())
+                        Spacer()
                     }
+                    .contentShape(Rectangle())
+                }
+                .disabled(!quickComplete)
+            } footer: {
+                if !quickComplete {
+                    Text("Vul minstens een naam en eiwit of kcal in.")
                 }
             }
         }

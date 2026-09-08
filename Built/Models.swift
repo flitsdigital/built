@@ -1121,6 +1121,32 @@ struct WeekStats {
     }
 }
 
+/// Hoe goed een productnaam bij een zoekterm past. 0 = geen match.
+///
+/// `localizedCaseInsensitiveContains` was op twee manieren te streng: "citroen kwark" vond
+/// "Volle kwark citroen" niet, want dat is één string in de verkeerde volgorde, en "creme"
+/// vond "Crème" niet. Elk woord uit de zoekterm moet ergens voorkomen — in welke volgorde
+/// dan ook — en hoe verder vooraan het staat, hoe zwaarder het telt: vooraan 4, op een
+/// woordgrens 2, ergens middenin 1.
+func foodMatchScore(_ name: String, query: String) -> Int {
+    let fold: (String) -> String = { $0.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current) }
+    let haystack = fold(name)
+    let tokens = fold(query).split(whereSeparator: \.isWhitespace)
+    guard !tokens.isEmpty, !haystack.isEmpty else { return 0 }
+    var score = 0
+    for token in tokens {
+        guard let range = haystack.range(of: token) else { return 0 }
+        if range.lowerBound == haystack.startIndex {
+            score += 4
+        } else if !haystack[haystack.index(before: range.lowerBound)].isLetter {
+            score += 2
+        } else {
+            score += 1
+        }
+    }
+    return score
+}
+
 extension Array where Element == ProteinEntry {
     /// Meest gelogde items eerst, extra gewicht voor items die je vaak rond dit uur logt.
     func suggestions(limit: Int = 4) -> [(key: String, label: String, grams: Int, kcal: Int)] {

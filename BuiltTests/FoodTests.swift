@@ -183,3 +183,36 @@ struct FoodUnitTests {
         #expect(porties.first?.label == "Klein glas")
     }
 }
+
+/// Zoeken op je eigen producten. Een gemiste match betekent dat je het product opnieuw
+/// gaat opzoeken bij OpenFoodFacts — en dan staat het er twee keer in.
+@Suite("Productzoeken")
+struct FoodMatchTests {
+    @Test("Woordvolgorde maakt niet uit")
+    func volgorde() {
+        #expect(foodMatchScore("Volle kwark citroen", query: "citroen kwark") > 0)
+        #expect(foodMatchScore("Volle kwark citroen", query: "kwark citroen") > 0)
+    }
+
+    @Test("Accenten en hoofdletters tellen niet mee")
+    func accenten() {
+        #expect(foodMatchScore("Crème fraîche", query: "creme") > 0)
+        #expect(foodMatchScore("Crème fraîche", query: "FRAICHE") > 0)
+    }
+
+    @Test("Een woord dat er niet in staat is geen match")
+    func geenMatch() {
+        #expect(foodMatchScore("Volle kwark citroen", query: "kwark aardbei") == 0)
+        #expect(foodMatchScore("Volle kwark citroen", query: "") == 0)
+    }
+
+    @Test("Vooraan telt zwaarder dan middenin")
+    func rangschikking() {
+        let begint = foodMatchScore("Kipfilet naturel", query: "kip")
+        let woordgrens = foodMatchScore("Pittige kipfilet", query: "kip")
+        let middenin = foodMatchScore("Soepkip", query: "kip")
+        #expect(begint > woordgrens)
+        #expect(woordgrens > middenin)
+        #expect(middenin > 0)
+    }
+}
