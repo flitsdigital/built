@@ -46,7 +46,7 @@ func memoryContext() throws -> ModelContext {
     let container = try ModelContainer(
         for: Profile.self, WeightEntry.self, ProteinEntry.self, SetEntry.self,
         DayHabits.self, HabitLog.self, CustomHabit.self, FoodProduct.self,
-        Routine.self, Meal.self, Exercise.self, Scale.self,
+        Routine.self, Meal.self, Exercise.self, Scale.self, Dish.self, Cook.self,
         configurations: ModelConfiguration(isStoredInMemoryOnly: true))
     return ModelContext(container)
 }

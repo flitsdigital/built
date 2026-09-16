@@ -16,7 +16,7 @@ struct BuiltApp: App {
                 .buttonBorderShape(.capsule)
                 .environment(\.locale, Locale(identifier: "nl_NL")) // app-copy is Nederlands → datums ook
         }
-        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self, Exercise.self])
+        .modelContainer(for: [Profile.self, WeightEntry.self, Scale.self, ProteinEntry.self, SetEntry.self, DayHabits.self, Routine.self, Meal.self, FoodProduct.self, CustomHabit.self, HabitLog.self, PhotoEntry.self, Exercise.self, Dish.self, Cook.self])
     }
 }
 

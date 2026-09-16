@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
 
 extension Bundle {
     /// "1.4 (23)" — de hub en het Over-scherm tonen allebei hetzelfde.
@@ -29,6 +30,12 @@ struct ProfileView: View {
     @AppStorage("notifCheckInOn") private var notifCheckInOn = true
 
     private let syncStatus = SyncStatus.shared
+
+    // ponytail: profielfoto is één vast bestand naast de progress-foto's — alleen op dit
+    // toestel, geen model, geen sync-kolom. Net als de progress-foto's zelf.
+    private static let avatarURL = PhotoEntry.directory.appendingPathComponent("avatar.jpg")
+    @State private var avatar = UIImage(contentsOfFile: avatarURL.path)
+    @State private var avatarPick: PhotosPickerItem?
 
     private var activeNotifs: Int {
         [notifMorningOn, notifEveningOn, notifStreakOn, notifWeekOn, notifReviewOn, notifRestOn, notifCheckInOn]
@@ -62,11 +69,30 @@ struct ProfileView: View {
         List {
             Section {
                 HStack(spacing: 14) {
-                    Text(profile.name.isEmpty ? "💪" : String(profile.name.prefix(1)).uppercased())
-                        .font(.title2.bold())
-                        .foregroundStyle(.green)
-                        .frame(width: 52, height: 52)
-                        .background(.builtTint(.green), in: Circle())
+                    PhotosPicker(selection: $avatarPick, matching: .images) {
+                        if let avatar {
+                            Image(uiImage: avatar)
+                                .resizable().scaledToFill()
+                                .frame(width: 52, height: 52)
+                                .clipShape(Circle())
+                        } else {
+                            Text(profile.name.isEmpty ? "💪" : String(profile.name.prefix(1)).uppercased())
+                                .font(.title2.bold())
+                                .foregroundStyle(.green)
+                                .frame(width: 52, height: 52)
+                                .background(.builtTint(.green), in: Circle())
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Profielfoto kiezen")
+                    .contextMenu {
+                        if avatar != nil {
+                            Button("Verwijder foto", systemImage: "trash", role: .destructive) {
+                                try? FileManager.default.removeItem(at: Self.avatarURL)
+                                avatar = nil
+                            }
+                        }
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(profile.name.isEmpty ? "Jij" : profile.name)
                             .font(.headline)
@@ -109,6 +135,19 @@ struct ProfileView: View {
         }
         .tabBarClearance()
         .navigationTitle("Profiel")
+        .onChange(of: avatarPick) {
+            guard let avatarPick else { return }
+            Task {
+                // Verkleind opslaan: het rondje is 52pt, een 12 MB-foto elke keer inlezen is zonde.
+                if let data = try? await avatarPick.loadTransferable(type: Data.self),
+                   let small = await UIImage(data: data)?.byPreparingThumbnail(ofSize: CGSize(width: 300, height: 300)),
+                   let jpg = small.jpegData(compressionQuality: 0.8) {
+                    try? jpg.write(to: Self.avatarURL)
+                    avatar = small
+                }
+                self.avatarPick = nil
+            }
+        }
     }
 
     @ViewBuilder

@@ -189,6 +189,19 @@ enum Sync {
         var id: UUID; var name: String; var date: Date
         var updated_at: String?; var deleted_at: String?
     }
+    private struct DishRow: Codable, Sendable, SyncRow {
+        var id: UUID; var name: String; var url: String; var image_url: String
+        var rating: Int; var labels: [String]; var ingredients: [DishIngredient]
+        var steps: [String]
+        var servings: Double; var minutes: Int; var site_protein: Int; var site_kcal: Int
+        var created_at: Date
+        var updated_at: String?; var deleted_at: String?
+    }
+    private struct CookRow: Codable, Sendable, SyncRow {
+        var id: UUID; var dish_id: UUID; var date: Date; var note: String; var done: Bool
+        var created_at: Date
+        var updated_at: String?; var deleted_at: String?
+    }
 
     /// Een verwijderde rij: de rij zelf is weg, dus alleen tabel en id gaan mee.
     struct DeletionRow: Codable, Sendable {
@@ -210,12 +223,15 @@ enum Sync {
         var scales: [ScaleRow] = []
         var customHabits: [CustomHabitRow] = []
         var habitLogs: [HabitLogRow] = []
+        var dishes: [DishRow] = []
+        var cooks: [CookRow] = []
         var deletions: [DeletionRow] = []
 
         var isEmpty: Bool {
             profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
-                && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty && deletions.isEmpty
+                && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty
+                && dishes.isEmpty && cooks.isEmpty && deletions.isEmpty
         }
     }
 
@@ -239,12 +255,16 @@ enum Sync {
         var scales: [ScaleRow] = []
         var customHabits: [CustomHabitRow] = []
         var habitLogs: [HabitLogRow] = []
+        // Optioneel: draait migration 0024 nog niet, dan ontbreken de sleutels.
+        var dishes: [DishRow]? = []
+        var cooks: [CookRow]? = []
 
         /// Niets gewijzigd sinds het anker — het normale antwoord op een dagelijkse start.
         var isEmpty: Bool {
             profile == nil && weights.isEmpty && proteins.isEmpty && sets.isEmpty && habits.isEmpty
                 && routines.isEmpty && meals.isEmpty && foods.isEmpty && exercises.isEmpty
                 && scales.isEmpty && customHabits.isEmpty && habitLogs.isEmpty
+                && (dishes ?? []).isEmpty && (cooks ?? []).isEmpty
         }
     }
 
@@ -352,6 +372,15 @@ enum Sync {
     private static func row(_ e: HabitLog, _ at: String?) -> HabitLogRow {
         HabitLogRow(id: e.syncID, name: e.name, date: e.date, updated_at: at)
     }
+    private static func row(_ e: Dish, _ at: String?) -> DishRow {
+        DishRow(id: e.syncID, name: e.name, url: e.url, image_url: e.imageURL, rating: e.rating,
+                labels: e.labels, ingredients: e.ingredients, steps: e.steps, servings: e.servings, minutes: e.minutes,
+                site_protein: e.siteProtein, site_kcal: e.siteKcal, created_at: e.createdAt, updated_at: at)
+    }
+    private static func row(_ e: Cook, _ at: String?) -> CookRow {
+        CookRow(id: e.syncID, dish_id: e.dishID, date: e.date, note: e.note, done: e.done,
+                created_at: e.createdAt, updated_at: at)
+    }
     private static func row(_ p: Profile) -> ProfileRow {
         ProfileRow(name: p.name, age: p.age, height_cm: p.heightCm, start_weight: p.startWeight,
                    goal_weight: p.goalWeight, start_date: p.startDate, goal_date: p.goalDate,
@@ -379,6 +408,8 @@ enum Sync {
         p.scales = try context.fetch(FetchDescriptor<Scale>(sortBy: [.init(\.name)])).map { row($0, nil) }
         p.customHabits = try context.fetch(FetchDescriptor<CustomHabit>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
         p.habitLogs = try context.fetch(FetchDescriptor<HabitLog>(sortBy: [.init(\.date)])).map { row($0, nil) }
+        p.dishes = try context.fetch(FetchDescriptor<Dish>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
+        p.cooks = try context.fetch(FetchDescriptor<Cook>(sortBy: [.init(\.createdAt)])).map { row($0, nil) }
         p.deletions = deletions
         return p
     }
@@ -407,6 +438,8 @@ enum Sync {
             case let m as Scale: p.scales.append(row(m, at))
             case let m as CustomHabit: p.customHabits.append(row(m, at))
             case let m as HabitLog: p.habitLogs.append(row(m, at))
+            case let m as Dish: p.dishes.append(row(m, at))
+            case let m as Cook: p.cooks.append(row(m, at))
             default: break // PhotoEntry en al het niet-gesynchroniseerde
             }
         }
@@ -556,6 +589,8 @@ enum Sync {
             try merge(r.scales, Scale.self, context) { apply($0, to: $1) }
             try merge(r.customHabits, CustomHabit.self, context) { apply($0, to: $1) }
             try merge(r.habitLogs, HabitLog.self, context) { apply($0, to: $1) }
+            try merge(r.dishes ?? [], Dish.self, context) { apply($0, to: $1) }
+            try merge(r.cooks ?? [], Cook.self, context) { apply($0, to: $1) }
             // De server kan nog rijen van vóór het afgeleide id bevatten; die zouden hier
             // als tweede "Bench Press" naast de eigen rij landen.
             Exercise.dedupe(context)
@@ -677,6 +712,15 @@ enum Sync {
     private static func apply(_ r: HabitLogRow, to m: HabitLog) {
         m.name = r.name; m.date = r.date
     }
+    private static func apply(_ r: DishRow, to m: Dish) {
+        m.name = r.name; m.url = r.url; m.imageURL = r.image_url; m.rating = r.rating
+        m.labels = r.labels; m.ingredients = r.ingredients; m.steps = r.steps; m.servings = r.servings
+        m.minutes = r.minutes; m.siteProtein = r.site_protein; m.siteKcal = r.site_kcal
+        m.createdAt = r.created_at
+    }
+    private static func apply(_ r: CookRow, to m: Cook) {
+        m.dishID = r.dish_id; m.date = r.date; m.note = r.note; m.done = r.done; m.createdAt = r.created_at
+    }
 
     // MARK: - Export en wissen
 
@@ -712,6 +756,9 @@ enum Sync {
         try context.delete(model: Scale.self)
         try context.delete(model: CustomHabit.self)
         try context.delete(model: HabitLog.self)
+        try context.delete(model: Dish.self)
+        try context.delete(model: Cook.self)
+        try? FileManager.default.removeItem(at: DishPhoto.directory)
         // Eigen productfoto's hangen aan barcode-of-naam, niet aan een account. Blijven ze
         // staan, dan zet de volgende gebruiker z'n Kwark neer en kijkt naar de foto van de
         // vorige — precies de botsing waarvoor deze functie bestaat.

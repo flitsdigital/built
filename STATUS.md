@@ -4,7 +4,7 @@ Waar dit project staat, en wat je moet weten vóór je iets aanraakt. Bewust kor
 details staan in de git-historie en de issues, en die zijn de waarheid. Dit bestand is
 alleen de kaart erboven.
 
-Laatst bijgewerkt: 4 augustus 2026.
+Laatst bijgewerkt: 11 september 2026.
 
 ## Waar het nu staat
 
@@ -24,6 +24,11 @@ bestaat niet — dus valt er niets te kiezen. Wat overblijft is een statusregel 
 Profiel → Account (met een waarschuwingsstipje op de hub-rij zelf), plus een banner op het
 dashboard die verschijnt zodra er meer dan een dag werk alleen op dit toestel staat. Die
 banner is de enige handmatige trigger die er nog is.
+
+**Het kookboek (`dishes`, `dish_cooks`) komt met migration 0024.** Draait die nog niet, dan
+negeert de oude `sync_push_v2` de sleutels `dishes`/`cooks` stilzwijgend en komen ze bij een
+pull als `nil` terug — de app vangt dat op, maar je gerechten staan tot die tijd alleen op
+het toestel. Begrippen (Gerecht ≠ Meal) staan in `CONTEXT.md`.
 
 **Een account is verplicht en heeft altijd een e-mailadres.** Anoniem inloggen bestaat niet
 meer; de onboarding laat je er niet langs zonder account. De zeven anonieme accounts uit

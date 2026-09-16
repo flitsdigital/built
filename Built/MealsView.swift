@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 /// Maaltijdmómenten. Let op: het `Meal`-model hiernaast is iets anders — dat is een
-/// recept (in de UI "Recepten"). Zelfde woord, twee betekenissen; vandaar "slot".
+/// vaste maaltijd. Zelfde woord, twee betekenissen; vandaar "slot". Zie CONTEXT.md.
 let mealSlots = ["breakfast", "lunch", "dinner", "snack"]
 let mealSlotNames = ["breakfast": "Ontbijt", "lunch": "Lunch", "dinner": "Diner", "snack": "Snacks"]
 
@@ -190,7 +190,7 @@ struct MealsView: View {
                 Text("Swipe naar rechts voor favoriet (altijd bovenaan je quick-add lijst). Tik op een maaltijd om er een recept met ingrediënten en porties van te maken.")
             }
         }
-        .navigationTitle("Maaltijden & recepten")
+        .navigationTitle("Vaste maaltijden")
         .alert("Nieuwe maaltijd", isPresented: $showAdd) {
             TextField("Naam (bijv. Kip & rijst)", text: $nameInput)
             Button("Aanmaken") {

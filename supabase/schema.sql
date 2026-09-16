@@ -170,11 +170,39 @@ create table if not exists public.habit_logs (
   date timestamptz not null
 );
 
+-- Kookboek (migration 0024). Een gerecht is iets anders dan een meal: zie CONTEXT.md.
+create table if not exists public.dishes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  name text not null,
+  url text not null default '',
+  image_url text not null default '',
+  rating int not null default 0,
+  labels jsonb not null default '[]'::jsonb,
+  ingredients jsonb not null default '[]'::jsonb,
+  steps jsonb not null default '[]'::jsonb,
+  servings float8 not null default 0,
+  minutes int not null default 0,
+  site_protein int not null default 0,
+  site_kcal int not null default 0,
+  created_at timestamptz not null
+);
+
+create table if not exists public.dish_cooks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  dish_id uuid not null,
+  date timestamptz not null,
+  note text not null default '',
+  done boolean not null default false,
+  created_at timestamptz not null
+);
+
 -- Row level security: iedereen kan alleen zijn eigen rijen zien/schrijven.
 do $$
 declare t text;
 begin
-  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','day_habits','routines','meals','scales','custom_habits','habit_logs','food_products','exercises']
+  foreach t in array array['profiles','weight_entries','protein_entries','set_entries','day_habits','routines','meals','scales','custom_habits','habit_logs','food_products','exercises','dishes','dish_cooks']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "own rows" on public.%I', t);
@@ -197,7 +225,7 @@ declare t text;
 begin
   foreach t in array array['weight_entries','protein_entries','set_entries','day_habits',
                            'routines','meals','scales','custom_habits','habit_logs',
-                           'food_products','exercises']
+                           'food_products','exercises','dishes','dish_cooks']
   loop
     execute format('alter table public.%I add column if not exists updated_at timestamptz not null default now()', t);
     execute format('alter table public.%I add column if not exists deleted_at timestamptz', t);
@@ -388,7 +416,7 @@ declare
   stamp timestamptz := now();
   tables text[] := array['weight_entries','protein_entries','set_entries','day_habits',
                          'routines','meals','scales','custom_habits','habit_logs',
-                         'food_products','exercises'];
+                         'food_products','exercises','dishes','dish_cooks'];
   rec record;
 begin
   if uid is null then
@@ -581,6 +609,30 @@ begin
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
+  insert into public.dishes as t (id, user_id, name, url, image_url, rating, labels, ingredients, steps, servings, minutes, site_protein, site_kcal, created_at, updated_at, deleted_at)
+  select r.id, uid, r.name, coalesce(r.url, ''), coalesce(r.image_url, ''), coalesce(r.rating, 0),
+         coalesce(r.labels, '[]'::jsonb), coalesce(r.ingredients, '[]'::jsonb), coalesce(r.steps, '[]'::jsonb), coalesce(r.servings, 0),
+         coalesce(r.minutes, 0), coalesce(r.site_protein, 0), coalesce(r.site_kcal, 0), r.created_at,
+         least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
+  from jsonb_populate_recordset(null::public.dishes, coalesce(payload->'dishes', '[]'::jsonb)) r
+  on conflict (id, user_id) do update set
+    name = excluded.name, url = excluded.url, image_url = excluded.image_url, rating = excluded.rating,
+    labels = excluded.labels, ingredients = excluded.ingredients, steps = excluded.steps, servings = excluded.servings,
+    minutes = excluded.minutes, site_protein = excluded.site_protein, site_kcal = excluded.site_kcal,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+  where t.updated_at <= excluded.updated_at;
+
+  insert into public.dish_cooks as t (id, user_id, dish_id, date, note, done, created_at, updated_at, deleted_at)
+  select r.id, uid, r.dish_id, r.date, coalesce(r.note, ''), coalesce(r.done, false), r.created_at,
+         least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
+  from jsonb_populate_recordset(null::public.dish_cooks, coalesce(payload->'cooks', '[]'::jsonb)) r
+  on conflict (id, user_id) do update set
+    dish_id = excluded.dish_id, date = excluded.date, note = excluded.note, done = excluded.done,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
+  where t.updated_at <= excluded.updated_at;
+
   -- Verwijderingen. De client stuurt ze apart mee: de rij zelf heeft hij niet meer, dus
   -- alleen tabel + id. De tabelnaam gaat door een whitelist voordat hij in dynamische SQL
   -- belandt.
@@ -677,6 +729,14 @@ as $$
     'habitLogs', (select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) from public.habit_logs x
                 where x.user_id = (select auth.uid())
                   and (since is null or x.updated_at >= since)
+                  and (since is not null or x.deleted_at is null)),
+    'dishes', (select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) from public.dishes x
+                where x.user_id = (select auth.uid())
+                  and (since is null or x.updated_at >= since)
+                  and (since is not null or x.deleted_at is null)),
+    'cooks', (select coalesce(jsonb_agg(to_jsonb(x)), '[]'::jsonb) from public.dish_cooks x
+                where x.user_id = (select auth.uid())
+                  and (since is null or x.updated_at >= since)
                   and (since is not null or x.deleted_at is null))
   );
 $$;
@@ -692,7 +752,7 @@ declare t text;
 begin
   foreach t in array array['weight_entries','protein_entries','set_entries','day_habits',
                            'routines','meals','scales','custom_habits','habit_logs',
-                           'food_products','exercises']
+                           'food_products','exercises','dishes','dish_cooks']
   loop
     execute format('delete from public.%I where deleted_at is not null and deleted_at < now() - $1', t)
       using older_than;

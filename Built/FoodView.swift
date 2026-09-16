@@ -257,7 +257,7 @@ enum ProductPhoto {
 
     /// Een rauwe 12MP-foto per product vult de container zonder dat je het ziet, en 1000 px
     /// is ruim genoeg voor een thumb van 120 pt en de volledige weergave.
-    private static func downscaled(_ data: Data) -> Data {
+    static func downscaled(_ data: Data) -> Data {
         guard let image = UIImage(data: data) else { return data }
         let side = max(image.size.width, image.size.height)
         guard side > 1000 else { return image.jpegData(compressionQuality: 0.8) ?? data }
@@ -432,6 +432,8 @@ struct FoodView: View {
                 summaryRow
             }
             .listRowSeparator(.hidden)
+
+            Section { CookbookCard() }
 
             if !tiles.isEmpty {
                 Section("Wat je meestal rond dit uur eet") {
@@ -1241,7 +1243,7 @@ struct FoodLogSheet: View {
                 NavigationLink {
                     MealsView()
                 } label: {
-                    Label("Recepten beheren", systemImage: "fork.knife")
+                    Label("Vaste maaltijden beheren", systemImage: "fork.knife")
                 }
             }
         }
