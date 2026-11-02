@@ -124,6 +124,12 @@ create table if not exists public.day_habits (
 -- `workout_note` hierboven blijven staan voor de dagen van vóór deze kolommen.
 alter table public.day_habits add column if not exists workout_names jsonb not null default '{}'::jsonb;
 alter table public.day_habits add column if not exists workout_notes jsonb not null default '{}'::jsonb;
+-- Uit Health. Nullable, want null is "Health had niets voor die dag" en dat is iets
+-- anders dan nul stappen. `workout_heart_rates` is sessiesleutel → [gemiddelde, piek].
+alter table public.day_habits add column if not exists steps int;
+alter table public.day_habits add column if not exists resting_hr int;
+alter table public.day_habits add column if not exists hrv_ms int;
+alter table public.day_habits add column if not exists workout_heart_rates jsonb not null default '{}'::jsonb;
 
 create table if not exists public.routines (
   id uuid primary key default gen_random_uuid(),
@@ -511,13 +517,15 @@ begin
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 
-  insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, workout_name, workout_names, workout_notes, updated_at, deleted_at)
+  insert into public.day_habits as t (id, user_id, date, creatine, slept_enough, note, bed_time, wake_time, sleep_quality, journal, workout_note, energy, mood, soreness, stress, exercise_notes, workout_name, workout_names, workout_notes, steps, resting_hr, hrv_ms, workout_heart_rates, updated_at, deleted_at)
   select r.id, uid, r.date, coalesce(r.creatine, false), coalesce(r.slept_enough, false),
          coalesce(r.note, ''), r.bed_time, r.wake_time, coalesce(r.sleep_quality, 0),
          coalesce(r.journal, '[]'::jsonb), coalesce(r.workout_note, ''),
          coalesce(r.energy, 0), coalesce(r.mood, 0), coalesce(r.soreness, 0), coalesce(r.stress, 0),
          coalesce(r.exercise_notes, '{}'::jsonb), coalesce(r.workout_name, ''),
          coalesce(r.workout_names, '{}'::jsonb), coalesce(r.workout_notes, '{}'::jsonb),
+         -- Geen coalesce op de drie getallen: null is "Health had niets", niet nul.
+         r.steps, r.resting_hr, r.hrv_ms, coalesce(r.workout_heart_rates, '{}'::jsonb),
          least(coalesce(r.updated_at, stamp), stamp), r.deleted_at
   from jsonb_populate_recordset(null::public.day_habits, coalesce(payload->'habits', '[]'::jsonb)) r
   on conflict (id, user_id) do update set
@@ -527,7 +535,9 @@ begin
     workout_note = excluded.workout_note, energy = excluded.energy, mood = excluded.mood,
     soreness = excluded.soreness, stress = excluded.stress, exercise_notes = excluded.exercise_notes,
     workout_name = excluded.workout_name, workout_names = excluded.workout_names,
-    workout_notes = excluded.workout_notes,
+    workout_notes = excluded.workout_notes, steps = excluded.steps,
+    resting_hr = excluded.resting_hr, hrv_ms = excluded.hrv_ms,
+    workout_heart_rates = excluded.workout_heart_rates,
     updated_at = excluded.updated_at, deleted_at = excluded.deleted_at
   where t.updated_at <= excluded.updated_at;
 

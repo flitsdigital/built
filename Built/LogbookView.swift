@@ -420,7 +420,11 @@ struct DayDetailView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    SessionHeartRateRow(session: session)
+                    if let beats = habitsRecord?.workoutHeartRates[session.id], beats.count == 2 {
+                        Text("Hartslag ⌀ \(beats[0]) · piek \(beats[1]) bpm")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(groups, id: \.name) { group in
                         let bw = exercises.isBodyweight(group.name)
                         NavigationLink {
@@ -515,28 +519,5 @@ struct DayDetailView: View {
         }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: day) }
         .sheet(item: $editWeight) { WeightLogSheet(entry: $0) }
-    }
-}
-
-/// Hartslag tijdens een training: het venster van de eerste tot de laatste set, bij
-/// Health opgevraagd. Geen samples — bandje af, of Garmin schrijft alleen rond z'n eigen
-/// activiteiten — en de regel is er simpelweg niet.
-private struct SessionHeartRateRow: View {
-    let session: WorkoutSession
-    @State private var heartRate: (avg: Int, max: Int)?
-
-    var body: some View {
-        Group {
-            if let heartRate {
-                LabeledContent("Hartslag", value: "⌀ \(heartRate.avg) · piek \(heartRate.max) bpm")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .task(id: session.id) {
-            guard let start = session.sets.map(\.date).min(),
-                  let end = session.sets.map(\.date).max() else { return }
-            heartRate = await HealthService.shared.heartRate(from: start, to: end)
-        }
     }
 }
