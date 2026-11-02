@@ -4,7 +4,7 @@ Waar dit project staat, en wat je moet weten vóór je iets aanraakt. Bewust kor
 details staan in de git-historie en de issues, en die zijn de waarheid. Dit bestand is
 alleen de kaart erboven.
 
-Laatst bijgewerkt: 11 september 2026.
+Laatst bijgewerkt: 2 november 2026.
 
 ## Waar het nu staat
 
@@ -29,6 +29,12 @@ banner is de enige handmatige trigger die er nog is.
 negeert de oude `sync_push_v2` de sleutels `dishes`/`cooks` stilzwijgend en komen ze bij een
 pull als `nil` terug — de app vangt dat op, maar je gerechten staan tot die tijd alleen op
 het toestel. Begrippen (Gerecht ≠ Meal) staan in `CONTEXT.md`.
+
+**Health per dag komt met migration 0025** (`steps`, `resting_hr`, `hrv_ms`,
+`workout_heart_rates` op `day_habits`). Draait die nog niet, dan negeert de oude
+`sync_push_v2` die sleutels stilzwijgend en komen ze bij een pull als `nil` terug; de app
+leest ze met `if let`, dus lokaal blijft alles staan en het toestel is tot die tijd de enige
+plek waar het staat. Slaap zat er al in via `bed_time`/`wake_time`.
 
 **Een account is verplicht en heeft altijd een e-mailadres.** Anoniem inloggen bestaat niet
 meer; de onboarding laat je er niet langs zonder account. De zeven anonieme accounts uit

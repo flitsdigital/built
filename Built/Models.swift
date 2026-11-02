@@ -749,6 +749,29 @@ final class DayHabits {
     /// Naam van de training ("Push A", "Leg day"). Leeg = naamloos; het logboek valt dan
     /// terug op de datum, zoals het altijd deed.
     var workoutName: String = ""
+    /// Uit Health: wat je bandje of telefoon die dag zag. Staat hier en niet alleen in
+    /// Health omdat de rest van je dag (eiwit, volume, check-in) ook in de database staat,
+    /// en je het daar kunt exporteren en bevragen. nil = Health had niets voor die dag,
+    /// wat iets anders is dan nul.
+    var steps: Int?
+    var restingHR: Int?
+    var hrvMs: Int?
+    /// Sessiesleutel → [gemiddelde, piek] hartslag, net als `workoutNames` hieronder.
+    var workoutHeartRates: [String: [Int]] = [:]
+
+    /// Wat Health aan deze dag toevoegt. Apart van het ophalen, zodat de twee regels die
+    /// ertoe doen te testen zijn: niets wist een waarde die er al staat, en je eigen
+    /// slaaptijden winnen van wat Health denkt.
+    func apply(steps: Int?, restingHR: Int?, hrv: Int?, night: HealthService.Night?) {
+        if let steps { self.steps = steps }
+        if let restingHR { self.restingHR = restingHR }
+        if let hrv { self.hrvMs = hrv }
+        if let night, bedTime == nil, wakeTime == nil {
+            bedTime = night.bed
+            wakeTime = night.wake
+            sleptEnough = sleepDuration(from: night.bed, to: night.wake) >= 8
+        }
+    }
     /// Naam en notitie per sessie (sessiesleutel → tekst), want op één dag passen twee
     /// trainingen. `workoutName`/`workoutNote` hierboven blijven staan voor de dagen van
     /// vóór deze versie, en zijn wat `name(for:)` teruggeeft als de sleutel er niet in zit.
@@ -865,27 +888,50 @@ extension ModelContext {
         return h
     }
 
-    /// Zet de nacht uit Health in de dagrij, voor elke dag waar je zelf niets invulde.
+    /// Zet wat Health weet in de dagrij: de nacht, de stappen, rust-hartslag, HRV, en de
+    /// hartslag tijdens je trainingen.
     ///
-    /// Slaap is hier al een habit met een score en een streak, en die typte je tot nu toe
-    /// over uit een app die het allang wist. Handmatig wint: staat er al een tijd, dan
-    /// blijft die staan.
+    /// Health blijft de bron, maar niet de enige plek: alles hier synct mee naar de
+    /// database, en daar kun je het exporteren en bevragen naast je eiwit en je volume.
+    ///
+    /// Slaap is het buitenbeentje. Dat is hier een habit met een score en een streak, en
+    /// die typte je tot nu toe over uit een app die het allang wist — dus invullen, maar
+    /// alleen als je zelf niets hebt staan. De rest komt sowieso uit Health en wordt dus
+    /// wél bijgewerkt.
     @MainActor
-    func fillSleepFromHealth() {
+    func fillFromHealth() async {
+        let health = HealthService.shared
         let cal = Calendar.current
         // Een dag zonder dagrij vullen we alleen voor vandaag en gisteren. Verder terug zou
-        // nachten toevoegen aan dagen dat je de app niet gebruikte, en dat herschrijft je
-        // streak met terugwerkende kracht.
+        // dagen aanmaken dat je de app niet gebruikte, en dat herschrijft je streak met
+        // terugwerkende kracht.
         let cutoff = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: .now)) ?? .now
         let existing = (try? fetch(FetchDescriptor<DayHabits>())) ?? []
-        for (day, night) in HealthService.shared.sleepByDay {
+        let days = Set(health.stepsByDay.keys)
+            .union(health.sleepByDay.keys)
+            .union(health.restingHRByDay.keys)
+            .union(health.hrvByDay.keys)
+
+        for day in days {
             let row = existing.first { dayKey($0.date) == dayKey(day) }
             guard row != nil || day >= cutoff else { continue }
             let h = row ?? habits(on: day)
-            guard h.bedTime == nil, h.wakeTime == nil else { continue }
-            h.bedTime = night.bed
-            h.wakeTime = night.wake
-            h.sleptEnough = sleepDuration(from: night.bed, to: night.wake) >= 8
+            h.apply(steps: health.steps(on: day), restingHR: health.restingHR(on: day),
+                    hrv: health.hrv(on: day), night: health.night(on: day))
+        }
+
+        // Hartslag per training. Elke sessie is een losse vraag aan Health, dus alleen de
+        // laatste twee weken en alleen wat er nog niet staat — anders doe je bij elke
+        // start honderden queries om hetzelfde antwoord op te halen.
+        guard let recent = cal.date(byAdding: .day, value: -14, to: cal.startOfDay(for: .now)),
+              let sets = try? fetch(FetchDescriptor<SetEntry>()) else { return }
+        for session in sets.filter({ $0.date >= recent }).sessions() {
+            let h = habits(on: session.date)
+            guard h.workoutHeartRates[session.id] == nil,
+                  let start = session.sets.map(\.date).min(),
+                  let end = session.sets.map(\.date).max(),
+                  let beats = await health.heartRate(from: start, to: end) else { continue }
+            h.workoutHeartRates[session.id] = [beats.avg, beats.max]
         }
     }
 }

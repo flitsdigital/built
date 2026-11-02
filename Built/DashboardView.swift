@@ -226,7 +226,7 @@ struct DashboardView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task {
             await health.refreshIfEnabled()
-            context.fillSleepFromHealth()
+            await context.fillFromHealth()
         }
         .onAppear {
             appeared = true

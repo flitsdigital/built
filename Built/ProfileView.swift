@@ -376,7 +376,7 @@ struct HealthSettingsView: View {
                         if on {
                             Task {
                                 await HealthService.shared.requestAndRefresh()
-                                context.fillSleepFromHealth()
+                                await context.fillFromHealth()
                             }
                         } else {
                             HealthService.shared.disable()

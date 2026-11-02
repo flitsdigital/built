@@ -155,6 +155,10 @@ enum Sync {
         var workout_name: String? = ""
         var workout_names: [String: String]? = [:]
         var workout_notes: [String: String]? = [:]
+        var steps: Int? = nil
+        var resting_hr: Int? = nil
+        var hrv_ms: Int? = nil
+        var workout_heart_rates: [String: [Int]]? = [:]
         var updated_at: String?; var deleted_at: String?
     }
     private struct RoutineRow: Codable, Sendable, SyncRow {
@@ -339,7 +343,8 @@ enum Sync {
                   journal: e.journal, workout_note: e.workoutNote, energy: e.energy, mood: e.mood,
                   soreness: e.soreness, stress: e.stress, exercise_notes: e.exerciseNotes,
                   workout_name: e.workoutName, workout_names: e.workoutNames,
-                  workout_notes: e.workoutNotes, updated_at: at)
+                  workout_notes: e.workoutNotes, steps: e.steps, resting_hr: e.restingHR,
+                  hrv_ms: e.hrvMs, workout_heart_rates: e.workoutHeartRates, updated_at: at)
     }
     private static func row(_ e: Routine, _ at: String?) -> RoutineRow {
         RoutineRow(id: e.syncID, name: e.name, exercises: e.exercises, alternatives: e.alternatives,
@@ -677,6 +682,13 @@ enum Sync {
         // Zie `apply(_ r: SetRow…)`: nil is "kolom bestaat daar niet", niet "leeg".
         if let names = r.workout_names { m.workoutNames = names }
         if let notes = r.workout_notes { m.workoutNotes = notes }
+        // Ook hier is nil "die kolom bestaat daar niet" — en bij Health bovendien "de
+        // server zag die dag niets". Allebei geen reden om lokaal te wissen: dit toestel
+        // heeft Health, de server alleen wat een toestel ooit pushte.
+        if let steps = r.steps { m.steps = steps }
+        if let resting = r.resting_hr { m.restingHR = resting }
+        if let hrv = r.hrv_ms { m.hrvMs = hrv }
+        if let beats = r.workout_heart_rates { m.workoutHeartRates = beats }
     }
     private static func apply(_ r: RoutineRow, to m: Routine) {
         m.name = r.name; m.exercises = r.exercises; m.alternatives = r.alternatives

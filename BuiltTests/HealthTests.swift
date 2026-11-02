@@ -51,4 +51,33 @@ struct HealthTests {
         #expect(nights.count == 1)
         #expect(nights[Calendar.current.startOfDay(for: date(3, 7))]?.wake == date(3, 7, 0))
     }
+
+    /// Stappen en hartslag komen uit Health, dus die mag Health bijwerken. Je slaaptijden
+    /// zijn wat jij zei dat ze waren.
+    @Test("Health vult aan, en wist nooit wat er staat")
+    func healthVultAan() {
+        let day = DayHabits(date: date(2, 12))
+        day.apply(steps: 9321, restingHR: 54, hrv: 42,
+                  night: HealthService.Night(bed: date(1, 23), wake: date(2, 7)))
+        #expect(day.steps == 9321)
+        #expect(day.restingHR == 54)
+        #expect(day.bedTime == date(1, 23))
+        #expect(day.sleptEnough)
+
+        // Niets te melden vanuit Health → laat staan wat er staat.
+        day.apply(steps: nil, restingHR: nil, hrv: nil, night: nil)
+        #expect(day.steps == 9321)
+        #expect(day.hrvMs == 42)
+    }
+
+    @Test("Je eigen slaaptijden winnen van Health")
+    func handmatigWint() {
+        let day = DayHabits(date: date(2, 12))
+        day.bedTime = date(1, 22, 30)
+        day.wakeTime = date(2, 6, 0)
+        day.apply(steps: nil, restingHR: nil, hrv: nil,
+                  night: HealthService.Night(bed: date(1, 23), wake: date(2, 7)))
+        #expect(day.bedTime == date(1, 22, 30))
+        #expect(day.wakeTime == date(2, 6, 0))
+    }
 }
