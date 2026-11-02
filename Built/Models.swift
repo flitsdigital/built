@@ -857,8 +857,36 @@ extension ModelContext {
         let existing = (try? fetch(FetchDescriptor<DayHabits>())) ?? []
         if let h = existing.first(where: { dayKey($0.date) == key }) { return h }
         let h = DayHabits(date: timestamp(on: day))
+        // Afgeleid id, geen willekeurig: sinds slaap zichzelf invult maakt élk toestel deze
+        // rij zelf aan, en een pull voegt samen in plaats van te vervangen — met een
+        // willekeurig id stond dezelfde dag er daarna twee keer. Zie `UUID.stable`.
+        h.syncID = .stable(from: "dayhabits-\(key)")
         insert(h)
         return h
+    }
+
+    /// Zet de nacht uit Health in de dagrij, voor elke dag waar je zelf niets invulde.
+    ///
+    /// Slaap is hier al een habit met een score en een streak, en die typte je tot nu toe
+    /// over uit een app die het allang wist. Handmatig wint: staat er al een tijd, dan
+    /// blijft die staan.
+    @MainActor
+    func fillSleepFromHealth() {
+        let cal = Calendar.current
+        // Een dag zonder dagrij vullen we alleen voor vandaag en gisteren. Verder terug zou
+        // nachten toevoegen aan dagen dat je de app niet gebruikte, en dat herschrijft je
+        // streak met terugwerkende kracht.
+        let cutoff = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: .now)) ?? .now
+        let existing = (try? fetch(FetchDescriptor<DayHabits>())) ?? []
+        for (day, night) in HealthService.shared.sleepByDay {
+            let row = existing.first { dayKey($0.date) == dayKey(day) }
+            guard row != nil || day >= cutoff else { continue }
+            let h = row ?? habits(on: day)
+            guard h.bedTime == nil, h.wakeTime == nil else { continue }
+            h.bedTime = night.bed
+            h.wakeTime = night.wake
+            h.sleptEnough = sleepDuration(from: night.bed, to: night.wake) >= 8
+        }
     }
 }
 

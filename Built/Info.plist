@@ -34,7 +34,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Voor het scannen van barcodes op producten.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Om je dagelijkse stappen te tonen en te vergelijken met je training, slaap en energie.</string>
+	<string>Om je stappen, slaap, hartslag en HRV te tonen naast je trainingen — en om je slaap vanzelf in te vullen.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UILaunchScreen</key>

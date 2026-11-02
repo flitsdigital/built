@@ -335,9 +335,18 @@ struct DayDetailView: View {
                 Text("Hoe die dag voelde. Nogmaals tikken op dezelfde waarde wist 'm. Dit voedt de correlaties in Inzicht.")
             }
 
-            if let steps = HealthService.shared.steps(on: day) {
+            let health = HealthService.shared
+            if health.steps(on: day) != nil || health.restingHR(on: day) != nil || health.hrv(on: day) != nil {
                 Section("Health") {
-                    LabeledContent("Stappen", value: steps.formatted())
+                    if let steps = health.steps(on: day) {
+                        LabeledContent("Stappen", value: steps.formatted())
+                    }
+                    if let resting = health.restingHR(on: day) {
+                        LabeledContent("Rust-hartslag", value: "\(resting) bpm")
+                    }
+                    if let hrv = health.hrv(on: day) {
+                        LabeledContent("HRV", value: "\(hrv) ms")
+                    }
                 }
             }
 
@@ -411,6 +420,7 @@ struct DayDetailView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                    SessionHeartRateRow(session: session)
                     ForEach(groups, id: \.name) { group in
                         let bw = exercises.isBodyweight(group.name)
                         NavigationLink {
@@ -505,5 +515,28 @@ struct DayDetailView: View {
         }
         .sheet(isPresented: $showWeightSheet) { WeightLogSheet(initialDate: day) }
         .sheet(item: $editWeight) { WeightLogSheet(entry: $0) }
+    }
+}
+
+/// Hartslag tijdens een training: het venster van de eerste tot de laatste set, bij
+/// Health opgevraagd. Geen samples — bandje af, of Garmin schrijft alleen rond z'n eigen
+/// activiteiten — en de regel is er simpelweg niet.
+private struct SessionHeartRateRow: View {
+    let session: WorkoutSession
+    @State private var heartRate: (avg: Int, max: Int)?
+
+    var body: some View {
+        Group {
+            if let heartRate {
+                LabeledContent("Hartslag", value: "⌀ \(heartRate.avg) · piek \(heartRate.max) bpm")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task(id: session.id) {
+            guard let start = session.sets.map(\.date).min(),
+                  let end = session.sets.map(\.date).max() else { return }
+            heartRate = await HealthService.shared.heartRate(from: start, to: end)
+        }
     }
 }

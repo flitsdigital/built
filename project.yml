@@ -42,7 +42,7 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSSupportsLiveActivities: true
         NSCameraUsageDescription: Voor het scannen van barcodes op producten.
-        NSHealthShareUsageDescription: Om je dagelijkse stappen te tonen en te vergelijken met je training, slaap en energie.
+        NSHealthShareUsageDescription: Om je stappen, slaap, hartslag en HRV te tonen naast je trainingen — en om je slaap vanzelf in te vullen.
         CFBundleURLTypes:
           - CFBundleURLSchemes: [built]
     settings:
