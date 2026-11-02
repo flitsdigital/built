@@ -224,7 +224,10 @@ struct DashboardView: View {
                 .allowsHitTesting(false)
         }
         .toolbar(.hidden, for: .navigationBar)
-        .task { await health.refreshIfEnabled() }
+        .task {
+            await health.refreshIfEnabled()
+            context.fillSleepFromHealth()
+        }
         .onAppear {
             appeared = true
             writeSnapshot(idx, score: score, streak: streak)

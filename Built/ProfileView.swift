@@ -20,6 +20,8 @@ struct ProfileView: View {
     @Query(sort: \CustomHabit.createdAt) private var customHabits: [CustomHabit]
     @Query(sort: \WeightEntry.date) private var weights: [WeightEntry]
 
+    @AppStorage("healthStepsOn") private var healthOn = false
+
     // Zelfde keys als NotificationsSettingsView → status-badge blijft live kloppen
     @AppStorage("notifMorningOn") private var notifMorningOn = false
     @AppStorage("notifEveningOn") private var notifEveningOn = false
@@ -113,6 +115,9 @@ struct ProfileView: View {
                 }
                 row("Weegschalen", "scalemass", value: "\(scales.count)") {
                     ScalesSettingsView()
+                }
+                row("Health", "heart.text.square", value: healthOn ? "Aan" : "Uit") {
+                    HealthSettingsView()
                 }
             }
 
@@ -274,7 +279,6 @@ struct HabitsSettingsView: View {
     @Bindable var profile: Profile
     @Environment(\.modelContext) private var context
     @Query(sort: \CustomHabit.createdAt) private var customHabits: [CustomHabit]
-    @AppStorage("healthStepsOn") private var healthOn = false
 
     @State private var showAddHabit = false
     @State private var habitName = ""
@@ -295,24 +299,6 @@ struct HabitsSettingsView: View {
                 Text("Kern-habits")
             } footer: {
                 Text("Je Groei Score telt nu: wegen, training\(profile.foodInScore ? ", eiwit" : "")\(profile.tracksCreatine ? ", creatine" : "")\(profile.tracksSleep ? ", slaap" : ""), dagdetails. Uitgeschakelde habits verdwijnen uit je checklist en tellen niet mee voor streak en perfecte dagen. Eten uit? Dan blijft de Eten-tab gewoon werken, maar staat hij niet meer op je dashboard. Wil je wél blijven loggen zonder dat een vergeten dag je score en streak kost, zet dan alleen \"Eten telt mee voor je score\" uit.")
-            }
-
-            Section {
-                Toggle("Stappen uit Health", isOn: Binding(
-                    get: { healthOn },
-                    set: { on in
-                        healthOn = on
-                        if on { Task { await HealthService.shared.requestAndRefresh() } }
-                        else { HealthService.shared.disable() }
-                    }
-                ))
-                .disabled(!HealthService.shared.isAvailable)
-            } header: {
-                Text("Health")
-            } footer: {
-                Text(HealthService.shared.isAvailable
-                     ? "Leest alleen je dagelijkse stappen — nul werk voor jou, en het voedt de correlaties in Inzicht. Zonder Apple Watch is dit het enige zinvolle dat je iPhone bijhoudt."
-                     : "Health is niet beschikbaar op dit toestel.")
             }
 
             Section("Eigen habits") {
@@ -369,6 +355,44 @@ struct HabitsSettingsView: View {
         // HabitLog koppelt op naam → mee-updaten zodat de vinkjes niet losraken.
         let logs = (try? context.fetch(FetchDescriptor<HabitLog>())) ?? []
         for log in logs where log.name == old { log.name = new }
+    }
+}
+
+// MARK: - Weegschalen
+
+// MARK: - Health
+
+struct HealthSettingsView: View {
+    @Environment(\.modelContext) private var context
+    @AppStorage("healthStepsOn") private var healthOn = false
+
+    var body: some View {
+        List {
+            Section {
+                Toggle("Koppel Health", isOn: Binding(
+                    get: { healthOn },
+                    set: { on in
+                        healthOn = on
+                        if on {
+                            Task {
+                                await HealthService.shared.requestAndRefresh()
+                                context.fillSleepFromHealth()
+                            }
+                        } else {
+                            HealthService.shared.disable()
+                        }
+                    }
+                ))
+                .disabled(!HealthService.shared.isAvailable)
+            } footer: {
+                Text(HealthService.shared.isAvailable
+                     ? "Leest stappen, slaap, rust-hartslag, HRV en de hartslag tijdens je trainingen — alles wat je horloge of bandje er al in zet. Je slaap vult zichzelf in; vul je 'm zelf in, dan wint dat. Wat de fabrikant niet naar Health schrijft (Body Battery, slaapscore) blijft in díe app."
+                     : "Health is niet beschikbaar op dit toestel.")
+            }
+        }
+        .tabBarClearance()
+        .navigationTitle("Health")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

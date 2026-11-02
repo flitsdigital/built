@@ -99,6 +99,10 @@ struct InsightsView: View {
                            split: { idx.trained($0) },
                            splitLabel: ("trainingsdagen", "rustdagen"),
                            value: { HealthService.shared.steps(on: $0).map(Double.init) }))
+        out.append(compare("Rust-hartslag", unit: " bpm",
+                           split: { idx.trained($0) },
+                           splitLabel: ("trainingsdagen", "rustdagen"),
+                           value: { HealthService.shared.restingHR(on: $0).map(Double.init) }))
         // Spierpijn → volume van de dag ervoor is te complex; houd het bij eiwit
         if profile.tracksFood {
             out.append(compare("Trainingsvolume", unit: " kg",
